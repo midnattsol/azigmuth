@@ -18,6 +18,7 @@ pub const NodeFlags = graph.NodeFlags;
 pub const Graph = graph.Graph;
 pub const GraphError = graph.GraphError;
 pub const Violation = graph.Violation;
+pub const NeighborIterator = graph.NeighborIterator;
 
 // ── Algorithms ────────────────────────────────────────────────────────
 // Temporarily not exported while Graph neighbor-iterator API is being

@@ -12,29 +12,20 @@ pub const END_OF_CHAIN: u32 = 0xFFFF_FFFF;
 /// Compute the occupancy mask for a given live count. Handles the
 /// edge cases live_count == 0 (mask = 0) and live_count == 64
 /// (mask = 0xFFFF_FFFF_FFFF_FFFF) which would be UB with a bare shift.
-pub fn denseMask(live_count: u6) u64 {
+pub fn denseMask(live_count: u7) u64 {
     if (live_count == 0) return 0;
     if (live_count == 64) return 0xFFFF_FFFF_FFFF_FFFF;
-    return (@as(u64, 1) << live_count) - 1;
+    return (@as(u64, 1) << @as(u6, @intCast(live_count))) - 1;
 }
+
+/// Occupancy mask for a fully-saturated edge block (all 64 slots occupied).
+pub const FULL_BLOCK_MASK: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 /// Minimum occupancy per non-tail block (75% of 64).
 pub const MIN_OCCUPANCY: u6 = 48;
 
 /// Maximum number of groups per node before repair is required.
 pub const MAX_GROUPS_PER_NODE: u16 = 4;
-
-/// Resolve a flat index into page and slot for any pool.
-/// `per_page` must be the matching *_PER_PAGE constant.
-pub inline fn pageOf(idx: u32, comptime per_page: u32) u32 {
-    return idx / per_page;
-}
-pub inline fn slotOf(idx: u32, comptime per_page: u32) u32 {
-    return idx % per_page;
-}
-pub inline fn makeIndex(page: u32, slot: u32, comptime per_page: u32) u32 {
-    return page * per_page + slot;
-}
 
 comptime {
     std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 520);

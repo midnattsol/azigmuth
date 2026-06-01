@@ -2,8 +2,6 @@ const std = @import("std");
 const graph = @import("../graph.zig");
 const utils = @import("../utils.zig");
 
-/// Iterative Depth-First Search (DFS) using an explicit stack.
-/// Returns a slice of nodes in the order they were first visited.
 pub fn dfs(g: anytype, start: graph.NodeId, allocator: std.mem.Allocator) ![]graph.NodeId {
     comptime utils.requireNeighborsAndNodeCount(@TypeOf(g));
     try utils.validateNode(g, start);
@@ -22,20 +20,21 @@ pub fn dfs(g: anytype, start: graph.NodeId, allocator: std.mem.Allocator) ![]gra
     try order.append(allocator, start);
 
     while (stack.items.len > 0) {
-        const current = stack.pop();
-        var iter = g.neighbors(current);
-        while (iter.next()) |v| {
-            if (!visited.isSet(v.index)) {
-                visited.set(v.index);
-                try stack.append(allocator, v);
-                try order.append(allocator, v);
+        const current = stack.pop().?;
+        {
+            var iter = try g.neighbors(current);
+            defer iter.deinit();
+            while (iter.next()) |neighbor| {
+                if (!visited.isSet(neighbor.index)) {
+                    visited.set(neighbor.index);
+                    try stack.append(allocator, neighbor);
+                    try order.append(allocator, neighbor);
+                }
             }
         }
     }
     return order.toOwnedSlice(allocator);
 }
-
-// ==================== Tests ====================
 
 test "dfs visits all reachable nodes from start" {
     var g = try utils.buildTestGraph(std.testing.allocator, 5, &.{
@@ -48,9 +47,9 @@ test "dfs visits all reachable nodes from start" {
 
     try std.testing.expectEqual(@as(u32, 0), order[0].index);
 
-    var found = std.AutoArrayHashMap(usize, void).init(std.testing.allocator);
+    var found = std.AutoHashMap(usize, void).init(std.testing.allocator);
     defer found.deinit();
-    for (order) |n| try found.put(n.index, {});
+    for (order) |node| try found.put(node.index, {});
     try std.testing.expectEqual(@as(usize, 5), found.count());
     for (0..5) |i| try std.testing.expect(found.contains(i));
 }
@@ -79,9 +78,9 @@ test "dfs on a graph with a cycle still terminates" {
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 3), order.len);
-    var found = std.AutoArrayHashMap(usize, void).init(std.testing.allocator);
+    var found = std.AutoHashMap(usize, void).init(std.testing.allocator);
     defer found.deinit();
-    for (order) |n| try found.put(n.index, {});
+    for (order) |node| try found.put(node.index, {});
     try std.testing.expectEqual(@as(usize, 3), found.count());
 }
 

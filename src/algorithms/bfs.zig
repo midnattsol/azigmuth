@@ -22,19 +22,20 @@ pub fn bfs(g: anytype, start: graph.NodeId, allocator: std.mem.Allocator) ![]gra
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         const current = queue.items[head];
-        var iter = g.neighbors(current);
-        while (iter.next()) |v| {
-            if (!visited.isSet(v.index)) {
-                visited.set(v.index);
-                try queue.append(allocator, v);
-                try order.append(allocator, v);
+        {
+            var iter = try g.neighbors(current);
+            defer iter.deinit();
+            while (iter.next()) |neighbor| {
+                if (!visited.isSet(neighbor.index)) {
+                    visited.set(neighbor.index);
+                    try queue.append(allocator, neighbor);
+                    try order.append(allocator, neighbor);
+                }
             }
         }
     }
     return order.toOwnedSlice(allocator);
 }
-
-// ==================== Tests ====================
 
 fn idxOf(order: []const graph.NodeId, target: usize) usize {
     for (order, 0..) |n, i| if (n.index == target) return i;

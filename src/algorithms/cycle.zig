@@ -34,7 +34,10 @@ pub fn hasCycle(g: anytype, allocator: std.mem.Allocator) !bool {
     defer active.deinit(allocator);
 
     var stack = try std.ArrayList(StackEntry).initCapacity(allocator, node_count);
-    defer stack.deinit();
+    defer {
+        for (stack.items) |entry| allocator.free(entry.neighbors);
+        stack.deinit(allocator);
+    }
 
     for (0..node_count) |i| {
         if (seen.isSet(i)) continue;
@@ -42,8 +45,9 @@ pub fn hasCycle(g: anytype, allocator: std.mem.Allocator) !bool {
         seen.set(i);
         active.set(i);
         // Materialize neighbors once per node visited.
-        const neighbors = try g.neighbors(i).materialize(allocator);
-        try stack.append(.{ .node = .{ .index = @intCast(i) }, .neighbors = neighbors, .next_neighbor = 0 });
+        var iter = try g.neighbors(.{ .index = @intCast(i) });
+        const neighbors = try iter.materialize(allocator);
+        try stack.append(allocator, .{ .node = .{ .index = @intCast(i) }, .neighbors = neighbors, .next_neighbor = 0 });
 
         while (stack.items.len > 0) {
             const current = &stack.items[stack.items.len - 1];
@@ -61,8 +65,9 @@ pub fn hasCycle(g: anytype, allocator: std.mem.Allocator) !bool {
                 // First time seeing this node → push onto exploration path.
                 seen.set(idx);
                 active.set(idx);
-                const next_neighbors = try g.neighbors(.{ .index = @intCast(idx) }).materialize(allocator);
-                try stack.append(.{ .node = .{ .index = @intCast(idx) }, .neighbors = next_neighbors, .next_neighbor = 0 });
+                var next_iter = try g.neighbors(.{ .index = @intCast(idx) });
+                const next_neighbors = try next_iter.materialize(allocator);
+                try stack.append(allocator, .{ .node = .{ .index = @intCast(idx) }, .neighbors = next_neighbors, .next_neighbor = 0 });
                 found_unvisited = true;
                 break;
             }
@@ -70,7 +75,8 @@ pub fn hasCycle(g: anytype, allocator: std.mem.Allocator) !bool {
             // All neighbors processed → node is complete.
             if (!found_unvisited) {
                 active.unset(current.node.index);
-                _ = stack.pop();
+                const completed = stack.pop().?;
+                allocator.free(completed.neighbors);
             }
         }
     }
