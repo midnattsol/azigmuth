@@ -1,0 +1,121 @@
+const std = @import("std");
+const test_internals = @import("test_internals");
+
+const graph_mod = test_internals.graph;
+const constants = test_internals.constants;
+
+const testing = std.testing;
+
+fn expectNoDebugViolations(graph: *const graph_mod.Graph) !void {
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expectEqual(@as(usize, 0), violations.len);
+}
+
+test "oom: init reports OutOfMemory when the first node page cannot be allocated" {
+    var buffer: [1]u8 = undefined;
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
+
+    try testing.expectError(error.OutOfMemory, graph_mod.Graph.init(fixed_buffer.allocator()));
+}
+
+test "oom: addNode failure while adding a new page leaves node count unchanged" {
+    var buffer: [24 * 1024]u8 = undefined;
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
+
+    var graph = try graph_mod.Graph.init(fixed_buffer.allocator());
+    defer graph.deinit();
+
+    for (0..constants.NODES_PER_PAGE) |_| {
+        _ = try graph.addNode();
+    }
+    try testing.expectEqual(@as(usize, constants.NODES_PER_PAGE), graph.nodeCount());
+
+    try testing.expectError(error.OutOfMemory, graph.addNode());
+    try testing.expectEqual(@as(usize, constants.NODES_PER_PAGE), graph.nodeCount());
+}
+
+test "oom: direct block allocation failure leaves counters unchanged" {
+    var buffer: [24 * 1024]u8 = undefined;
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
+
+    var graph = try graph_mod.Graph.init(fixed_buffer.allocator());
+    defer graph.deinit();
+
+    try testing.expectError(error.OutOfMemory, graph.allocBlockFwd());
+    try testing.expectError(error.OutOfMemory, graph.allocBlockRev());
+    try testing.expectEqual(@as(u32, 0), graph.graph.block_fwd_count);
+    try testing.expectEqual(@as(u32, 0), graph.graph.block_rev_count);
+    try testing.expectEqual(@as(usize, 0), graph.graph.edge_blocks_fwd.items.len);
+    try testing.expectEqual(@as(usize, 0), graph.graph.edge_blocks_rev.items.len);
+}
+
+test "oom: addEdge failure before forward block allocation does not publish an edge" {
+    var buffer: [24 * 1024]u8 = undefined;
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
+
+    var graph = try graph_mod.Graph.init(fixed_buffer.allocator());
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+
+    try testing.expectError(error.OutOfMemory, graph.addEdge(source, destination, 0, 0));
+    try testing.expectEqual(@as(u32, 0), graph.graph.block_fwd_count);
+    try testing.expectEqual(@as(usize, 0), graph.graph.edge_blocks_fwd.items.len);
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(destination));
+    try graph.validate();
+}
+
+test "oom: addEdge failure while preparing reverse adjacency does not publish partial state" {
+    var buffer: [56 * 1024]u8 = undefined;
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
+
+    var graph = try graph_mod.Graph.init(fixed_buffer.allocator());
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+
+    try testing.expectError(error.OutOfMemory, graph.addEdge(source, destination, 0, 0));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(destination));
+    try graph.validate();
+}
+
+test "oom: removeEdge induced allocation failures do not publish or retire partial state" {
+    for (0..8) |failure_offset| {
+        var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
+        var graph = try graph_mod.Graph.init(failing_allocator.allocator());
+        defer graph.deinit();
+
+        const source = try graph.addNode();
+        const destination = try graph.addNode();
+        try graph.addEdge(source, destination, 0, 0);
+        try expectNoDebugViolations(&graph);
+
+        failing_allocator.fail_index = failing_allocator.alloc_index + failure_offset;
+        const result = graph.removeEdge(source, destination);
+
+        if (result) |removed| {
+            try testing.expect(removed);
+            try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+            try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+            try testing.expectEqual(@as(usize, 0), try graph.inDegree(destination));
+            try graph.validate();
+            try expectNoDebugViolations(&graph);
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+                try testing.expectEqual(@as(usize, 1), try graph.outDegree(source));
+                try testing.expectEqual(@as(usize, 1), try graph.inDegree(destination));
+                try graph.validate();
+                try expectNoDebugViolations(&graph);
+            },
+            else => return err,
+        }
+    }
+}

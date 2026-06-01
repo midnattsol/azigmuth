@@ -2,60 +2,89 @@
 //!
 //! Two levels of checking are provided:
 //!   - `validate`  — fast path: returns `error.CorruptGraph` on the first
-//!     violation.  Does not allocate.  Suitable after every mutation.
+//!     violation. Does not allocate.
 //!   - `debugValidate` — exhaustive: allocates and returns every violation.
-//!     For debugging and tests.
 
 const std = @import("std");
 const constants = @import("constants.zig");
 const graph_core = @import("graph_core.zig");
 const types = @import("types.zig");
 const page_ops = @import("page_ops.zig");
+const rcu = @import("rcu.zig");
 
 const Side = enum { fwd, rev };
 
-fn readerEnter(graph: *const graph_core.GraphCore) void {
-    _ = @constCast(graph).active_readers.fetchAdd(1, .monotonic);
+const TraversedBlock = struct {
+    block_index: u32,
+};
+
+fn readerEnter(graph: *const graph_core.GraphCore) rcu.ReaderToken {
+    return rcu.readerEnter(@constCast(graph));
 }
 
-fn readerExit(graph: *const graph_core.GraphCore) void {
-    _ = @constCast(graph).active_readers.fetchSub(1, .monotonic);
+fn readerExit(graph: *const graph_core.GraphCore, token: rcu.ReaderToken) void {
+    rcu.readerExit(@constCast(graph), token);
 }
 
-fn blockCount(adj: types.NodeAdj, comptime side: Side) u16 {
-    return if (side == .fwd) adj.block_count_fwd else adj.block_count_rev;
-}
-
-fn groupCount(adj: types.NodeAdj, comptime side: Side) u16 {
-    return if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
-}
-
-fn firstBlock(adj: types.NodeAdj, comptime side: Side) u32 {
-    return if (side == .fwd) adj.first_block_fwd else adj.first_block_rev;
-}
-
-fn firstGroup(adj: types.NodeAdj, comptime side: Side) u32 {
-    return if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
-}
-
-fn blockMask(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) u64 {
+fn blockCount(adjacency: types.NodeAdj, comptime side: Side) u16 {
     return switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd).mask,
-        .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev).mask,
+        .fwd => adjacency.block_count_fwd,
+        .rev => adjacency.block_count_rev,
     };
 }
 
-fn blockKey(graph: *const graph_core.GraphCore, block_idx: u32, slot: usize, comptime side: Side) u32 {
+fn groupCount(adjacency: types.NodeAdj, comptime side: Side) u16 {
     return switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd).edges[slot].dest,
-        .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev).sources[slot],
+        .fwd => adjacency.group_count_fwd,
+        .rev => adjacency.group_count_rev,
     };
 }
 
-fn validateBlockDense(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) !void {
-    const mask = blockMask(graph, block_idx, side);
-    const live = @popCount(mask);
-    if (mask != constants.denseMask(@intCast(live))) return error.CorruptGraph;
+fn firstBlock(adjacency: types.NodeAdj, comptime side: Side) u32 {
+    return switch (side) {
+        .fwd => adjacency.first_block_fwd,
+        .rev => adjacency.first_block_rev,
+    };
+}
+
+fn firstGroup(adjacency: types.NodeAdj, comptime side: Side) u32 {
+    return switch (side) {
+        .fwd => adjacency.first_group_fwd,
+        .rev => adjacency.first_group_rev,
+    };
+}
+
+fn allocatedBlockCount(graph: *const graph_core.GraphCore, comptime side: Side) u32 {
+    return switch (side) {
+        .fwd => @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire),
+        .rev => @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire),
+    };
+}
+
+fn blockExists(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) bool {
+    return block_index < allocatedBlockCount(graph, side);
+}
+
+fn blockMask(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) u64 {
+    return switch (side) {
+        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask,
+        .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev).mask,
+    };
+}
+
+fn blockKey(graph: *const graph_core.GraphCore, block_index: u32, slot: usize, comptime side: Side) u32 {
+    return switch (side) {
+        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd).edges[slot].destination,
+        .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev).sources[slot],
+    };
+}
+
+fn validateBlockDense(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) !void {
+    if (!blockExists(graph, block_index, side)) return error.CorruptGraph;
+
+    const mask = blockMask(graph, block_index, side);
+    const live_count = @popCount(mask);
+    if (mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
 }
 
 fn validateDenseInContiguousBlocks(
@@ -64,8 +93,8 @@ fn validateDenseInContiguousBlocks(
     count: u16,
     comptime side: Side,
 ) !void {
-    for (start..start + count) |block_idx| {
-        try validateBlockDense(graph, @intCast(block_idx), side);
+    for (start..start + count) |block_index| {
+        try validateBlockDense(graph, @intCast(block_index), side);
     }
 }
 
@@ -74,26 +103,127 @@ fn validateDenseInGroupChain(
     first_group: u32,
     comptime side: Side,
 ) !void {
-    var group_idx = first_group;
-    while (group_idx != constants.END_OF_CHAIN) {
-        const group = page_ops.groupAtConst(graph, group_idx);
+    var group_index = first_group;
+    var visited_groups: u32 = 0;
+
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (visited_groups > graph.group_count) return error.CorruptGraph;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
         try validateDenseInContiguousBlocks(graph, group.start, group.count, side);
-        group_idx = group.next;
+        group_index = group.next;
     }
 }
 
-fn validateDenseMasks(graph: *const graph_core.GraphCore, adj: types.NodeAdj, comptime side: Side) !void {
-    if (blockCount(adj, side) == 0) return;
+fn validateDenseMasks(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: Side) !void {
+    if (blockCount(adjacency, side) == 0) return;
 
-    if (groupCount(adj, side) == 0) {
-        return validateDenseInContiguousBlocks(graph, firstBlock(adj, side), blockCount(adj, side), side);
+    if (groupCount(adjacency, side) == 0) {
+        return validateDenseInContiguousBlocks(graph, firstBlock(adjacency, side), blockCount(adjacency, side), side);
     }
 
-    return validateDenseInGroupChain(graph, firstGroup(adj, side), side);
+    return validateDenseInGroupChain(graph, firstGroup(adjacency, side), side);
 }
 
-fn sumBlockLive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) u64 {
-    return @popCount(blockMask(graph, block_idx, side));
+fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) !u64 {
+    if (!blockExists(graph, block_index, side)) return error.CorruptGraph;
+
+    const mask = blockMask(graph, block_index, side);
+    const live_count = @popCount(mask);
+    if (mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
+
+    for (0..live_count) |slot| {
+        const key = blockKey(graph, block_index, slot, side);
+        if (key >= graph.node_count) return error.CorruptGraph;
+        if (slot > 0 and key <= blockKey(graph, block_index, slot - 1, side)) return error.CorruptGraph;
+    }
+
+    return live_count;
+}
+
+fn validateContiguousBlocksFast(
+    graph: *const graph_core.GraphCore,
+    start: u32,
+    count: u16,
+    comptime side: Side,
+) !u64 {
+    var total: u64 = 0;
+    for (start..start + count) |block_index| {
+        total += try validateBlockShapeFast(graph, @intCast(block_index), side);
+    }
+    return total;
+}
+
+fn validateGroupChainFast(
+    graph: *const graph_core.GraphCore,
+    first_group: u32,
+    expected_group_count: u16,
+    comptime side: Side,
+) !u64 {
+    var total: u64 = 0;
+    var group_index = first_group;
+    var visited_groups: u32 = 0;
+
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (visited_groups >= graph.group_count) return error.CorruptGraph;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        if (group.count == 0) return error.CorruptGraph;
+        total += try validateContiguousBlocksFast(graph, group.start, group.count, side);
+        group_index = group.next;
+    }
+
+    if (visited_groups != expected_group_count) return error.CorruptGraph;
+    return total;
+}
+
+fn validateAdjacencyBlocksFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: Side) !u64 {
+    if (blockCount(adjacency, side) == 0) return 0;
+
+    if (groupCount(adjacency, side) == 0) {
+        return validateContiguousBlocksFast(graph, firstBlock(adjacency, side), blockCount(adjacency, side), side);
+    }
+
+    return validateGroupChainFast(graph, firstGroup(adjacency, side), groupCount(adjacency, side), side);
+}
+
+fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: Side) !void {
+    const count = blockCount(adjacency, side);
+    if (count <= 1) return;
+
+    if (groupCount(adjacency, side) == 0) {
+        const end = firstBlock(adjacency, side) + count - 1;
+        for (firstBlock(adjacency, side)..end) |block_index| {
+            if (@popCount(blockMask(graph, @intCast(block_index), side)) < constants.MIN_OCCUPANCY) return error.CorruptGraph;
+        }
+        return;
+    }
+
+    var group_index = firstGroup(adjacency, side);
+    var visited_groups: u32 = 0;
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (visited_groups >= graph.group_count) return error.CorruptGraph;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        if (group.count == 0) return error.CorruptGraph;
+        const is_last_group = group.next == constants.END_OF_CHAIN;
+        const end = if (is_last_group) group.start + group.count - 1 else group.start + group.count;
+        for (group.start..end) |block_index| {
+            if (@popCount(blockMask(graph, @intCast(block_index), side)) < constants.MIN_OCCUPANCY) return error.CorruptGraph;
+        }
+        group_index = group.next;
+    }
+}
+
+fn sumBlockLive(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) u64 {
+    if (!blockExists(graph, block_index, side)) return 0;
+    return @popCount(blockMask(graph, block_index, side));
 }
 
 fn sumContiguousBlocks(
@@ -103,31 +233,38 @@ fn sumContiguousBlocks(
     comptime side: Side,
 ) u64 {
     var total: u64 = 0;
-    for (start..start + count) |block_idx| {
-        total += sumBlockLive(graph, @intCast(block_idx), side);
+    for (start..start + count) |block_index| {
+        total += sumBlockLive(graph, @intCast(block_index), side);
     }
     return total;
 }
 
 fn sumGroupChain(graph: *const graph_core.GraphCore, first_group: u32, comptime side: Side) u64 {
     var total: u64 = 0;
-    var group_idx = first_group;
-    while (group_idx != constants.END_OF_CHAIN) {
-        const group = page_ops.groupAtConst(graph, group_idx);
+    var group_index = first_group;
+    var visited_groups: u32 = 0;
+
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return total;
+        if (visited_groups > graph.group_count) return total;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
         total += sumContiguousBlocks(graph, group.start, group.count, side);
-        group_idx = group.next;
+        group_index = group.next;
     }
+
     return total;
 }
 
-fn sumAdjacency(graph: *const graph_core.GraphCore, adj: types.NodeAdj, comptime side: Side) u64 {
-    if (blockCount(adj, side) == 0) return 0;
+fn sumAdjacency(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: Side) u64 {
+    if (blockCount(adjacency, side) == 0) return 0;
 
-    if (groupCount(adj, side) == 0) {
-        return sumContiguousBlocks(graph, firstBlock(adj, side), blockCount(adj, side), side);
+    if (groupCount(adjacency, side) == 0) {
+        return sumContiguousBlocks(graph, firstBlock(adjacency, side), blockCount(adjacency, side), side);
     }
 
-    return sumGroupChain(graph, firstGroup(adj, side), side);
+    return sumGroupChain(graph, firstGroup(adjacency, side), side);
 }
 
 fn appendBlockShapeViolations(
@@ -135,90 +272,166 @@ fn appendBlockShapeViolations(
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
     node_id: u32,
-    block_idx: u32,
+    block_index: u32,
     comptime side: Side,
 ) !void {
-    const mask = blockMask(graph, block_idx, side);
-    const live = @popCount(mask);
+    if (!blockExists(graph, block_index, side)) return;
 
-    if (mask != constants.denseMask(@intCast(live))) {
-        try violations.append(allocator, .{ .mask_bit_out_of_range = .{ .node = node_id, .block = block_idx } });
+    const mask = blockMask(graph, block_index, side);
+    const live_count = @popCount(mask);
+
+    if (mask != constants.denseMask(@intCast(live_count))) {
+        try violations.append(allocator, .{ .mask_bit_out_of_range = .{ .node = node_id, .block = block_index } });
     }
 
-    for (0..live) |slot| {
-        const key = blockKey(graph, block_idx, slot, side);
+    for (0..live_count) |slot| {
+        const key = blockKey(graph, block_index, slot, side);
         if (key >= graph.node_count) {
-            try violations.append(allocator, .{ .invalid_dst = .{ .node = node_id, .block = block_idx, .slot = @intCast(slot), .dst = key } });
+            try violations.append(allocator, .{ .invalid_dst = .{ .node = node_id, .block = block_index, .slot = @intCast(slot), .dst = key } });
         }
-        if (slot > 0 and key <= blockKey(graph, block_idx, slot - 1, side)) {
-            try violations.append(allocator, .{ .unsorted_block = .{ .node = node_id, .block = block_idx, .slot = @intCast(slot) } });
+        if (slot > 0 and key <= blockKey(graph, block_index, slot - 1, side)) {
+            try violations.append(allocator, .{ .unsorted_block = .{ .node = node_id, .block = block_index, .slot = @intCast(slot) } });
         }
     }
 }
 
-fn appendContiguousBlockViolations(
-    graph: *const graph_core.GraphCore,
+fn appendContiguousBlocks(
+    blocks: *std.ArrayList(TraversedBlock),
     allocator: std.mem.Allocator,
-    violations: *std.ArrayList(types.Violation),
-    node_id: u32,
     start: u32,
     count: u16,
-    comptime side: Side,
 ) !void {
-    for (start..start + count) |block_idx| {
-        try appendBlockShapeViolations(graph, allocator, violations, node_id, @intCast(block_idx), side);
+    for (start..start + count) |block_index| {
+        try blocks.append(allocator, .{ .block_index = @intCast(block_index) });
     }
 }
 
-fn appendGroupChainBlockViolations(
+fn collectAdjacencyBlocks(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
     node_id: u32,
-    first_group: u32,
+    adjacency: types.NodeAdj,
+    blocks: *std.ArrayList(TraversedBlock),
     comptime side: Side,
 ) !void {
-    var group_idx = first_group;
-    while (group_idx != constants.END_OF_CHAIN) {
-        const group = page_ops.groupAtConst(graph, group_idx);
-        try appendContiguousBlockViolations(graph, allocator, violations, node_id, group.start, group.count, side);
-        group_idx = group.next;
+    if (blockCount(adjacency, side) == 0) return;
+
+    if (groupCount(adjacency, side) == 0) {
+        try appendContiguousBlocks(blocks, allocator, firstBlock(adjacency, side), blockCount(adjacency, side));
+        return;
+    }
+
+    var visited_groups = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.group_count);
+    defer visited_groups.deinit(allocator);
+
+    var block_owner_by_group = std.AutoHashMap(u32, u32).init(allocator);
+    defer block_owner_by_group.deinit();
+
+    var group_index = firstGroup(adjacency, side);
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return;
+
+        if (visited_groups.isSet(group_index)) {
+            try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
+            return;
+        }
+        visited_groups.set(group_index);
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        for (group.start..group.start + group.count) |block_index_usize| {
+            const block_index: u32 = @intCast(block_index_usize);
+            if (block_owner_by_group.get(block_index)) |owner_group| {
+                try violations.append(allocator, .{ .blockgroup_overlap = .{ .node = node_id, .group_a = owner_group, .group_b = group_index } });
+            } else {
+                try block_owner_by_group.put(block_index, group_index);
+            }
+            try blocks.append(allocator, .{ .block_index = block_index });
+        }
+
+        group_index = group.next;
     }
 }
 
-fn appendAdjacencyShapeViolations(
+fn freeListContains(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) bool {
+    const free_blocks = switch (side) {
+        .fwd => graph.free_blocks_fwd.items,
+        .rev => graph.free_blocks_rev.items,
+    };
+
+    for (free_blocks) |free_block| {
+        if (free_block == block_index) return true;
+    }
+    return false;
+}
+
+fn retiredListContains(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) bool {
+    const retired_blocks = switch (side) {
+        .fwd => graph.retired_blocks_fwd.items,
+        .rev => graph.retired_blocks_rev.items,
+    };
+
+    for (retired_blocks) |retired_block| {
+        if (retired_block.block == block_index) return true;
+    }
+    return false;
+}
+
+fn markOwnedBlock(
+    owned_blocks: *std.DynamicBitSetUnmanaged,
+    block_index: u32,
+) bool {
+    const bit_index: usize = @intCast(block_index);
+    if (owned_blocks.isSet(bit_index)) return false;
+    owned_blocks.set(bit_index);
+    return true;
+}
+
+fn appendOwnershipAndShapeViolations(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
+    owned_blocks: *std.DynamicBitSetUnmanaged,
     node_id: u32,
-    adj: types.NodeAdj,
+    blocks: []const TraversedBlock,
     comptime side: Side,
 ) !void {
-    if (blockCount(adj, side) == 0) return;
+    const tail_block_index = if (blocks.len > 0) blocks[blocks.len - 1].block_index else constants.END_OF_CHAIN;
 
-    if (groupCount(adj, side) == 0) {
-        return appendContiguousBlockViolations(
-            graph,
-            allocator,
-            violations,
-            node_id,
-            firstBlock(adj, side),
-            blockCount(adj, side),
-            side,
-        );
+    for (blocks) |traversed_block| {
+        const block_index = traversed_block.block_index;
+        if (!blockExists(graph, block_index, side)) continue;
+
+        if (!markOwnedBlock(owned_blocks, block_index)) {
+            try violations.append(allocator, .{ .block_double_owned = .{ .block = block_index } });
+        }
+
+        if (freeListContains(graph, block_index, side)) {
+            try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = block_index } });
+        }
+
+        if (retiredListContains(graph, block_index, side)) {
+            try violations.append(allocator, .{ .retired_block_reachable = .{ .block = block_index, .node = node_id } });
+        }
+
+        try appendBlockShapeViolations(graph, allocator, violations, node_id, block_index, side);
+
+        const live_count = @popCount(blockMask(graph, block_index, side));
+        const non_tail_underfull = blocks.len > 1 and block_index != tail_block_index and live_count < constants.MIN_OCCUPANCY;
+        if (non_tail_underfull) {
+            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = block_index, .occupancy = @intCast(live_count) } });
+        }
     }
-
-    return appendGroupChainBlockViolations(graph, allocator, violations, node_id, firstGroup(adj, side), side);
 }
 
-fn adjacencyContains(graph: *const graph_core.GraphCore, adj: types.NodeAdj, target: u32, comptime side: Side) bool {
-    if (blockCount(adj, side) == 0) return false;
+fn blockContains(graph: *const graph_core.GraphCore, block_index: u32, target: u32, comptime side: Side) bool {
+    if (!blockExists(graph, block_index, side)) return false;
 
-    if (groupCount(adj, side) == 0) {
-        return contiguousBlocksContain(graph, firstBlock(adj, side), blockCount(adj, side), target, side);
+    const live_count = @popCount(blockMask(graph, block_index, side));
+    for (0..live_count) |slot| {
+        if (blockKey(graph, block_index, slot, side) == target) return true;
     }
-
-    return groupChainContains(graph, firstGroup(adj, side), target, side);
+    return false;
 }
 
 fn contiguousBlocksContain(
@@ -228,86 +441,60 @@ fn contiguousBlocksContain(
     target: u32,
     comptime side: Side,
 ) bool {
-    for (start..start + count) |block_idx| {
-        if (blockContains(graph, @intCast(block_idx), target, side)) return true;
+    for (start..start + count) |block_index| {
+        if (blockContains(graph, @intCast(block_index), target, side)) return true;
     }
     return false;
 }
 
-fn groupChainContains(
-    graph: *const graph_core.GraphCore,
-    first_group: u32,
-    target: u32,
-    comptime side: Side,
-) bool {
-    var group_idx = first_group;
-    while (group_idx != constants.END_OF_CHAIN) {
-        const group = page_ops.groupAtConst(graph, group_idx);
+fn groupChainContains(graph: *const graph_core.GraphCore, first_group: u32, target: u32, comptime side: Side) bool {
+    var group_index = first_group;
+    var visited_groups: u32 = 0;
+
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return false;
+        if (visited_groups > graph.group_count) return false;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
         if (contiguousBlocksContain(graph, group.start, group.count, target, side)) return true;
-        group_idx = group.next;
+        group_index = group.next;
     }
+
     return false;
 }
 
-fn blockContains(graph: *const graph_core.GraphCore, block_idx: u32, target: u32, comptime side: Side) bool {
-    const live = @popCount(blockMask(graph, block_idx, side));
-    for (0..live) |slot| {
-        if (blockKey(graph, block_idx, slot, side) == target) return true;
+fn adjacencyContains(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, target: u32, comptime side: Side) bool {
+    if (blockCount(adjacency, side) == 0) return false;
+
+    if (groupCount(adjacency, side) == 0) {
+        return contiguousBlocksContain(graph, firstBlock(adjacency, side), blockCount(adjacency, side), target, side);
     }
-    return false;
+
+    return groupChainContains(graph, firstGroup(adjacency, side), target, side);
 }
 
 fn appendForwardConsistencyViolations(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
-    src: u32,
-    adj: types.NodeAdj,
+    source_node: u32,
+    blocks: []const TraversedBlock,
 ) !void {
-    if (blockCount(adj, .fwd) == 0) return;
+    for (blocks) |traversed_block| {
+        if (!blockExists(graph, traversed_block.block_index, .fwd)) continue;
 
-    if (groupCount(adj, .fwd) == 0) {
-        return appendForwardConsistencyInContiguousBlocks(graph, allocator, violations, src, firstBlock(adj, .fwd), blockCount(adj, .fwd));
-    }
+        const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .fwd);
+        const live_count = @popCount(block.mask);
 
-    var group_idx = firstGroup(adj, .fwd);
-    while (group_idx != constants.END_OF_CHAIN) {
-        const group = page_ops.groupAtConst(graph, group_idx);
-        try appendForwardConsistencyInContiguousBlocks(graph, allocator, violations, src, group.start, group.count);
-        group_idx = group.next;
-    }
-}
+        for (0..live_count) |slot| {
+            const destination_node = block.edges[slot].destination;
+            if (destination_node >= graph.node_count) continue;
 
-fn appendForwardConsistencyInContiguousBlocks(
-    graph: *const graph_core.GraphCore,
-    allocator: std.mem.Allocator,
-    violations: *std.ArrayList(types.Violation),
-    src: u32,
-    start: u32,
-    count: u16,
-) !void {
-    for (start..start + count) |block_idx| {
-        try appendForwardConsistencyInBlock(graph, allocator, violations, src, @intCast(block_idx));
-    }
-}
-
-fn appendForwardConsistencyInBlock(
-    graph: *const graph_core.GraphCore,
-    allocator: std.mem.Allocator,
-    violations: *std.ArrayList(types.Violation),
-    src: u32,
-    block_idx: u32,
-) !void {
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-    const live = @popCount(block.mask);
-
-    for (0..live) |slot| {
-        const dst = block.edges[slot].dest;
-        if (dst >= graph.node_count) continue;
-
-        const dst_adj = page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj();
-        if (!adjacencyContains(graph, dst_adj, src, .rev)) {
-            try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = src, .dst = dst } });
+            const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+            if (!adjacencyContains(graph, destination_adjacency, source_node, .rev)) {
+                try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = source_node, .dst = destination_node } });
+            }
         }
     }
 }
@@ -316,95 +503,170 @@ fn appendReverseConsistencyViolations(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
-    dst: u32,
-    adj: types.NodeAdj,
+    destination_node: u32,
+    blocks: []const TraversedBlock,
 ) !void {
-    if (blockCount(adj, .rev) == 0) return;
+    for (blocks) |traversed_block| {
+        if (!blockExists(graph, traversed_block.block_index, .rev)) continue;
 
-    if (groupCount(adj, .rev) == 0) {
-        return appendReverseConsistencyInContiguousBlocks(graph, allocator, violations, dst, firstBlock(adj, .rev), blockCount(adj, .rev));
-    }
+        const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .rev);
+        const live_count = @popCount(block.mask);
 
-    var group_idx = firstGroup(adj, .rev);
-    while (group_idx != constants.END_OF_CHAIN) {
-        const group = page_ops.groupAtConst(graph, group_idx);
-        try appendReverseConsistencyInContiguousBlocks(graph, allocator, violations, dst, group.start, group.count);
-        group_idx = group.next;
-    }
-}
+        for (0..live_count) |slot| {
+            const source_node = block.sources[slot];
+            if (source_node >= graph.node_count) continue;
 
-fn appendReverseConsistencyInContiguousBlocks(
-    graph: *const graph_core.GraphCore,
-    allocator: std.mem.Allocator,
-    violations: *std.ArrayList(types.Violation),
-    dst: u32,
-    start: u32,
-    count: u16,
-) !void {
-    for (start..start + count) |block_idx| {
-        try appendReverseConsistencyInBlock(graph, allocator, violations, dst, @intCast(block_idx));
-    }
-}
-
-fn appendReverseConsistencyInBlock(
-    graph: *const graph_core.GraphCore,
-    allocator: std.mem.Allocator,
-    violations: *std.ArrayList(types.Violation),
-    dst: u32,
-    block_idx: u32,
-) !void {
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-    const live = @popCount(block.mask);
-
-    for (0..live) |slot| {
-        const src = block.sources[slot];
-        if (src >= graph.node_count) continue;
-
-        const src_adj = page_ops.nodeAtConst(graph, .{ .index = src }).publishedAdj();
-        if (!adjacencyContains(graph, src_adj, dst, .fwd)) {
-            try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = src, .dst = dst } });
+            const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+            if (!adjacencyContains(graph, source_adjacency, destination_node, .fwd)) {
+                try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = source_node, .dst = destination_node } });
+            }
         }
     }
 }
 
-/// Fast-path validation. Checks dense masks and global edge-count consistency.
-/// Returns `error.CorruptGraph` immediately when the first violation is found.
-pub fn validate(graph: *const graph_core.GraphCore) !void {
-    readerEnter(graph);
-    defer readerExit(graph);
-
-    var total: u64 = 0;
-
-    for (0..graph.node_count) |node_index| {
-        const adj = page_ops.nodeAtConst(graph, .{ .index = @intCast(node_index) }).publishedAdj();
-        try validateDenseMasks(graph, adj, .fwd);
-        try validateDenseMasks(graph, adj, .rev);
-        total += sumAdjacency(graph, adj, .fwd);
+fn appendRepairDebtViolations(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    violations: *std.ArrayList(types.Violation),
+) !void {
+    for (graph.repair_fwd.items) |node_index| {
+        if (node_index >= graph.node_count) {
+            try violations.append(allocator, .{ .repair_debt_invalid_node = .{ .entry = node_index } });
+        }
     }
-
-    if (total != graph.edge_count.load(.acquire)) return error.CorruptGraph;
+    for (graph.repair_rev.items) |node_index| {
+        if (node_index >= graph.node_count) {
+            try violations.append(allocator, .{ .repair_debt_invalid_node = .{ .entry = node_index } });
+        }
+    }
 }
 
-/// Exhaustive validation. Checks block shape, destinations, ordering,
-/// forward/reverse consistency, and global edge-count.
+fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source_node: u32, adjacency: types.NodeAdj) !void {
+    if (blockCount(adjacency, .fwd) == 0) return;
+
+    if (groupCount(adjacency, .fwd) == 0) {
+        return validateForwardConsistencyInContiguousBlocks(graph, source_node, firstBlock(adjacency, .fwd), blockCount(adjacency, .fwd));
+    }
+
+    var group_index = firstGroup(adjacency, .fwd);
+    var visited_groups: u32 = 0;
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (visited_groups >= graph.group_count) return error.CorruptGraph;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        try validateForwardConsistencyInContiguousBlocks(graph, source_node, group.start, group.count);
+        group_index = group.next;
+    }
+}
+
+fn validateForwardConsistencyInContiguousBlocks(graph: *const graph_core.GraphCore, source_node: u32, start: u32, count: u16) !void {
+    for (start..start + count) |block_index| {
+        const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
+        const live_count = @popCount(block.mask);
+        for (0..live_count) |slot| {
+            const destination_node = block.edges[slot].destination;
+            if (destination_node >= graph.node_count) return error.CorruptGraph;
+
+            const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+            if (!adjacencyContains(graph, destination_adjacency, source_node, .rev)) return error.CorruptGraph;
+        }
+    }
+}
+
+fn validateReverseConsistencyFast(graph: *const graph_core.GraphCore, destination_node: u32, adjacency: types.NodeAdj) !void {
+    if (blockCount(adjacency, .rev) == 0) return;
+
+    if (groupCount(adjacency, .rev) == 0) {
+        return validateReverseConsistencyInContiguousBlocks(graph, destination_node, firstBlock(adjacency, .rev), blockCount(adjacency, .rev));
+    }
+
+    var group_index = firstGroup(adjacency, .rev);
+    var visited_groups: u32 = 0;
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (visited_groups >= graph.group_count) return error.CorruptGraph;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        try validateReverseConsistencyInContiguousBlocks(graph, destination_node, group.start, group.count);
+        group_index = group.next;
+    }
+}
+
+fn validateReverseConsistencyInContiguousBlocks(graph: *const graph_core.GraphCore, destination_node: u32, start: u32, count: u16) !void {
+    for (start..start + count) |block_index| {
+        const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .rev);
+        const live_count = @popCount(block.mask);
+        for (0..live_count) |slot| {
+            const source_node = block.sources[slot];
+            if (source_node >= graph.node_count) return error.CorruptGraph;
+
+            const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+            if (!adjacencyContains(graph, source_adjacency, destination_node, .fwd)) return error.CorruptGraph;
+        }
+    }
+}
+
+pub fn validate(graph: *const graph_core.GraphCore) !void {
+    const reader_token = readerEnter(graph);
+    defer readerExit(graph, reader_token);
+
+    var total_forward: u64 = 0;
+    var total_reverse: u64 = 0;
+
+    for (0..graph.node_count) |node_index| {
+        const node_id: u32 = @intCast(node_index);
+        const adjacency = page_ops.nodeAtConst(graph, .{ .index = node_id }).publishedAdj();
+
+        total_forward += try validateAdjacencyBlocksFast(graph, adjacency, .fwd);
+        total_reverse += try validateAdjacencyBlocksFast(graph, adjacency, .rev);
+        try validateOccupancyFast(graph, adjacency, .fwd);
+        try validateOccupancyFast(graph, adjacency, .rev);
+        try validateForwardConsistencyFast(graph, node_id, adjacency);
+        try validateReverseConsistencyFast(graph, node_id, adjacency);
+    }
+
+    if (total_forward != total_reverse) return error.CorruptGraph;
+    if (total_forward != graph.edge_count.load(.acquire)) return error.CorruptGraph;
+}
+
 pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator) ![]types.Violation {
-    readerEnter(graph);
-    defer readerExit(graph);
+    const reader_token = readerEnter(graph);
+    defer readerExit(graph, reader_token);
 
     var violations: std.ArrayList(types.Violation) = .empty;
     var total: u64 = 0;
 
+    var owned_forward_blocks = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire));
+    defer owned_forward_blocks.deinit(allocator);
+    var owned_reverse_blocks = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire));
+    defer owned_reverse_blocks.deinit(allocator);
+
     for (0..graph.node_count) |node_index| {
         const node_id: u32 = @intCast(node_index);
-        const adj = page_ops.nodeAtConst(graph, .{ .index = node_id }).publishedAdj();
+        const adjacency = page_ops.nodeAtConst(graph, .{ .index = node_id }).publishedAdj();
 
-        try appendAdjacencyShapeViolations(graph, allocator, &violations, node_id, adj, .fwd);
-        try appendAdjacencyShapeViolations(graph, allocator, &violations, node_id, adj, .rev);
-        try appendForwardConsistencyViolations(graph, allocator, &violations, node_id, adj);
-        try appendReverseConsistencyViolations(graph, allocator, &violations, node_id, adj);
+        var forward_blocks: std.ArrayList(TraversedBlock) = .empty;
+        defer forward_blocks.deinit(allocator);
+        var reverse_blocks: std.ArrayList(TraversedBlock) = .empty;
+        defer reverse_blocks.deinit(allocator);
 
-        total += sumAdjacency(graph, adj, .fwd);
+        try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &forward_blocks, .fwd);
+        try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &reverse_blocks, .rev);
+
+        try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_forward_blocks, node_id, forward_blocks.items, .fwd);
+        try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_reverse_blocks, node_id, reverse_blocks.items, .rev);
+        try appendForwardConsistencyViolations(graph, allocator, &violations, node_id, forward_blocks.items);
+        try appendReverseConsistencyViolations(graph, allocator, &violations, node_id, reverse_blocks.items);
+
+        for (forward_blocks.items) |block| {
+            total += sumBlockLive(graph, block.block_index, .fwd);
+        }
     }
+
+    try appendRepairDebtViolations(graph, allocator, &violations);
 
     if (total != graph.edge_count.load(.acquire)) {
         try violations.append(allocator, .{ .edge_count_mismatch = .{ .expected = total, .actual = graph.edge_count.load(.acquire) } });

@@ -2,14 +2,15 @@
 
 const std = @import("std");
 const constants = @import("constants.zig");
-const graph = @import("graph_core.zig");
+const graph_core = @import("graph_core.zig");
 const types = @import("types.zig");
 const page_ops = @import("page_ops.zig");
+const rcu = @import("rcu.zig");
 
 pub const Direction = enum { fwd, rev };
 
 pub const NeighborIterator = struct {
-    core: *const graph.GraphCore,
+    core: *const graph_core.GraphCore,
     direction: Direction,
     node_adj_snapshot: types.NodeAdj,
 
@@ -20,28 +21,12 @@ pub const NeighborIterator = struct {
 
     current_mask: u64,
     current_block_for_mask: u32,
+    /// Cached from loadNextNonEmptyMask so next() avoids a second block fetch.
+    cached_fwd_block: ?*const types.EdgeBlockFwd = null,
+    cached_rev_block: ?*const types.EdgeBlockRev = null,
 
     reader_active: bool,
-
-    fn currentBlockMask(self: *const NeighborIterator, block_index: u32) u64 {
-        return switch (self.direction) {
-            .fwd => page_ops.edgeBlockAtConst(self.core, block_index, .fwd).mask,
-            .rev => page_ops.edgeBlockAtConst(self.core, block_index, .rev).mask,
-        };
-    }
-
-    fn currentBlockNeighbor(self: *const NeighborIterator, block_index: u32, bit_index: u6) types.NodeId {
-        return switch (self.direction) {
-            .fwd => blk: {
-                const block = page_ops.edgeBlockAtConst(self.core, block_index, .fwd);
-                break :blk types.NodeId{ .index = block.edges[bit_index].dest };
-            },
-            .rev => blk: {
-                const block = page_ops.edgeBlockAtConst(self.core, block_index, .rev);
-                break :blk types.NodeId{ .index = block.sources[bit_index] };
-            },
-        };
-    }
+    reader_token: rcu.ReaderToken,
 
     fn advanceToNextGroup(self: *NeighborIterator) bool {
         if (self.contiguous_mode) return false;
@@ -70,10 +55,22 @@ pub const NeighborIterator = struct {
             self.current_block_index += 1;
             self.blocks_remaining -= 1;
 
-            const mask = self.currentBlockMask(block_index);
-            if (mask == 0) continue;
-
-            self.current_mask = mask;
+            switch (self.direction) {
+                .fwd => {
+                    const block = page_ops.edgeBlockAtConst(self.core, block_index, .fwd);
+                    if (block.mask == 0) continue;
+                    self.current_mask = block.mask;
+                    self.cached_fwd_block = block;
+                    self.cached_rev_block = null;
+                },
+                .rev => {
+                    const block = page_ops.edgeBlockAtConst(self.core, block_index, .rev);
+                    if (block.mask == 0) continue;
+                    self.current_mask = block.mask;
+                    self.cached_rev_block = block;
+                    self.cached_fwd_block = null;
+                },
+            }
             self.current_block_for_mask = block_index;
             return true;
         }
@@ -86,12 +83,19 @@ pub const NeighborIterator = struct {
 
         const bit_index: u6 = @intCast(@ctz(self.current_mask));
         self.current_mask &= self.current_mask - 1;
-        return self.currentBlockNeighbor(self.current_block_for_mask, bit_index);
+        return switch (self.direction) {
+            .fwd => blk: {
+                break :blk types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination };
+            },
+            .rev => blk: {
+                break :blk types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] };
+            },
+        };
     }
 
     pub fn deinit(self: *NeighborIterator) void {
         if (!self.reader_active) return;
-        _ = @constCast(self.core).active_readers.fetchSub(1, .monotonic);
+        rcu.readerExit(@constCast(self.core), self.reader_token);
         self.reader_active = false;
     }
 
@@ -140,19 +144,19 @@ fn buildIteratorState(direction: Direction, node_adj: types.NodeAdj) struct {
     };
 }
 
-fn initNeighborIterator(core: *const graph.GraphCore, node: types.NodeId, direction: Direction) types.GraphError!NeighborIterator {
-    if (node.index >= core.node_count) return error.InvalidNode;
+fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, direction: Direction) types.GraphError!NeighborIterator {
+    if (node.index >= graph.node_count) return error.InvalidNode;
 
-    _ = @constCast(core).active_readers.fetchAdd(1, .monotonic);
-    errdefer _ = @constCast(core).active_readers.fetchSub(1, .monotonic);
+    const reader_token = rcu.readerEnter(@constCast(graph));
+    errdefer rcu.readerExit(@constCast(graph), reader_token);
 
-    const node_buffer = page_ops.nodeAtConst(core, node);
+    const node_buffer = page_ops.nodeAtConst(graph, node);
     const node_adj_snapshot = node_buffer.publishedAdj();
 
     const initial = buildIteratorState(direction, node_adj_snapshot);
 
     var iterator = NeighborIterator{
-        .core = core,
+        .core = graph,
         .direction = direction,
         .node_adj_snapshot = node_adj_snapshot,
         .contiguous_mode = initial.contiguous_mode,
@@ -162,10 +166,11 @@ fn initNeighborIterator(core: *const graph.GraphCore, node: types.NodeId, direct
         .current_mask = 0,
         .current_block_for_mask = 0,
         .reader_active = true,
+        .reader_token = reader_token,
     };
 
     if (!iterator.contiguous_mode and iterator.current_group_index != constants.END_OF_CHAIN) {
-        const first_group = page_ops.groupAtConst(core, iterator.current_group_index);
+        const first_group = page_ops.groupAtConst(graph, iterator.current_group_index);
         iterator.current_block_index = first_group.start;
         iterator.blocks_remaining = first_group.count;
     }
@@ -173,26 +178,74 @@ fn initNeighborIterator(core: *const graph.GraphCore, node: types.NodeId, direct
     return iterator;
 }
 
-pub fn neighbors(core: *const graph.GraphCore, node: types.NodeId) types.GraphError!NeighborIterator {
-    return initNeighborIterator(core, node, .fwd);
+pub fn neighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!NeighborIterator {
+    return initNeighborIterator(graph, node, .fwd);
 }
 
-pub fn inNeighbors(core: *const graph.GraphCore, node: types.NodeId) types.GraphError!NeighborIterator {
-    return initNeighborIterator(core, node, .rev);
+pub fn inNeighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!NeighborIterator {
+    return initNeighborIterator(graph, node, .rev);
 }
 
-pub fn outDegree(core: *const graph.GraphCore, node: types.NodeId) types.GraphError!usize {
-    var iterator = try neighbors(core, node);
-    defer iterator.deinit();
-    var degree: usize = 0;
-    while (iterator.next() != null) degree += 1;
-    return degree;
+fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comptime side: Direction) usize {
+    const block_count: u32 = switch (side) {
+        .fwd => node_adj.block_count_fwd,
+        .rev => node_adj.block_count_rev,
+    };
+    const group_count: u32 = switch (side) {
+        .fwd => node_adj.group_count_fwd,
+        .rev => node_adj.group_count_rev,
+    };
+
+    if (block_count == 0) return 0;
+
+    var total: usize = 0;
+
+    if (group_count == 0) {
+        const start: u32 = switch (side) {
+            .fwd => node_adj.first_block_fwd,
+            .rev => node_adj.first_block_rev,
+        };
+        for (start..start + block_count) |block_index| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), switch (side) {
+                .fwd => .fwd,
+                .rev => .rev,
+            });
+            total += @popCount(block.mask);
+        }
+        return total;
+    }
+
+    var group_index: u32 = switch (side) {
+        .fwd => node_adj.first_group_fwd,
+        .rev => node_adj.first_group_rev,
+    };
+    while (group_index != constants.END_OF_CHAIN) {
+        const group = page_ops.groupAtConst(graph, group_index);
+        for (group.start..group.start + group.count) |block_index| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), switch (side) {
+                .fwd => .fwd,
+                .rev => .rev,
+            });
+            total += @popCount(block.mask);
+        }
+        group_index = group.next;
+    }
+
+    return total;
 }
 
-pub fn inDegree(core: *const graph.GraphCore, node: types.NodeId) types.GraphError!usize {
-    var iterator = try inNeighbors(core, node);
-    defer iterator.deinit();
-    var degree: usize = 0;
-    while (iterator.next() != null) degree += 1;
-    return degree;
+pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
+    if (node.index >= graph.node_count) return error.InvalidNode;
+    const reader_token = rcu.readerEnter(@constCast(graph));
+    defer rcu.readerExit(@constCast(graph), reader_token);
+    const adjacency = page_ops.nodeAtConst(graph, node).publishedAdj();
+    return sumPopCount(graph, adjacency, .fwd);
+}
+
+pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
+    if (node.index >= graph.node_count) return error.InvalidNode;
+    const reader_token = rcu.readerEnter(@constCast(graph));
+    defer rcu.readerExit(@constCast(graph), reader_token);
+    const adjacency = page_ops.nodeAtConst(graph, node).publishedAdj();
+    return sumPopCount(graph, adjacency, .rev);
 }

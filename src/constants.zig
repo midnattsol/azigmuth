@@ -2,7 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 
 /// Entries per page — chosen to fit in common cache sizes.
-pub const NODES_PER_PAGE: u32 = 256; // 256 × 60 B ≈ 15 KB — fits in L2 cache.
+pub const NODES_PER_PAGE: u32 = 256; // 256 × 64 B = 16 KB.
 pub const EDGE_BLOCKS_PER_PAGE: u32 = 64; // 64 × 520 B ≈ 33 KB — fits in L1 cache.
 pub const EDGE_GROUPS_PER_PAGE: u32 = 128; // 128 × 12 B = 1536 B.
 
@@ -27,7 +27,21 @@ pub const MIN_OCCUPANCY: u6 = 48;
 /// Maximum number of groups per node before repair is required.
 pub const MAX_GROUPS_PER_NODE: u16 = 4;
 
+/// Maximum page directory sizes for atomically-published storage pages.
+/// These keep page lookup lock-free while preserving stable page addresses.
+pub const MAX_EDGE_BLOCK_PAGES: usize = 4096;
+pub const MAX_EDGE_GROUP_PAGES: usize = 4096;
+
+/// Maximum number of simultaneously active reader critical sections tracked
+/// with precise epochs. Overflow readers fall back to conservative reclamation.
+pub const MAX_READER_SLOTS: usize = 256;
+
+/// Retired blocks tracked for validation/reclamation debug views. Runtime
+/// reclamation uses lock-free retired/free stacks.
+pub const MAX_TRACKED_RETIRED_BLOCKS: usize = 16;
+
 comptime {
+    std.debug.assert(@sizeOf(types.NodeBuffer) == 64);
     std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 520);
     std.debug.assert(@sizeOf(types.EdgeBlockRev) == 264);
     std.debug.assert(@sizeOf(types.EdgeBlockGroup) == 12);

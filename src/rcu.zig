@@ -1,40 +1,117 @@
 //! RCU-style reader/writer synchronization and block retirement.
 
-const graph = @import("graph_core.zig");
+const std = @import("std");
+const constants = @import("constants.zig");
+const graph_core = @import("graph_core.zig");
+const types = @import("types.zig");
+const page_ops = @import("page_ops.zig");
 
-pub fn readerEnter(core: *graph.GraphCore) u64 {
-    _ = core.active_readers.fetchAdd(1, .monotonic);
-    return core.epoch.load(.acquire);
-}
+pub const NO_READER_SLOT: u32 = std.math.maxInt(u32);
 
-pub fn readerExit(core: *graph.GraphCore) void {
-    _ = core.active_readers.fetchSub(1, .monotonic);
-}
+pub const ReaderToken = struct {
+    slot: u32,
+    epoch: u64,
+};
 
-pub fn retireBlockFwd(core: *graph.GraphCore, block_idx: u32) !void {
-    const current_epoch = core.epoch.load(.acquire);
-    try core.retired_blocks_fwd.append(core.allocator, .{ .block = block_idx, .epoch = current_epoch });
-}
+pub fn readerEnter(graph: *graph_core.GraphCore) ReaderToken {
+    const entry_epoch = graph.epoch.load(.acquire);
+    const encoded_epoch = entry_epoch +% 1;
 
-pub fn retireBlockRev(core: *graph.GraphCore, block_idx: u32) !void {
-    const current_epoch = core.epoch.load(.acquire);
-    try core.retired_blocks_rev.append(core.allocator, .{ .block = block_idx, .epoch = current_epoch });
-}
-
-pub fn bumpEpoch(core: *graph.GraphCore) void {
-    _ = core.epoch.fetchAdd(1, .monotonic);
-}
-
-pub fn reclaimRetired(core: *graph.GraphCore) void {
-    if (core.active_readers.load(.acquire) > 0) return;
-    const safe_epoch = core.epoch.load(.acquire) -| 2;
-
-    while (core.retired_blocks_fwd.items.len > 0) {
-        if (core.retired_blocks_fwd.items[0].epoch > safe_epoch) break;
-        core.free_blocks_fwd.append(core.allocator, core.retired_blocks_fwd.orderedRemove(0).block) catch {};
+    for (&graph.reader_epochs, 0..) |*slot, slot_index| {
+        if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
+            _ = graph.active_readers.fetchAdd(1, .monotonic);
+            return .{ .slot = @intCast(slot_index), .epoch = entry_epoch };
+        }
     }
-    while (core.retired_blocks_rev.items.len > 0) {
-        if (core.retired_blocks_rev.items[0].epoch > safe_epoch) break;
-        core.free_blocks_rev.append(core.allocator, core.retired_blocks_rev.orderedRemove(0).block) catch {};
+
+    _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
+    _ = graph.active_readers.fetchAdd(1, .monotonic);
+    return .{ .slot = NO_READER_SLOT, .epoch = entry_epoch };
+}
+
+pub fn readerExit(graph: *graph_core.GraphCore, token: ReaderToken) void {
+    if (token.slot == NO_READER_SLOT) {
+        _ = graph.reader_epoch_overflow.fetchSub(1, .acq_rel);
+    } else {
+        graph.reader_epochs[@intCast(token.slot)].store(0, .release);
+    }
+    _ = graph.active_readers.fetchSub(1, .monotonic);
+}
+
+pub fn ensureRetireCapacity(graph: *graph_core.GraphCore, fwd_count: usize, rev_count: usize) !void {
+    _ = graph;
+    _ = fwd_count;
+    _ = rev_count;
+}
+
+fn appendDebugRetired(graph: *graph_core.GraphCore, list: *std.ArrayList(types.RetiredBlock), item: types.RetiredBlock) void {
+    if (!graph.debug_retired_enabled.load(.monotonic)) return;
+    while (true) {
+        const len = @atomicLoad(usize, &list.items.len, .acquire);
+        if (len >= list.capacity) return;
+        if (@cmpxchgWeak(usize, &list.items.len, len, len + 1, .acq_rel, .acquire) == null) {
+            list.items.ptr[len] = item;
+            return;
+        }
+    }
+}
+
+pub fn retireBlockFwd(graph: *graph_core.GraphCore, block_idx: u32) !void {
+    const current_epoch = graph.epoch.load(.acquire);
+    page_ops.retireBlock(graph, block_idx, current_epoch, .fwd);
+    appendDebugRetired(graph, &graph.retired_blocks_fwd, .{ .block = block_idx, .epoch = current_epoch });
+}
+
+pub fn retireBlockRev(graph: *graph_core.GraphCore, block_idx: u32) !void {
+    const current_epoch = graph.epoch.load(.acquire);
+    page_ops.retireBlock(graph, block_idx, current_epoch, .rev);
+    appendDebugRetired(graph, &graph.retired_blocks_rev, .{ .block = block_idx, .epoch = current_epoch });
+}
+
+pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
+    _ = graph.epoch.fetchAdd(1, .monotonic);
+}
+
+fn safeReclaimEpoch(graph: *graph_core.GraphCore) ?u64 {
+    if (graph.reader_epoch_overflow.load(.acquire) != 0) return null;
+
+    // Fast path: no readers active, no need to scan slots.
+    if (graph.active_readers.load(.acquire) == 0) return graph.epoch.load(.acquire) +% 1;
+
+    var min_epoch: ?u64 = null;
+    for (&graph.reader_epochs) |*slot| {
+        const encoded_epoch = slot.load(.acquire);
+        if (encoded_epoch == 0) continue;
+        const reader_epoch = encoded_epoch - 1;
+        min_epoch = if (min_epoch) |current| @min(current, reader_epoch) else reader_epoch;
+    }
+
+    return min_epoch orelse graph.epoch.load(.acquire) +% 1;
+}
+
+fn pruneDebugRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: enum { fwd, rev }) void {
+    const list = if (side == .fwd) &graph.retired_blocks_fwd else &graph.retired_blocks_rev;
+    while (list.items.len > 0) {
+        if (list.items[0].epoch >= safe_epoch) break;
+        _ = list.orderedRemove(0);
+    }
+}
+
+pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
+    const safe_epoch = safeReclaimEpoch(graph) orelse return;
+
+    page_ops.reclaimRetired(graph, safe_epoch, .fwd);
+    page_ops.reclaimRetired(graph, safe_epoch, .rev);
+
+    if (graph.active_writers.load(.monotonic) == 0) {
+        if (graph.debug_retired_enabled.load(.monotonic)) {
+            pruneDebugRetired(graph, safe_epoch, .fwd);
+            pruneDebugRetired(graph, safe_epoch, .rev);
+        } else {
+            @atomicStore(usize, &graph.retired_blocks_fwd.items.len, 0, .release);
+            @atomicStore(usize, &graph.retired_blocks_rev.items.len, 0, .release);
+            graph.free_blocks_fwd.clearRetainingCapacity();
+            graph.free_blocks_rev.clearRetainingCapacity();
+        }
     }
 }

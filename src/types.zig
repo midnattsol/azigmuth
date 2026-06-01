@@ -16,8 +16,7 @@ pub const GraphError = error{
     RepairRequired,
 };
 
-/// Per-node boolean flags. Backed by u32 so that NodeAdj measures 28 bytes
-/// (multiple of 4), keeping all u32 fields naturally aligned.
+/// Per-node boolean flags. Backed by u32.
 pub const NodeFlags = packed struct(u32) {
     needs_repair_fwd: bool,
     needs_repair_rev: bool,
@@ -31,11 +30,11 @@ pub const EdgeFlags = packed struct(u16) {
     _unused: u16 = 0,
 };
 
-/// A single directed edge. 8 bytes: 4-byte dest + 2-byte relation label
+/// A single directed edge. 8 bytes: 4-byte destination + 2-byte relation label
 /// + 2-byte packed flags. Larger properties (weights, timestamps) go in
-/// external columnar arrays keyed by (src, dest) pair.
+/// external columnar arrays keyed by (source, destination) pair.
 pub const Edge = packed struct {
-    dest: u32,
+    destination: u32,
     relation: u16,
     flags: EdgeFlags,
 };
@@ -45,7 +44,8 @@ pub const Edge = packed struct {
 /// Describes where the node's forward and reverse edge blocks live,
 /// how many there are, and whether they are contiguous or grouped.
 /// `degree` is NOT stored — it is computed from `@popCount(block.mask)`.
-pub const NodeAdj = packed struct {
+/// 28 bytes, naturally aligned (no padding).
+pub const NodeAdj = extern struct {
     first_block_fwd: u32,
     block_count_fwd: u16,
     group_count_fwd: u16,
@@ -62,13 +62,23 @@ pub const NodeAdj = packed struct {
 /// RCU double-buffer for adjacency headers.
 /// Readers consume `publishedAdj()` with no locks.
 /// Writers copy published → staging, mutate staging, then publish it.
-pub const NodeBuffer = struct {
+pub const NodeBuffer = extern struct {
     /// Published adjacency buffer index (0 or 1).
     /// Stored as u8 because Zig atomics require byte-sized integers.
     published_adj_index_raw: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
+    /// Per-node claim bits: forward adjacency (for writers mutating outgoing edges).
+    fwd_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+
+    /// Per-node claim bits: reverse adjacency (for writers mutating incoming edges).
+    rev_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+
     /// Double-buffered adjacency headers.
     adj_buffers: [2]NodeAdj,
+
+    /// Explicit padding so each NodeBuffer occupies exactly one 64-byte cache line
+    /// when stored in the node page array.
+    _cache_pad: [4]u8 = [_]u8{0} ** 4,
 
     pub fn loadPublishedAdjIndex(self: *const NodeBuffer) u1 {
         const raw = self.published_adj_index_raw.load(.acquire);
@@ -133,6 +143,14 @@ pub const EdgeBlockGroup = struct {
     next: u32,
     count: u16,
     _pad: u16 = 0,
+};
+
+/// Per-block metadata used by lock-free retired/free stacks.
+/// Stored out-of-line so retiring a published block never mutates memory that
+/// an active reader may still be scanning.
+pub const BlockMeta = struct {
+    next: std.atomic.Value(u32),
+    epoch: std.atomic.Value(u64),
 };
 
 /// Tracks a retired block index and the epoch when it was retired.

@@ -75,5 +75,6 @@
         "build.zig.zon",
         "README.md",
         "src",
+        "tests",
     },
 }

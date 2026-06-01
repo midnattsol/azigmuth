@@ -21,5 +21,6 @@ pub const Violation = graph.Violation;
 pub const NeighborIterator = graph.NeighborIterator;
 
 // ── Algorithms ────────────────────────────────────────────────────────
-// Temporarily not exported while Graph neighbor-iterator API is being
-// migrated to the new mutable core.
+pub const bfs = @import("algorithms/bfs.zig");
+pub const dfs = @import("algorithms/dfs.zig");
+pub const cycle = @import("algorithms/cycle.zig");
