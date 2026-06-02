@@ -6,6 +6,8 @@ const constants = test_internals.constants;
 const page_ops = test_internals.page_ops;
 const types = test_internals.types;
 const helpers = @import("helpers.zig");
+const adjacency_mod = test_internals.adjacency;
+const common_mod = test_internals.mutation_common;
 
 const testing = std.testing;
 
@@ -464,4 +466,614 @@ test "mutation: removeEdge of last edge from multi-block adjacency retires both 
     try graph.validate();
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}
+
+test "mutation: hasEdgeInAdj works when blocks are not globally key-sorted" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..130) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Block 0: destinations 100..163 (full, 64 edges)
+    const b0 = try graph.allocBlockFwd();
+    var block0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        block0.edges[i] = .{ .destination = @intCast(100 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    block0.mask = constants.FULL_BLOCK_MASK;
+
+    // Block 1: destination 50 (appended later, key smaller than block 0's range)
+    const b1 = try graph.allocBlockFwd();
+    var block1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
+    block1.edges[0] = .{ .destination = 50, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    block1.mask = constants.denseMask(1);
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 2;
+    // Contiguous: b0 and b1 consecutive → single run, NOT key-sorted
+    node.storePublishedAdjIndex(0);
+
+    // Binary search alone would miss 120 because it goes right after block 0.
+    // Linear fallback must find it.
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 120));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 50));
+    try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 200));
+}
+
+test "mutation: findSlotInAdj works with blocks not globally key-sorted" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..130) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Same setup as above: block 0 keys [100..163], block 1 key [50]
+    const b0 = try graph.allocBlockFwd();
+    var block0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        block0.edges[i] = .{ .destination = @intCast(100 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    block0.mask = constants.FULL_BLOCK_MASK;
+    const b1 = try graph.allocBlockFwd();
+    var block1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
+    block1.edges[0] = .{ .destination = 50, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    block1.mask = constants.denseMask(1);
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 2;
+    node.storePublishedAdjIndex(0);
+
+    const adj = node.publishedAdj();
+    const result = common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 50, .fwd);
+    try testing.expect(result != null);
+    try testing.expectEqual(b1, result.?.block_idx);
+    try testing.expectEqual(@as(u7, 0), result.?.slot);
+
+    const result2 = common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 120, .fwd);
+    try testing.expect(result2 != null);
+    try testing.expectEqual(b0, result2.?.block_idx);
+}
+
+test "mutation: outDegree works on manually constructed adjacency (cold cache)" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..65) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Build a 2-block adjacency by hand — degree cache starts at 0.
+    const b0 = try graph.allocBlockFwd();
+    var block0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        block0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    block0.mask = constants.FULL_BLOCK_MASK;
+    const b1 = try graph.allocBlockFwd();
+    var block1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
+    block1.edges[0] = .{ .destination = 65, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    block1.mask = constants.denseMask(1);
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 2;
+    node.storePublishedAdjIndex(0);
+
+    // Cache is cold (degree_fwd=0) but blocks exist → must fall back to scan.
+    try testing.expectEqual(@as(usize, 65), try graph.outDegree(src));
+}
+
+test "mutation: empty block between live blocks in contiguous adjacency" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..130) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Block 0: [1..64], Block 1: empty (live=0), Block 2: [65..128]
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.FULL_BLOCK_MASK;
+
+    const b1 = try graph.allocBlockFwd();
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = 0; // empty
+
+    const b2 = try graph.allocBlockFwd();
+    var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
+    for (0..64) |i| {
+        blk2.edges[i] = .{ .destination = @intCast(65 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk2.mask = constants.FULL_BLOCK_MASK;
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 3;
+    node.storePublishedAdjIndex(0);
+
+    // Binary search would hit block 1 (live=0) at mid. Fallback must handle it.
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 1));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 65));
+    try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 0));
+}
+
+test "mutation: empty block between live blocks in grouped adjacency" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..130) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Block 0: [1..64], Block 5: empty, Block 3: [65..128] — non-consecutive → grouped
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.FULL_BLOCK_MASK;
+
+    const b1 = try graph.allocBlockFwd();
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = 0;
+
+    const b2 = try graph.allocBlockFwd();
+    var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
+    for (0..64) |i| {
+        blk2.edges[i] = .{ .destination = @intCast(65 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk2.mask = constants.FULL_BLOCK_MASK;
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].block_count_fwd = 3;
+    node.adj_buffers[0].group_count_fwd = 3;
+    node.adj_buffers[0].first_group_fwd = g0;
+    node.storePublishedAdjIndex(0);
+
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 1));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 65));
+}
+
+test "mutation: binary search hits target exactly at block boundaries" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..130) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Block 0: [1..64] (first=1, last=64)
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.FULL_BLOCK_MASK;
+
+    // Block 1: [65..128] (first=65, last=128)
+    const b1 = try graph.allocBlockFwd();
+    var blk1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
+    for (0..64) |i| {
+        blk1.edges[i] = .{ .destination = @intCast(65 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk1.mask = constants.FULL_BLOCK_MASK;
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 2;
+    node.storePublishedAdjIndex(0);
+
+    const adj = node.publishedAdj();
+
+    // first of block 0
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 1));
+    // last of block 0
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 64));
+    // first of block 1
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 65));
+    // last of block 1
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 128));
+
+    // findSlotInAdj same boundaries
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 1, .fwd) != null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 64, .fwd) != null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 128, .fwd) != null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 129, .fwd) == null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 0, .fwd) == null);
+}
+
+test "mutation: append creates interleaved block between existing key ranges" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..200) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Block 0: [1..64]
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.FULL_BLOCK_MASK;
+
+    // Block 1: [129..192]
+    const b1 = try graph.allocBlockFwd();
+    var blk1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
+    for (0..64) |i| {
+        blk1.edges[i] = .{ .destination = @intCast(129 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk1.mask = constants.FULL_BLOCK_MASK;
+
+    // Block 2 (appended, out of order): [65..128] — sits between blocks 0 and 1 in key order
+    const b2 = try graph.allocBlockFwd();
+    var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
+    for (0..64) |i| {
+        blk2.edges[i] = .{ .destination = @intCast(65 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk2.mask = constants.FULL_BLOCK_MASK;
+
+    // Contiguous physical: b0, b1, b2. Logical key order: b0[1..64], b2[65..128], b1[129..192]
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 3;
+    node.storePublishedAdjIndex(0);
+
+    const adj = node.publishedAdj();
+
+    // Targets in each block
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 1));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 64));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 65));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 128));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 129));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 192));
+
+    // Target in the gap that's physically before the target block
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 100));
+
+    // findSlotInAdj must also work
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, 0, 0, 100, .fwd) != null);
+
+    // Non-existent targets
+    try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 0));
+    try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 200));
+}
+
+test "mutation: hasEdgeInAdj grouped with interleaved block ranges" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..200) |_| {
+        _ = try graph.addNode();
+    }
+
+    // Three blocks, physically non-consecutive → grouped
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.FULL_BLOCK_MASK;
+
+    // Allocate something else to create a gap
+    _ = try graph.allocBlockFwd();
+
+    const b2 = try graph.allocBlockFwd();
+    var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
+    for (0..64) |i| {
+        blk2.edges[i] = .{ .destination = @intCast(129 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk2.mask = constants.FULL_BLOCK_MASK;
+
+    // Another gap
+    _ = try graph.allocBlockFwd();
+
+    const b4 = try graph.allocBlockFwd();
+    var blk4 = page_ops.edgeBlockAt(&graph.graph, b4, .fwd);
+    for (0..64) |i| {
+        blk4.edges[i] = .{ .destination = @intCast(65 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk4.mask = constants.FULL_BLOCK_MASK;
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].block_count_fwd = 3;
+    node.adj_buffers[0].group_count_fwd = 3;
+    node.adj_buffers[0].first_group_fwd = g0;
+    node.storePublishedAdjIndex(0);
+
+    const adj = node.publishedAdj();
+
+    // Binary search within group 0 (b0: [1..64])
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 1));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 64));
+    // Binary search within group 1 (b2: [129..192])
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 129));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 192));
+    // Binary search within group 2 (b4: [65..128]) — keys are out of order across groups
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 65));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 100));
+    try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 128));
+
+    // Non-existent
+    try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 0));
+    try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 200));
+}
+
+test "mutation: findSlotInAdj grouped with interleaved key ranges" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..200) |_| {
+        _ = try graph.addNode();
+    }
+
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..64) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.FULL_BLOCK_MASK;
+
+    _ = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
+    for (0..64) |i| {
+        blk2.edges[i] = .{ .destination = @intCast(129 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk2.mask = constants.FULL_BLOCK_MASK;
+
+    _ = try graph.allocBlockFwd();
+    const b4 = try graph.allocBlockFwd();
+    var blk4 = page_ops.edgeBlockAt(&graph.graph, b4, .fwd);
+    for (0..64) |i| {
+        blk4.edges[i] = .{ .destination = @intCast(65 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk4.mask = constants.FULL_BLOCK_MASK;
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].block_count_fwd = 3;
+    node.adj_buffers[0].group_count_fwd = 3;
+    node.adj_buffers[0].first_group_fwd = g0;
+    node.storePublishedAdjIndex(0);
+
+    const adj = node.publishedAdj();
+
+    // findSlotInAdj must find entries regardless of group key ordering
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, 1, .fwd) != null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, 100, .fwd) != null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, 129, .fwd) != null);
+    try testing.expect(common_mod.findSlotInAdj(&graph.graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, 200, .fwd) == null);
+}
+
+// ── Degree cache ───────────────────────────────────────────────────────
+
+test "mutation: degree cache tracks exact count through addEdge loop" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const targets = try helpers.addNodes(&graph, 70);
+
+    for (0..70) |i| {
+        try graph.addEdge(src, targets[i], 0, 0);
+    }
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 70), try graph.outDegree(src));
+    // Each target has in-degree 1 (not 70)
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(targets[0]));
+}
+
+test "mutation: degree cache decrements correctly after removeEdge loop" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const targets = try helpers.addNodes(&graph, 65);
+
+    for (0..65) |i| {
+        try graph.addEdge(src, targets[i], 0, 0);
+    }
+    // Remove all edges one by one from the last one
+    var i: usize = 65;
+    while (i > 0) {
+        i -= 1;
+        try testing.expect(try graph.removeEdge(src, targets[i]));
+    }
+
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(src));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}
+
+test "mutation: degree cache survives repair" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    for (0..85) |_| {
+        _ = try graph.addNode();
+    }
+
+    const b0 = try graph.allocBlockFwd();
+    var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
+    for (0..47) |i| {
+        blk0.edges[i] = .{ .destination = @intCast(1 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk0.mask = constants.denseMask(47);
+    const b1 = try graph.allocBlockFwd();
+    var blk1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
+    for (0..36) |i| {
+        blk1.edges[i] = .{ .destination = @intCast(48 + i), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    blk1.mask = constants.denseMask(36);
+
+    // Set up matching reverse adjacencies
+    for (1..84) |dst| {
+        const r = try graph.allocBlockRev();
+        var rev = page_ops.edgeBlockAt(&graph.graph, r, .rev);
+        rev.sources[0] = src.index;
+        rev.mask = constants.denseMask(1);
+        var dn = try graph.nodeAt(.{ .index = @intCast(dst) });
+        dn.adj_buffers[0].first_block_rev = r;
+        dn.adj_buffers[0].block_count_rev = 1;
+        dn.storePublishedAdjIndex(0);
+    }
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = b0;
+    node.adj_buffers[0].block_count_fwd = 2;
+    node.storePublishedAdjIndex(0);
+    graph.graph.edge_count.store(83, .release);
+
+    try graph.repairNode(src);
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 83), try graph.outDegree(src));
+}
+
+test "mutation: removeEdge of last edge clears adjacency completely" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const dst = try graph.addNode();
+    try graph.addEdge(src, dst, 0, 0);
+
+    const fwd_blocks_before = graph.graph.block_fwd_count;
+    const rev_blocks_before = graph.graph.block_rev_count;
+
+    try testing.expect(try graph.removeEdge(src, dst));
+    try graph.validate();
+
+    // Adjacency must be empty after removing the only edge
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(src));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(dst));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+
+    // No blocks leaked — old blocks retired, new empty block also retired
+    try testing.expectEqual(fwd_blocks_before + 1, graph.graph.block_fwd_count);
+    try testing.expectEqual(rev_blocks_before + 1, graph.graph.block_rev_count);
+}
+
+test "mutation: removeEdge of last edge in multi-block adjacency shrinks correctly" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const targets = try helpers.addNodes(&graph, 65);
+
+    for (0..65) |i| {
+        try graph.addEdge(src, targets[i], 0, 0);
+    }
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 65), try graph.outDegree(src));
+
+    // Remove the edge in the second block (index 64)
+    try testing.expect(try graph.removeEdge(src, targets[64]));
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 64), try graph.outDegree(src));
+    try testing.expectEqual(@as(u64, 64), graph.edgeCount());
+}
+
+test "mutation: removeEdge from single-block group preserves group count" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const targets = try helpers.addNodes(&graph, 130);
+
+    // Build a grouped adjacency by adding edges in chunks that force groups
+    for (0..64) |i| {
+        try graph.addEdge(src, targets[i], 0, 0);
+    } // block 0 full
+    for (64..128) |i| {
+        try graph.addEdge(src, targets[i], 0, 0);
+    } // block 1 full
+    try graph.addEdge(src, targets[128], 0, 0); // block 2 (1 edge)
+    try graph.addEdge(src, targets[129], 0, 0); // block 3 (1 edge)
+
+    try graph.validate();
+
+    // Remove from the single-edge block — should not corrupt group structure
+    try testing.expect(try graph.removeEdge(src, targets[128]));
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 129), try graph.outDegree(src));
+}
+
+test "mutation: degree cache at overflow falls back to O(B) scan" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+
+    // Build 65536 edges manually (1024 blocks of 64)
+    var first_block: u32 = 0;
+    for (0..1024) |chunk| {
+        const b = try graph.allocBlockFwd();
+        if (chunk == 0) first_block = b;
+        var blk = page_ops.edgeBlockAt(&graph.graph, b, .fwd);
+        for (0..64) |j| {
+            blk.edges[j] = .{ .destination = @intCast(chunk * 64 + j), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        }
+        blk.mask = constants.FULL_BLOCK_MASK;
+    }
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0].first_block_fwd = first_block;
+    node.adj_buffers[0].block_count_fwd = 1024;
+    @atomicStore(u16, &node.degree_fwd, constants.DEGREE_OVERFLOW, .release);
+    node.storePublishedAdjIndex(0);
+    graph.graph.edge_count.store(65536, .release);
+
+    // Cache is at DEGREE_OVERFLOW → O(B) scan must return the real count
+    try testing.expectEqual(@as(usize, 65536), try graph.outDegree(src));
+    try testing.expectEqual(constants.DEGREE_OVERFLOW, @atomicLoad(u16, &node.degree_fwd, .acquire));
 }

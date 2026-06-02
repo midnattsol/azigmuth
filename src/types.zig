@@ -75,10 +75,10 @@ pub const NodeBuffer = extern struct {
     /// Double-buffered adjacency headers.
     adj_buffers: [2]NodeAdj,
 
-    /// Cached forward / reverse degree.  Updated under the writer claim
-    /// immediately after publishing so that `outDegree` / `inDegree` are
-    /// O(1) for nodes with fewer than 65535 edges.  The sentinel 0xFFFF
-    /// signals overflow; the query layer falls back to an O(B) scan.
+    /// Cached forward / reverse degree, accessed with atomic operations.
+    /// Updated under the writer claim after publishing so that `outDegree` /
+    /// `inDegree` are O(1) for nodes with < 65535 edges.  The sentinel
+    /// 0xFFFF signals overflow; the query layer falls back to an O(B) scan.
     degree_fwd: u16 = 0,
     degree_rev: u16 = 0,
 

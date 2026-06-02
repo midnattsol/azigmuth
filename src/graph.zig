@@ -485,7 +485,7 @@ pub const GraphBuilder = struct {
                     }
                 }
             }
-            node_buffer.degree_fwd = if (fwd < constants.DEGREE_OVERFLOW) @intCast(fwd) else constants.DEGREE_OVERFLOW;
+            @atomicStore(u16, &node_buffer.degree_fwd, if (fwd < constants.DEGREE_OVERFLOW) @intCast(fwd) else constants.DEGREE_OVERFLOW, .release);
 
             var rev: usize = 0;
             if (adj.block_count_rev > 0) {
@@ -505,7 +505,7 @@ pub const GraphBuilder = struct {
                     }
                 }
             }
-            node_buffer.degree_rev = if (rev < constants.DEGREE_OVERFLOW) @intCast(rev) else constants.DEGREE_OVERFLOW;
+            @atomicStore(u16, &node_buffer.degree_rev, if (rev < constants.DEGREE_OVERFLOW) @intCast(rev) else constants.DEGREE_OVERFLOW, .release);
         }
     }
 

@@ -225,3 +225,113 @@ test "repair: grouped adjacency can compact across group boundary" {
     try testing.expectEqual(@as(usize, 40), try graph.outDegree(node));
     try graph.validate();
 }
+
+// ── Capa 2: Repair ────────────────────────────────────────────────────
+
+test "repair: max_compactions zero does nothing" {
+    // repairNodeSide always compacts.  Use repairBudgeted with 0 to
+    // test the zero-budget path.
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const compacted = try repair.repairBudgeted(&graph.graph, 0);
+    try testing.expectEqual(@as(usize, 0), compacted);
+}
+
+test "repair: single block node returns zero" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 65);
+    const block = try graph.allocBlockFwd();
+    fillForwardBlock(&graph, block, 1, 64);
+    try publishForwardBlocks(&graph, .{ .index = 0 }, block, 1);
+
+    const compacted = try repair.repairNodeSide(&graph.graph, .{ .index = 0 }, .fwd);
+    try testing.expectEqual(@as(usize, 0), compacted);
+}
+
+test "repair: already meets occupancy returns zero" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 80);
+    const first_block = try graph.allocBlockFwd();
+    const second_block = try graph.allocBlockFwd();
+    fillForwardBlock(&graph, first_block, 1, 64);
+    fillForwardBlock(&graph, second_block, 65, 1);
+    try publishForwardBlocks(&graph, .{ .index = 0 }, first_block, 2);
+
+    const compacted = try repair.repairNodeSide(&graph.graph, .{ .index = 0 }, .fwd);
+    try testing.expectEqual(@as(usize, 0), compacted);
+    try testing.expectEqual(@as(u16, 2), (try graph.publishedNodeAdj(.{ .index = 0 })).block_count_fwd);
+}
+
+test "repair: grouped adjacency becomes contiguous after repair" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 90);
+    const node = graph_mod.NodeId{ .index = 0 };
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    fillForwardBlock(&graph, b0, 1, 20);
+    fillForwardBlock(&graph, b1, 21, 20);
+    fillForwardBlock(&graph, b2, 41, 20);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node_buffer = try graph.nodeAt(node);
+    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node_buffer.adj_buffers[0].first_block_fwd = b0;
+    node_buffer.adj_buffers[0].block_count_fwd = 3;
+    node_buffer.adj_buffers[0].group_count_fwd = 3;
+    node_buffer.adj_buffers[0].first_group_fwd = g0;
+    node_buffer.storePublishedAdjIndex(0);
+    graph.graph.edge_count.store(60, .release);
+
+    const compacted = try repair.repairNodeSide(&graph.graph, node, .fwd);
+    try testing.expectEqual(@as(usize, 1), compacted);
+
+    const adj = node_buffer.publishedAdj();
+    try testing.expectEqual(@as(u16, 0), adj.group_count_fwd);
+    try testing.expectEqual(@as(u16, 1), adj.block_count_fwd);
+    try testing.expectEqual(@as(usize, 60), try graph.outDegree(node));
+}
+
+test "repair: valid forward blocks produce valid reverse after repair" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 90);
+    const src = graph_mod.NodeId{ .index = 0 };
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    fillForwardBlock(&graph, b0, 1, 40);
+    fillForwardBlock(&graph, b1, 41, 20);
+
+    // Set up matching reverse edges for each destination
+    for (1..61) |dst| {
+        const r = try graph.allocBlockRev();
+        var rev = page_ops.edgeBlockAt(&graph.graph, r, .rev);
+        rev.sources[0] = src.index;
+        rev.mask = constants.denseMask(1);
+        var dn = try graph.nodeAt(.{ .index = @intCast(dst) });
+        dn.adj_buffers[0].first_block_rev = r;
+        dn.adj_buffers[0].block_count_rev = 1;
+        dn.storePublishedAdjIndex(0);
+    }
+
+    try publishForwardBlocks(&graph, src, b0, 2);
+    graph.graph.edge_count.store(60, .release);
+
+    const compacted = try repair.repairNodeSide(&graph.graph, src, .fwd);
+    try testing.expectEqual(@as(usize, 1), compacted);
+    try graph.validate();
+}

@@ -4,6 +4,7 @@ pub const constants = @import("constants.zig");
 pub const page_ops = @import("page_ops.zig");
 pub const types = @import("types.zig");
 pub const adjacency = @import("adjacency.zig");
+pub const mutation_common = @import("mutation/common.zig");
 pub const repair = @import("repair.zig");
 
 pub const bfs = @import("algorithms/bfs.zig");

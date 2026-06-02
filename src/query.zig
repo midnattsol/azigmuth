@@ -254,7 +254,7 @@ fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comp
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (node.index >= graph.node_count) return error.InvalidNode;
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const deg = node_buffer.degree_fwd;
+    const deg = @atomicLoad(u16, &node_buffer.degree_fwd, .acquire);
     if (deg < constants.DEGREE_OVERFLOW) {
         // Degree cache is trusted only when it agrees with the existence
         // of forward blocks.  Tests that build adjacencies by hand leave
@@ -270,7 +270,7 @@ pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.G
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (node.index >= graph.node_count) return error.InvalidNode;
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const deg = node_buffer.degree_rev;
+    const deg = @atomicLoad(u16, &node_buffer.degree_rev, .acquire);
     if (deg < constants.DEGREE_OVERFLOW) {
         if (deg > 0 or node_buffer.publishedAdj().block_count_rev == 0) return deg;
     }

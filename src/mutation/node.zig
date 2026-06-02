@@ -84,7 +84,7 @@ fn clearForwardAdjacencyAndMarkRemoved(graph: *graph_core.GraphCore, node: types
     staging_adj.first_group_fwd = 0;
     staging_adj.flags.removed = true;
     node_buffer.publishStagingAdj();
-    node_buffer.degree_fwd = 0;
+    @atomicStore(u16, &node_buffer.degree_fwd, 0, .release);
     if (old_first_group_fwd) |first_group| common.retireGroupChain(graph, first_group, old_group_count_fwd);
     writer_guard.end();
 }

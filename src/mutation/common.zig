@@ -9,15 +9,30 @@ const adjacency = @import("../adjacency.zig");
 const rcu = @import("../rcu.zig");
 
 /// Safely increment the cached degree counter, handling overflow.
+/// Uses atomic operations so the cache is safe for lock-free readers.
 pub fn incrementDegree(deg: *u16) void {
-    if (deg.* < constants.DEGREE_OVERFLOW - 1) deg.* += 1 else deg.* = constants.DEGREE_OVERFLOW;
+    while (true) {
+        const current = @atomicLoad(u16, deg, .acquire);
+        if (current >= constants.DEGREE_OVERFLOW - 1) {
+            @atomicStore(u16, deg, constants.DEGREE_OVERFLOW, .release);
+            return;
+        }
+        if (@cmpxchgWeak(u16, deg, current, current + 1, .acq_rel, .acquire) == null) return;
+    }
 }
 
 /// Safely decrement the cached degree counter.
-/// If the counter does not hold a valid cached value it is forced to
-/// `DEGREE_OVERFLOW` so callers fall back to the O(B) scan.
+/// Uses atomic operations; if the counter is not a valid cached value it
+/// forces it to `DEGREE_OVERFLOW` so callers fall back to the O(B) scan.
 pub fn decrementDegree(deg: *u16) void {
-    if (deg.* > 0 and deg.* < constants.DEGREE_OVERFLOW) deg.* -= 1 else deg.* = constants.DEGREE_OVERFLOW;
+    while (true) {
+        const current = @atomicLoad(u16, deg, .acquire);
+        if (current == 0 or current >= constants.DEGREE_OVERFLOW) {
+            @atomicStore(u16, deg, constants.DEGREE_OVERFLOW, .release);
+            return;
+        }
+        if (@cmpxchgWeak(u16, deg, current, current - 1, .acq_rel, .acquire) == null) return;
+    }
 }
 
 /// Tracks which adjacency claims were successfully acquired during a mutation,

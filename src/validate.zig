@@ -517,6 +517,7 @@ fn findSlotInRun(
             low = mid + 1;
         } else {
             if (adjacency_mod.searchInBlock(BlockType, block, target)) |slot| return slot;
+            break;
         }
     }
     // Fallback: linear scan of the run.
@@ -699,11 +700,17 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         const node_id: u32 = @intCast(node_index);
         const adjacency = page_ops.nodeAtConst(graph, .{ .index = node_id }).publishedAdj();
 
-        total_forward += try validateAdjacencyBlocksFast(graph, adjacency, .fwd);
-        total_reverse += try validateAdjacencyBlocksFast(graph, adjacency, .rev);
+        const fwd_live = try validateAdjacencyBlocksFast(graph, adjacency, .fwd);
+        const rev_live = try validateAdjacencyBlocksFast(graph, adjacency, .rev);
+        total_forward += fwd_live;
+        total_reverse += rev_live;
         try validateOccupancyFast(graph, adjacency, .fwd);
         try validateOccupancyFast(graph, adjacency, .rev);
         try validateForwardConsistencyFast(graph, node_id, adjacency);
+
+        // RFC §3.2: at most MAX_GROUPS_PER_NODE runs without repair.
+        if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) return error.CorruptGraph;
+        if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) return error.CorruptGraph;
     }
 
     if (total_forward != total_reverse) return error.CorruptGraph;
@@ -750,6 +757,35 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
 
         for (forward_blocks.items) |block| {
             total += sumBlockLive(graph, block.block_index, .fwd);
+        }
+
+        // RFC §2.5: degree cache consistency.
+        const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
+        const cached_fwd: usize = @atomicLoad(u16, &node_buffer.degree_fwd, .acquire);
+        const cached_rev: usize = @atomicLoad(u16, &node_buffer.degree_rev, .acquire);
+        const live_fwd: usize = if (forward_blocks.items.len > 0) blk: {
+            var s: usize = 0;
+            for (forward_blocks.items) |b| s += @popCount(blockMask(graph, b.block_index, .fwd));
+            break :blk s;
+        } else 0;
+        if (cached_fwd < constants.DEGREE_OVERFLOW and live_fwd < constants.DEGREE_OVERFLOW and cached_fwd != live_fwd) {
+            try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_fwd), .actual = @intCast(cached_fwd) } });
+        }
+        const live_rev: usize = if (reverse_blocks.items.len > 0) blk: {
+            var s: usize = 0;
+            for (reverse_blocks.items) |b| s += sumBlockLive(graph, b.block_index, .rev);
+            break :blk s;
+        } else 0;
+        if (cached_rev < constants.DEGREE_OVERFLOW and live_rev < constants.DEGREE_OVERFLOW and cached_rev != live_rev) {
+            try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_rev), .actual = @intCast(cached_rev) } });
+        }
+
+        // RFC §3.2: at most MAX_GROUPS_PER_NODE runs without repair.
+        if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) {
+            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
+        }
+        if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) {
+            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
         }
     }
 

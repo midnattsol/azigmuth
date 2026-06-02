@@ -772,9 +772,9 @@ fn repairNodeSideLimited(
     updateRepairDebt(graph, staging_adj, node.index, side);
     node_mut.publishStagingAdj();
     if (side == .fwd) {
-        node_mut.degree_fwd = if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW;
+        @atomicStore(u16, &node_mut.degree_fwd, if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW, .release);
     } else {
-        node_mut.degree_rev = if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW;
+        @atomicStore(u16, &node_mut.degree_rev, if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW, .release);
     }
     return 1;
 }

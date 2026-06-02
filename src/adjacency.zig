@@ -203,7 +203,6 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
 
     if (node_adj.group_count_fwd == 0) {
         const first_block = node_adj.first_block_fwd;
-        // Try binary search on block key ranges (fast path).
         var low: u32 = 0;
         var high: u32 = block_count;
         while (low < high) {
@@ -218,10 +217,10 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
             } else if (target > last_edge) {
                 low = mid + 1;
             } else {
-                return searchInBlock(types.EdgeBlockFwd, block, target) != null;
+                if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;
+                break;
             }
         }
-        // Fallback: blocks may not be globally sorted by key.
         for (first_block..first_block + block_count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;
@@ -232,7 +231,6 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
     var group_index = node_adj.first_group_fwd;
     while (true) {
         const group = page_ops.groupAtConst(graph, group_index);
-        // Try binary search within the group's contiguous blocks.
         var low: u32 = 0;
         var high: u32 = group.count;
         while (low < high) {
@@ -247,10 +245,10 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
             } else if (target > last) {
                 low = mid + 1;
             } else {
-                return searchInBlock(types.EdgeBlockFwd, block, target) != null;
+                if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;
+                break;
             }
         }
-        // Fallback: scan the group linearly.
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;

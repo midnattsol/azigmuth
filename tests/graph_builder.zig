@@ -111,3 +111,147 @@ test "GraphBuilder: addEdge with self-loop works correctly" {
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(node));
     try testing.expectEqual(@as(usize, 1), try graph.inDegree(node));
 }
+
+test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    const a = try builder.addNode();
+    const b = try builder.addNode();
+
+    try builder.addEdge(a, b, 0, 0);
+    try testing.expectError(error.EdgeAlreadyExists, builder.addEdge(a, b, 1, 0));
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(a));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(b));
+}
+
+test "graph_builder: freeze produces valid graph (validate passthrough)" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    var nodes: [6]graph_mod.NodeId = undefined;
+    for (0..6) |i| {
+        nodes[i] = try builder.addNode();
+    }
+
+    try builder.addEdge(nodes[0], nodes[1], 0, 0);
+    try builder.addEdge(nodes[0], nodes[2], 0, 0);
+    try builder.addEdge(nodes[1], nodes[3], 0, 0);
+    try builder.addEdge(nodes[2], nodes[3], 0, 0);
+    try builder.addEdge(nodes[3], nodes[4], 0, 0);
+    try builder.addEdge(nodes[4], nodes[5], 0, 0);
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 6), graph.edgeCount());
+
+    try testing.expectEqual(@as(usize, 2), try graph.outDegree(nodes[0]));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(nodes[1]));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(nodes[2]));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(nodes[3]));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(nodes[4]));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(nodes[5]));
+
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(nodes[0]));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(nodes[1]));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(nodes[2]));
+    try testing.expectEqual(@as(usize, 2), try graph.inDegree(nodes[3]));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(nodes[4]));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(nodes[5]));
+}
+
+test "graph_builder: degree cache is correct after freeze" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    // 65 targets from a single source → crosses 2 blocks (64+1)
+    const source = try builder.addNode();
+    for (0..65) |_| {
+        const target = try builder.addNode();
+        try builder.addEdge(source, target, 0, 0);
+    }
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
+}
+
+test "graph_builder: empty graph validates" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    // No nodes, no edges
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}
+
+test "graph_builder: single edge bidirectional check" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    const a = try builder.addNode();
+    const b = try builder.addNode();
+    try builder.addEdge(a, b, 0, 0);
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    try graph.validate();
+
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(a));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(a));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(b));
+}
+
+test "graph_builder: degree cache matches edge count for large graph" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    const n = try builder.addNode();
+    for (0..200) |_| {
+        const t = try builder.addNode();
+        try builder.addEdge(n, t, 0, 0);
+    }
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    try graph.validate();
+
+    try testing.expectEqual(@as(usize, 200), try graph.outDegree(n));
+    try testing.expectEqual(@as(u64, 200), graph.edgeCount());
+
+    // All targets must have in-degree 1 via cache
+    for (1..201) |dst_index| {
+        try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = @intCast(dst_index) }));
+    }
+}
+
+test "graph_builder: freeze transfers ownership and builder becomes inert" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    const a = try builder.addNode();
+    try builder.addEdge(a, a, 0, 0);
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+
+    try testing.expectError(error.UnsupportedOperation, builder.addNode());
+    try testing.expectError(error.UnsupportedOperation, builder.addEdge(a, a, 0, 0));
+    try testing.expectError(error.UnsupportedOperation, builder.freeze());
+
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+}
