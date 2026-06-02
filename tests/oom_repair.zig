@@ -7,6 +7,7 @@ const page_ops = test_internals.page_ops;
 const repair = test_internals.repair;
 const types = test_internals.types;
 const adjacency_mod = test_internals.adjacency;
+const helpers = @import("helpers.zig");
 
 const testing = std.testing;
 
@@ -31,10 +32,9 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     block.mask = constants.denseMask(1);
 
     var node_buffer = try graph.nodeAt(.{ .index = destination_index });
-    node_buffer.adj_buffers[0].first_block_rev = block_index;
-    node_buffer.adj_buffers[0].block_count_rev = 1;
+    helpers.publishedRevSide(node_buffer).first_block = block_index;
+    helpers.publishedRevSide(node_buffer).block_count = 1;
     node_buffer.degree_rev = 1;
-    node_buffer.storePublishedAdjIndex(0);
 }
 
 fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -52,11 +52,10 @@ fn publishRepairCandidate(graph: *graph_mod.Graph, node: graph_mod.NodeId) !stru
     try publishReverseSourcesForForwardRange(graph, node.index, 21, 20);
 
     var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].first_block_fwd = first_block;
-    node_buffer.adj_buffers[0].block_count_fwd = 2;
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).first_block = first_block;
+    helpers.publishedFwdSide(node_buffer).block_count = 2;
     node_buffer.degree_fwd = 40;
-    node_buffer.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(40, .release);
 
     return .{ .first_block = first_block, .second_block = second_block };

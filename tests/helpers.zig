@@ -2,6 +2,52 @@ const std = @import("std");
 const test_internals = @import("test_internals");
 
 const graph_mod = test_internals.graph;
+const types = test_internals.types;
+
+pub fn clearPublishedSides(node: *graph_mod.NodeBuffer) void {
+    node.fwd_buffers[0] = std.mem.zeroes(types.SideAdj);
+    node.fwd_buffers[1] = std.mem.zeroes(types.SideAdj);
+    node.rev_buffers[0] = std.mem.zeroes(types.SideAdj);
+    node.rev_buffers[1] = std.mem.zeroes(types.SideAdj);
+    node.storePublishedMeta(.{});
+}
+
+pub fn publishedFwdSide(node: *graph_mod.NodeBuffer) *types.SideAdj {
+    return &node.fwd_buffers[node.loadPublishedMeta().fwd_index];
+}
+
+pub fn publishedRevSide(node: *graph_mod.NodeBuffer) *types.SideAdj {
+    return &node.rev_buffers[node.loadPublishedMeta().rev_index];
+}
+
+pub fn setPublishedAdjSnapshot(node: *graph_mod.NodeBuffer, adj: types.NodeAdj) void {
+    const fwd = publishedFwdSide(node);
+    fwd.* = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
+    const rev = publishedRevSide(node);
+    rev.* = .{
+        .first_block = adj.first_block_rev,
+        .block_count = adj.block_count_rev,
+        .group_count = adj.group_count_rev,
+        .first_group = adj.first_group_rev,
+    };
+    node.storePublishedMeta((types.PublishedMeta{}).withFlags(adj.flags));
+}
+
+pub fn setPublishedFlags(node: *graph_mod.NodeBuffer, flags: types.NodeFlags) void {
+    const meta = node.loadPublishedMeta();
+    node.storePublishedMeta(meta.withFlags(flags));
+}
+
+pub fn updatePublishedFlags(node: *graph_mod.NodeBuffer, update: fn (*types.NodeFlags) void) void {
+    var flags = node.loadPublishedMeta().flags();
+    update(&flags);
+    setPublishedFlags(node, flags);
+}
 
 pub fn addNodes(graph: *graph_mod.Graph, comptime node_count: usize) ![node_count]graph_mod.NodeId {
     var nodes: [node_count]graph_mod.NodeId = undefined;

@@ -246,3 +246,46 @@ test "cycle detection handles nodes with more than 64 outgoing edges and a self-
     try std.testing.expectEqual(@as(u64, 71), graph.edgeCount());
     try std.testing.expectEqual(true, try cycle_mod.hasCycle(&graph.graph, std.testing.allocator));
 }
+
+test "cycle detection with dense hub and many tombstoned sources is correct" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const hub = try graph.addNode();
+    const sender_count: usize = 100;
+    var senders: [sender_count]graph_mod.NodeId = undefined;
+    for (0..sender_count) |i| {
+        senders[i] = try graph.addNode();
+        try graph.addEdge(senders[i], hub, 0, 0);
+    }
+
+    for (0..sender_count) |i| {
+        if (i % 3 == 0) try graph.removeNode(senders[i]);
+    }
+
+    try graph.validate();
+    try std.testing.expectEqual(false, try cycle_mod.hasCycle(&graph.graph, std.testing.allocator));
+
+    const visible = try graph.inDegree(hub);
+    try std.testing.expect(visible > 0);
+    try std.testing.expect(visible < sender_count);
+}
+
+test "cycle detection with tombstoned self-loop node returns false" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    const c = try graph.addNode();
+    try graph.addEdge(a, a, 0, 0);
+    try graph.addEdge(a, b, 0, 0);
+    try graph.addEdge(b, c, 0, 0);
+    try graph.addEdge(c, a, 0, 0);
+
+    try graph.removeNode(a);
+    try graph.validate();
+
+    // The cycle is broken because a is removed.
+    try std.testing.expectEqual(false, try cycle_mod.hasCycle(&graph.graph, std.testing.allocator));
+}

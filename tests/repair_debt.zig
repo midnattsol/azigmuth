@@ -5,6 +5,7 @@ const graph_mod = test_internals.graph;
 const page_ops = test_internals.page_ops;
 const constants = test_internals.constants;
 const types = test_internals.types;
+const helpers = @import("helpers.zig");
 
 const testing = std.testing;
 
@@ -29,10 +30,9 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     block.mask = constants.denseMask(1);
 
     var node_buffer = try graph.nodeAt(.{ .index = destination_index });
-    node_buffer.adj_buffers[0].first_block_rev = block_index;
-    node_buffer.adj_buffers[0].block_count_rev = 1;
+    helpers.publishedRevSide(node_buffer).first_block = block_index;
+    helpers.publishedRevSide(node_buffer).block_count = 1;
     node_buffer.degree_rev = 1;
-    node_buffer.storePublishedAdjIndex(0);
 }
 
 fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -66,11 +66,10 @@ test "repair debt: needs_repair flag is cleared after repairNode" {
     second_block_edges.mask = constants.denseMask(36);
 
     var node_buffer = try graph.nodeAt(source);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].first_block_fwd = block0;
-    node_buffer.adj_buffers[0].block_count_fwd = 2;
-    node_buffer.adj_buffers[0].flags.needs_repair_fwd = true;
-    node_buffer.storePublishedAdjIndex(0);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).first_block = block0;
+    helpers.publishedFwdSide(node_buffer).block_count = 2;
+    helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
 
     // Verify flag is set before repair.
     try testing.expect(node_buffer.publishedAdj().flags.needs_repair_fwd);
@@ -110,19 +109,20 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
     second_block_edges.mask = constants.denseMask(32);
 
     var node_buffer = try graph.nodeAt(source);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].first_block_fwd = block0;
-    node_buffer.adj_buffers[0].block_count_fwd = 2;
-    node_buffer.storePublishedAdjIndex(0);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).first_block = block0;
+    helpers.publishedFwdSide(node_buffer).block_count = 2;
 
     // Before updateRepairDebt the flag must be clear.
     try testing.expect(!node_buffer.publishedAdj().flags.needs_repair_fwd);
 
     // updateRepairDebt scans non-tail blocks and sets the flag.
-    test_internals.repair.updateRepairDebt(&graph.graph, &node_buffer.adj_buffers[0], source.index, .fwd);
+    var adj = node_buffer.publishedAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, &adj, source.index, .fwd);
+    helpers.setPublishedAdjSnapshot(node_buffer, adj);
 
     // The flag must be set because block0 (non-tail) is below MIN_OCCUPANCY.
-    try testing.expect(node_buffer.adj_buffers[0].flags.needs_repair_fwd);
+    try testing.expect(node_buffer.publishedAdj().flags.needs_repair_fwd);
 }
 
 test "repair debt: updateRepairDebt does not set flag when only tail block is underfull" {
@@ -198,16 +198,14 @@ test "repair debt: grouped non-tail runs below 4 blocks trigger repair debt" {
     page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
 
     var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].block_count_fwd = 3;
-    node_buffer.adj_buffers[0].group_count_fwd = 3;
-    node_buffer.adj_buffers[0].first_group_fwd = g0;
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = 3;
+    helpers.publishedFwdSide(node_buffer).group_count = 3;
+    helpers.publishedFwdSide(node_buffer).first_group = g0;
     node_buffer.degree_fwd = 129;
-    node_buffer.storePublishedAdjIndex(0);
 
-    node_buffer.copyPublishedToStaging();
-    const staging_adj = node_buffer.stagingAdj();
-    test_internals.repair.updateRepairDebt(&graph.graph, staging_adj, node.index, .fwd);
+    var staging_adj = node_buffer.publishedAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
     try testing.expect(staging_adj.flags.needs_repair_fwd);
 }
 
@@ -239,19 +237,18 @@ test "repair debt: validate requires run fragmentation debt to be marked" {
     try publishReverseSourcesForForwardRange(&graph, node.index, 129, 1);
 
     var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].block_count_fwd = 3;
-    node_buffer.adj_buffers[0].group_count_fwd = 3;
-    node_buffer.adj_buffers[0].first_group_fwd = g0;
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = 3;
+    helpers.publishedFwdSide(node_buffer).group_count = 3;
+    helpers.publishedFwdSide(node_buffer).first_group = g0;
     node_buffer.degree_fwd = 129;
-    node_buffer.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(129, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 
-    node_buffer.copyPublishedToStaging();
-    node_buffer.stagingAdj().flags.needs_repair_fwd = true;
-    node_buffer.publishStagingAdj();
+    var staging_adj = node_buffer.publishedAdj();
+    staging_adj.flags.needs_repair_fwd = true;
+    helpers.setPublishedAdjSnapshot(node_buffer, staging_adj);
     try graph.validate();
 }
 
@@ -282,18 +279,60 @@ test "repair debt: contiguous MAX_GROUPS_PER_NODE groups trigger canonical repai
     page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1, .next = constants.END_OF_CHAIN };
 
     var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].block_count_fwd = 4;
-    node_buffer.adj_buffers[0].group_count_fwd = 4;
-    node_buffer.adj_buffers[0].first_group_fwd = g0;
-    node_buffer.storePublishedAdjIndex(0);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = 4;
+    helpers.publishedFwdSide(node_buffer).group_count = 4;
+    helpers.publishedFwdSide(node_buffer).first_group = g0;
 
     // Even at exactly MAX_GROUPS_PER_NODE, a fully contiguous grouped chain
     // should be canonicalized back to contiguous representation.
-    node_buffer.copyPublishedToStaging();
-    const staging_adj = node_buffer.stagingAdj();
-    test_internals.repair.updateRepairDebt(&graph.graph, staging_adj, node.index, .fwd);
+    var staging_adj = node_buffer.publishedAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
     try testing.expect(staging_adj.flags.needs_repair_fwd);
+}
+
+test "repair debt: repairNode canonicalizes grouped contiguous layout even when occupancy is fine" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodesForTest(&graph, 130);
+    const node = graph_mod.NodeId{ .index = 0 };
+
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    fillBlock(&graph, b0, 1, 64);
+    fillBlock(&graph, b1, 65, 64);
+    fillBlock(&graph, b2, 129, 1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = constants.END_OF_CHAIN };
+
+    try publishReverseSourcesForForwardRange(&graph, node.index, 1, 64);
+    try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
+    try publishReverseSourcesForForwardRange(&graph, node.index, 129, 1);
+
+    const node_buffer = try graph.nodeAt(node);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).first_block = b0;
+    helpers.publishedFwdSide(node_buffer).block_count = 3;
+    helpers.publishedFwdSide(node_buffer).group_count = 3;
+    helpers.publishedFwdSide(node_buffer).first_group = g0;
+    node_buffer.degree_fwd = 129;
+    helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    graph.graph.edge_count.store(129, .release);
+
+    try graph.repairNode(node);
+    try graph.validate();
+
+    const repaired = try graph.publishedNodeAdj(node);
+    try testing.expectEqual(@as(u16, 0), repaired.group_count_fwd);
+    try testing.expectEqual(@as(u16, 3), repaired.block_count_fwd);
+    try testing.expect(!repaired.flags.needs_repair_fwd);
 }
 
 test "repair debt: repairBudgeted continues past stale queue entry" {
@@ -309,12 +348,11 @@ test "repair debt: repairBudgeted continues past stale queue entry" {
     const b1 = try graph.allocBlockFwd();
     fillBlock(&graph, b0, 1, 20);
     fillBlock(&graph, b1, 21, 20);
-    var node0_buf = try graph.nodeAt(n0);
-    node0_buf.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node0_buf.adj_buffers[0].first_block_fwd = b0;
-    node0_buf.adj_buffers[0].block_count_fwd = 2;
-    node0_buf.adj_buffers[0].flags.needs_repair_fwd = true;
-    node0_buf.storePublishedAdjIndex(0);
+    const node0_buf = try graph.nodeAt(n0);
+    helpers.clearPublishedSides(node0_buf);
+    helpers.publishedFwdSide(node0_buf).first_block = b0;
+    helpers.publishedFwdSide(node0_buf).block_count = 2;
+    helpers.setPublishedFlags(node0_buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
 
     // n1: same setup, also needs_repair
     const b2 = try graph.allocBlockFwd();
@@ -322,11 +360,10 @@ test "repair debt: repairBudgeted continues past stale queue entry" {
     fillBlock(&graph, b2, 40, 20);
     fillBlock(&graph, b3, 60, 20);
     var node1_buf = try graph.nodeAt(n1);
-    node1_buf.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node1_buf.adj_buffers[0].first_block_fwd = b2;
-    node1_buf.adj_buffers[0].block_count_fwd = 2;
-    node1_buf.adj_buffers[0].flags.needs_repair_fwd = true;
-    node1_buf.storePublishedAdjIndex(0);
+    helpers.clearPublishedSides(node1_buf);
+    helpers.publishedFwdSide(node1_buf).first_block = b2;
+    helpers.publishedFwdSide(node1_buf).block_count = 2;
+    helpers.setPublishedFlags(node1_buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
 
     // Queue: [n0, n1]
     try graph.graph.repair_fwd.append(graph.graph.allocator, n0.index);
@@ -351,9 +388,8 @@ test "repair debt: updateRepairDebt marks single-block tombstone debt" {
     try graph.removeNode(removed);
 
     var source_buffer = try graph.nodeAt(source);
-    source_buffer.copyPublishedToStaging();
-    const staging_adj = source_buffer.stagingAdj();
-    test_internals.repair.updateRepairDebt(&graph.graph, staging_adj, source.index, .fwd);
+    var staging_adj = source_buffer.publishedAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, &staging_adj, source.index, .fwd);
 
     try testing.expect(staging_adj.flags.needs_repair_fwd);
 }

@@ -5,6 +5,7 @@ const graph_mod = test_internals.graph;
 const constants = test_internals.constants;
 const page_ops = test_internals.page_ops;
 const types = test_internals.types;
+const helpers = @import("helpers.zig");
 
 const testing = std.testing;
 
@@ -32,11 +33,11 @@ fn setReverseBlock(graph: *graph_mod.Graph, block_index: u32, first_source: u32,
 
 fn publishForwardGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups: []const u32, block_count: u16) !void {
     var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].block_count_fwd = block_count;
-    node_buffer.adj_buffers[0].group_count_fwd = @intCast(groups.len);
-    node_buffer.adj_buffers[0].first_group_fwd = groups[0];
-    node_buffer.adj_buffers[0].flags.needs_repair_fwd = true;
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = block_count;
+    helpers.publishedFwdSide(node_buffer).group_count = @intCast(groups.len);
+    helpers.publishedFwdSide(node_buffer).first_group = groups[0];
+    helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     var total: usize = 0;
     for (groups) |group_index| {
         const group = page_ops.groupAtConst(&graph.graph, group_index);
@@ -45,16 +46,15 @@ fn publishForwardGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups:
         }
     }
     node_buffer.degree_fwd = @intCast(total);
-    node_buffer.storePublishedAdjIndex(0);
 }
 
 fn publishReverseGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups: []const u32, block_count: u16) !void {
     var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].block_count_rev = block_count;
-    node_buffer.adj_buffers[0].group_count_rev = @intCast(groups.len);
-    node_buffer.adj_buffers[0].first_group_rev = groups[0];
-    node_buffer.adj_buffers[0].flags.needs_repair_rev = true;
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedRevSide(node_buffer).block_count = block_count;
+    helpers.publishedRevSide(node_buffer).group_count = @intCast(groups.len);
+    helpers.publishedRevSide(node_buffer).first_group = groups[0];
+    helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = false, .needs_repair_rev = true, .removed = false });
     var total: usize = 0;
     for (groups) |group_index| {
         const group = page_ops.groupAtConst(&graph.graph, group_index);
@@ -63,7 +63,6 @@ fn publishReverseGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups:
         }
     }
     node_buffer.degree_rev = @intCast(total);
-    node_buffer.storePublishedAdjIndex(0);
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.NodeId, source_index: u32) !void {
@@ -73,8 +72,8 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.No
     reverse_block.mask = constants.denseMask(1);
 
     var node_buffer = try graph.nodeAt(destination);
-    node_buffer.adj_buffers[0].first_block_rev = block;
-    node_buffer.adj_buffers[0].block_count_rev = 1;
+    helpers.publishedRevSide(node_buffer).first_block = block;
+    helpers.publishedRevSide(node_buffer).block_count = 1;
     node_buffer.degree_rev = 1;
 }
 
@@ -85,8 +84,8 @@ fn publishSingleForwardEdge(graph: *graph_mod.Graph, source: graph_mod.NodeId, d
     forward_block.mask = constants.denseMask(1);
 
     var node_buffer = try graph.nodeAt(source);
-    node_buffer.adj_buffers[0].first_block_fwd = block;
-    node_buffer.adj_buffers[0].block_count_fwd = 1;
+    helpers.publishedFwdSide(node_buffer).first_block = block;
+    helpers.publishedFwdSide(node_buffer).block_count = 1;
     node_buffer.degree_fwd = 1;
 }
 
@@ -186,7 +185,7 @@ test "mutation grouped: RepairRequired in grouped forward does not publish" {
     page_ops.edgeBlockAt(&graph.graph, first_block_index, .fwd).mask = constants.denseMask(48);
     (try graph.nodeAt(source)).degree_fwd = 98;
     const reverse_node = try graph.nodeAt(.{ .index = 49 });
-    reverse_node.adj_buffers[0].block_count_rev = 0;
+    helpers.publishedRevSide(reverse_node).block_count = 0;
     reverse_node.degree_rev = 0;
     graph.graph.edge_count.store(98, .release);
 
@@ -204,7 +203,7 @@ test "mutation grouped: RepairRequired in grouped reverse does not publish" {
     page_ops.edgeBlockAt(&graph.graph, first_block_index, .rev).mask = constants.denseMask(48);
     (try graph.nodeAt(destination)).degree_rev = 98;
     const forward_node = try graph.nodeAt(.{ .index = 49 });
-    forward_node.adj_buffers[0].block_count_fwd = 0;
+    helpers.publishedFwdSide(forward_node).block_count = 0;
     forward_node.degree_fwd = 0;
     graph.graph.edge_count.store(98, .release);
 

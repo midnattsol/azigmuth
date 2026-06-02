@@ -13,6 +13,24 @@ const page_ops = @import("page_ops.zig");
 const adjacency = @import("adjacency.zig");
 const rcu = @import("rcu.zig");
 const node_validity = @import("node_validity.zig");
+const mutation_common = @import("mutation/common.zig");
+
+fn publishComposedAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+    const meta = node.loadPublishedMeta();
+    node.stagingFwd(meta).* = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
+    node.stagingRev(meta).* = .{
+        .first_block = adj.first_block_rev,
+        .block_count = adj.block_count_rev,
+        .group_count = adj.group_count_rev,
+        .first_group = adj.first_group_rev,
+    };
+    _ = mutation_common.publishStagedBoth(node, meta, adj.flags);
+}
 
 fn findMergeCandidate(
     graph: *const graph_core.GraphCore,
@@ -43,7 +61,6 @@ fn findMergeCandidate(
         const group_start = group.start;
         const group_end = group_start + group.count;
         for (group_start..group_end) |block_idx| {
-            // Check block_idx (left) with its right neighbor
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
             if (@popCount(block.mask) < constants.MIN_OCCUPANCY) {
                 if (@as(u32, @intCast(block_idx)) + 1 < group_end) {
@@ -52,7 +69,6 @@ fn findMergeCandidate(
             }
             prev_idx = @intCast(block_idx);
         }
-        // Cross-group boundary: last block of this group with first of next
         if (group.next != constants.END_OF_CHAIN) {
             const next_group = page_ops.groupAtConst(graph, group.next);
             if (prev_idx) |previous_block_idx| {
@@ -272,24 +288,32 @@ pub fn updateRepairDebt(
     node_index: u32,
     comptime side: adjacency.AdjSide,
 ) void {
-    const flag = if (side == .fwd) &adj.flags.needs_repair_fwd else &adj.flags.needs_repair_rev;
-    const block_count = if (side == .fwd) adj.block_count_fwd else adj.block_count_rev;
-    const first_block = if (side == .fwd) adj.first_block_fwd else adj.first_block_rev;
-    const group_count = if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
-    const first_group = if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
-
     if (adj.flags.removed) {
         adj.flags.needs_repair_fwd = false;
         adj.flags.needs_repair_rev = false;
         return;
     }
 
+    const needs_repair = computeNeedsRepair(graph, adj, side);
+    const flag = if (side == .fwd) &adj.flags.needs_repair_fwd else &adj.flags.needs_repair_rev;
+    flag.* = needs_repair;
+    if (needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
+}
+
+fn computeNeedsRepair(
+    graph: *graph_core.GraphCore,
+    adj: *const types.NodeAdj,
+    comptime side: adjacency.AdjSide,
+) bool {
+    const block_count = if (side == .fwd) adj.block_count_fwd else adj.block_count_rev;
+    const first_block = if (side == .fwd) adj.first_block_fwd else adj.first_block_rev;
+    const group_count = if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
+    const first_group = if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
+
     var needs_repair = side == .fwd and block_count > 0 and hasAnyTombstone(graph, first_block, block_count, group_count, first_group, .fwd);
 
     if (block_count <= 1) {
-        flag.* = needs_repair;
-        if (needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
-        return;
+        return needs_repair;
     }
 
     if (group_count == 0) {
@@ -340,8 +364,25 @@ pub fn updateRepairDebt(
         }
     }
 
-    flag.* = needs_repair;
-    if (needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
+    return needs_repair;
+}
+
+/// Recomputes repair debt for the currently published adjacency of one side and
+/// stores the resulting flag back in `node.flags`.
+pub fn updateRepairDebtSide(
+    graph: *graph_core.GraphCore,
+    node: *types.NodeBuffer,
+    node_index: u32,
+    comptime side: adjacency.AdjSide,
+) void {
+    var adj = node.publishedAdj();
+    updateRepairDebt(graph, &adj, node_index, side);
+    var expected = node.loadPublishedMeta();
+    while (true) {
+        const desired = expected.withFlags(adj.flags);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse break;
+        expected = actual;
+    }
 }
 
 /// Appends one block to the staging adjacency, handling the
@@ -670,20 +711,296 @@ fn hasAnyTombstone(
             }
         }
     } else {
-        var gidx = first_group;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
+        var group_idx = first_group;
+        while (group_idx != constants.END_OF_CHAIN) {
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
                 const live = @popCount(block.mask);
                 for (0..live) |slot| {
                     if (edgePointsToRemoved(graph, block, @intCast(slot), side)) return true;
                 }
             }
-            gidx = grp.next;
+            group_idx = group.next;
         }
     }
     return false;
+}
+
+// ── k-way merge rebuild helpers ───────────────────────────────────────
+
+const BlockIter = struct {
+    block_idx: u32,
+    live: u7,
+    pos: u7,
+};
+
+const SortedRebuildResult = struct {
+    new_blocks: std.ArrayList(u32),
+    live_after: usize,
+};
+
+pub fn sortedRebuildForward(
+    graph: *graph_core.GraphCore,
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+    allocator: std.mem.Allocator,
+) !SortedRebuildResult {
+    var live_after: usize = 0;
+    var max_iters: usize = 0;
+
+    // Count live and determine how many iterators we need.
+    if (group_count == 0) {
+        max_iters = block_count;
+        for (first_block..first_block + block_count) |bi| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .fwd);
+            const live = @popCount(block.mask);
+            for (0..live) |slot| {
+                if (!edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) live_after += 1;
+            }
+        }
+    } else {
+        var gidx = first_group;
+        while (gidx != constants.END_OF_CHAIN) {
+            const grp = page_ops.groupAtConst(graph, gidx);
+            max_iters += grp.count;
+            for (grp.start..grp.start + grp.count) |bi| {
+                const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .fwd);
+                const live = @popCount(block.mask);
+                for (0..live) |slot| {
+                    if (!edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) live_after += 1;
+                }
+            }
+            gidx = grp.next;
+        }
+    }
+
+    if (live_after == 0) {
+        return .{ .new_blocks = .empty, .live_after = 0 };
+    }
+
+    const out_blocks = (live_after + 63) / 64;
+    var new_blocks = try std.ArrayList(u32).initCapacity(allocator, out_blocks);
+    errdefer new_blocks.deinit(allocator);
+
+    var iters = try std.ArrayList(BlockIter).initCapacity(allocator, @max(1, max_iters));
+    defer iters.deinit(allocator);
+
+    // Build iterator list
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |bi| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .fwd);
+            const live: u7 = @intCast(@popCount(block.mask));
+            var pos: u7 = 0;
+            while (pos < live) : (pos += 1) {
+                if (!edgePointsToRemoved(graph, block, pos, .fwd)) break;
+            }
+            if (pos < live) {
+                try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+            }
+        }
+    } else {
+        var gidx = first_group;
+        while (gidx != constants.END_OF_CHAIN) {
+            const grp = page_ops.groupAtConst(graph, gidx);
+            for (grp.start..grp.start + grp.count) |bi| {
+                const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .fwd);
+                const live: u7 = @intCast(@popCount(block.mask));
+                var pos: u7 = 0;
+                while (pos < live) : (pos += 1) {
+                    if (!edgePointsToRemoved(graph, block, pos, .fwd)) break;
+                }
+                if (pos < live) {
+                    try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+                }
+            }
+            gidx = grp.next;
+        }
+    }
+
+    var out_block: ?u32 = null;
+    var out_slot: u7 = 0;
+
+    while (iters.items.len > 0) {
+        // Find iterator with minimum key
+        var min_idx: usize = 0;
+        var min_key: u32 = std.math.maxInt(u32);
+        for (iters.items, 0..) |iter, idx| {
+            const block = page_ops.edgeBlockAtConst(graph, iter.block_idx, .fwd);
+            const key = block.edges[iter.pos].destination;
+            if (key < min_key) { min_key = key; min_idx = idx; }
+        }
+
+        const iter_ref = &iters.items[min_idx];
+        const block = page_ops.edgeBlockAtConst(graph, iter_ref.block_idx, .fwd);
+        const edge = block.edges[iter_ref.pos];
+
+        if (out_block == null or out_slot == 64) {
+            out_block = try page_ops.allocBlock(graph, .fwd);
+            try new_blocks.append(allocator, out_block.?);
+            out_slot = 0;
+        }
+
+        const dst_block = page_ops.edgeBlockAt(graph, out_block.?, .fwd);
+        dst_block.edges[out_slot] = edge;
+        out_slot += 1;
+        if (out_slot == 64) {
+            const full_block = page_ops.edgeBlockAt(graph, out_block.?, .fwd);
+            full_block.mask = constants.FULL_BLOCK_MASK;
+        }
+
+        // Advance iterator, skip tombstones
+        iter_ref.pos += 1;
+        while (iter_ref.pos < iter_ref.live) : (iter_ref.pos += 1) {
+            if (!edgePointsToRemoved(graph, block, iter_ref.pos, .fwd)) break;
+        }
+        if (iter_ref.pos >= iter_ref.live) {
+            _ = iters.swapRemove(min_idx);
+        }
+    }
+
+    if (out_block) |ob| {
+        page_ops.edgeBlockAt(graph, ob, .fwd).mask = constants.denseMask(out_slot);
+    }
+
+    return .{ .new_blocks = new_blocks, .live_after = live_after };
+}
+
+pub fn sortedRebuildReverse(
+    graph: *graph_core.GraphCore,
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+    skip_source_index: ?u32,
+    allocator: std.mem.Allocator,
+) !SortedRebuildResult {
+    var live_after: usize = 0;
+    var max_iters: usize = 0;
+
+    if (group_count == 0) {
+        max_iters = block_count;
+        for (first_block..first_block + block_count) |bi| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .rev);
+            const live = @popCount(block.mask);
+            for (0..live) |slot| {
+                if (skip_source_index != null and block.sources[slot] == skip_source_index.?) continue;
+                if (edgePointsToRemoved(graph, block, @intCast(slot), .rev)) continue;
+                live_after += 1;
+            }
+        }
+    } else {
+        var gidx = first_group;
+        while (gidx != constants.END_OF_CHAIN) {
+            const grp = page_ops.groupAtConst(graph, gidx);
+            max_iters += grp.count;
+            for (grp.start..grp.start + grp.count) |bi| {
+                const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .rev);
+                const live = @popCount(block.mask);
+                for (0..live) |slot| {
+                    if (skip_source_index != null and block.sources[slot] == skip_source_index.?) continue;
+                    if (edgePointsToRemoved(graph, block, @intCast(slot), .rev)) continue;
+                    live_after += 1;
+                }
+            }
+            gidx = grp.next;
+        }
+    }
+
+    if (live_after == 0) {
+        return .{ .new_blocks = .empty, .live_after = 0 };
+    }
+
+    const out_blocks = (live_after + 63) / 64;
+    var new_blocks = try std.ArrayList(u32).initCapacity(allocator, out_blocks);
+    errdefer new_blocks.deinit(allocator);
+
+    var iters = try std.ArrayList(BlockIter).initCapacity(allocator, @max(1, max_iters));
+    defer iters.deinit(allocator);
+
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |bi| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .rev);
+            const live: u7 = @intCast(@popCount(block.mask));
+            var pos: u7 = 0;
+            while (pos < live) : (pos += 1) {
+                if (skip_source_index != null and block.sources[pos] == skip_source_index.?) continue;
+                if (edgePointsToRemoved(graph, block, pos, .rev)) continue;
+                break;
+            }
+            if (pos < live) {
+                try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+            }
+        }
+    } else {
+        var gidx = first_group;
+        while (gidx != constants.END_OF_CHAIN) {
+            const grp = page_ops.groupAtConst(graph, gidx);
+            for (grp.start..grp.start + grp.count) |bi| {
+                const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .rev);
+                const live: u7 = @intCast(@popCount(block.mask));
+                var pos: u7 = 0;
+                while (pos < live) : (pos += 1) {
+                    if (skip_source_index != null and block.sources[pos] == skip_source_index.?) continue;
+                    if (edgePointsToRemoved(graph, block, pos, .rev)) continue;
+                    break;
+                }
+                if (pos < live) {
+                    try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+                }
+            }
+            gidx = grp.next;
+        }
+    }
+
+    var out_block: ?u32 = null;
+    var out_slot: u7 = 0;
+
+    while (iters.items.len > 0) {
+        var min_idx: usize = 0;
+        var min_key: u32 = std.math.maxInt(u32);
+        for (iters.items, 0..) |iter, idx| {
+            const block = page_ops.edgeBlockAtConst(graph, iter.block_idx, .rev);
+            const key = block.sources[iter.pos];
+            if (key < min_key) { min_key = key; min_idx = idx; }
+        }
+
+        const iter_ref = &iters.items[min_idx];
+        const block = page_ops.edgeBlockAtConst(graph, iter_ref.block_idx, .rev);
+        const source_id = block.sources[iter_ref.pos];
+
+        if (out_block == null or out_slot == 64) {
+            out_block = try page_ops.allocBlock(graph, .rev);
+            try new_blocks.append(allocator, out_block.?);
+            out_slot = 0;
+        }
+
+        const dst_block = page_ops.edgeBlockAt(graph, out_block.?, .rev);
+        dst_block.sources[out_slot] = source_id;
+        out_slot += 1;
+        if (out_slot == 64) {
+            const full_block = page_ops.edgeBlockAt(graph, out_block.?, .rev);
+            full_block.mask = constants.FULL_BLOCK_MASK;
+        }
+
+        iter_ref.pos += 1;
+        while (iter_ref.pos < iter_ref.live) : (iter_ref.pos += 1) {
+            if (skip_source_index != null and block.sources[iter_ref.pos] == skip_source_index.?) continue;
+            if (edgePointsToRemoved(graph, block, iter_ref.pos, .rev)) continue;
+            break;
+        }
+        if (iter_ref.pos >= iter_ref.live) {
+            _ = iters.swapRemove(min_idx);
+        }
+    }
+
+    if (out_block) |ob| {
+        page_ops.edgeBlockAt(graph, ob, .rev).mask = constants.denseMask(out_slot);
+    }
+
+    return .{ .new_blocks = new_blocks, .live_after = live_after };
 }
 
 fn retireAdjacencySide(
@@ -705,15 +1022,15 @@ fn retireAdjacencySide(
         return;
     }
 
-    var gidx = first_group;
-    while (gidx != constants.END_OF_CHAIN) {
-        const grp = page_ops.groupAtConst(graph, gidx);
-        for (grp.start..grp.start + grp.count) |block_idx| {
+    var group_idx = first_group;
+    while (group_idx != constants.END_OF_CHAIN) {
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
             try retireBlock(graph, @intCast(block_idx), side);
         }
-        const old_group = gidx;
-        gidx = grp.next;
-        rcu.retireGroup(graph, old_group);
+        const old_grouproup = group_idx;
+        group_idx = group.next;
+        rcu.retireGroup(graph, old_grouproup);
     }
 }
 
@@ -744,10 +1061,10 @@ fn collectForwardTombstoneDestinations(
         return;
     }
 
-    var gidx = published_adj.first_group_fwd;
-    while (gidx != constants.END_OF_CHAIN) {
-        const grp = page_ops.groupAtConst(graph, gidx);
-        for (grp.start..grp.start + grp.count) |block_idx| {
+    var group_idx = published_adj.first_group_fwd;
+    while (group_idx != constants.END_OF_CHAIN) {
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             const live = @popCount(block.mask);
             for (0..live) |slot| {
@@ -763,135 +1080,56 @@ fn collectForwardTombstoneDestinations(
                 if (!seen) try destinations.append(graph.allocator, destination);
             }
         }
-        gidx = grp.next;
+        group_idx = group.next;
     }
 }
 
 const ForwardTombstoneCompaction = struct {
+    staging_adj: types.NodeAdj,
     live_after: usize,
     removed_count: usize,
+};
+
+const ReverseTombstoneCompaction = struct {
+    staging_adj: types.NodeAdj,
+    live_after: usize,
 };
 
 fn rebuildForwardWithoutRemovedDestinations(
     graph: *graph_core.GraphCore,
     node_index: u32,
-    node_mut: *types.NodeBuffer,
     published_adj: types.NodeAdj,
 ) !ForwardTombstoneCompaction {
-    node_mut.copyPublishedToStaging();
-    const staging_adj = node_mut.stagingAdj();
+    var result = try sortedRebuildForward(
+        graph,
+        published_adj.first_block_fwd,
+        published_adj.block_count_fwd,
+        published_adj.group_count_fwd,
+        published_adj.first_group_fwd,
+        graph.allocator,
+    );
+    defer result.new_blocks.deinit(graph.allocator);
 
-    var live_after: usize = 0;
-    var removed_count: usize = 0;
+    var staging_adj = published_adj;
+    try buildAdjacencyFromBlocks(&staging_adj, graph, .fwd, result.new_blocks.items);
+    updateRepairDebt(graph, &staging_adj, node_index, .fwd);
 
-    if (published_adj.group_count_fwd == 0) {
-        for (published_adj.first_block_fwd..published_adj.first_block_fwd + published_adj.block_count_fwd) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) {
-                    removed_count += 1;
-                } else {
-                    live_after += 1;
-                }
-            }
-        }
-    } else {
-        var gidx = published_adj.first_group_fwd;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) {
-                        removed_count += 1;
-                    } else {
-                        live_after += 1;
-                    }
-                }
-            }
-            gidx = grp.next;
-        }
-    }
-
-    var new_blocks = try std.ArrayList(u32).initCapacity(graph.allocator, (live_after + 63) / 64);
-    defer new_blocks.deinit(graph.allocator);
-
-    var current_block: ?u32 = null;
-    var current_live: u7 = 0;
-
-    if (published_adj.group_count_fwd == 0) {
-        for (published_adj.first_block_fwd..published_adj.first_block_fwd + published_adj.block_count_fwd) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) continue;
-                if (current_block == null or current_live == 64) {
-                    current_block = try page_ops.allocBlock(graph, .fwd);
-                    try new_blocks.append(graph.allocator, current_block.?);
-                    current_live = 0;
-                }
-                copyEdgeSingle(graph, block, @intCast(slot), current_block.?, current_live, .fwd);
-                current_live += 1;
-            }
-        }
-    } else {
-        var gidx = published_adj.first_group_fwd;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) continue;
-                    if (current_block == null or current_live == 64) {
-                        current_block = try page_ops.allocBlock(graph, .fwd);
-                        try new_blocks.append(graph.allocator, current_block.?);
-                        current_live = 0;
-                    }
-                    copyEdgeSingle(graph, block, @intCast(slot), current_block.?, current_live, .fwd);
-                    current_live += 1;
-                }
-            }
-            gidx = grp.next;
-        }
-    }
-
-    if (current_block) |block_idx| {
-        page_ops.edgeBlockAt(graph, block_idx, .fwd).mask = constants.denseMask(current_live);
-    }
-
-    try buildAdjacencyFromBlocks(staging_adj, graph, .fwd, new_blocks.items);
-    updateRepairDebt(graph, staging_adj, node_index, .fwd);
-    node_mut.degree_fwd = if (live_after < constants.DEGREE_OVERFLOW) @intCast(live_after) else constants.DEGREE_OVERFLOW;
-
-    return .{ .live_after = live_after, .removed_count = removed_count };
+    return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0 };
 }
 
 fn rebuildReverseWithoutSource(
     graph: *graph_core.GraphCore,
     destination_index: u32,
-    destination_node: *types.NodeBuffer,
     published_adj: types.NodeAdj,
     source_index: u32,
-) !void {
-    destination_node.copyPublishedToStaging();
-    const staging_adj = destination_node.stagingAdj();
-
-    var live_after: usize = 0;
+) !ReverseTombstoneCompaction {
     var removed_matches: usize = 0;
-
     if (published_adj.group_count_rev == 0) {
         for (published_adj.first_block_rev..published_adj.first_block_rev + published_adj.block_count_rev) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
             const live = @popCount(block.mask);
             for (0..live) |slot| {
-                if (block.sources[slot] == source_index) {
-                    removed_matches += 1;
-                } else {
-                    live_after += 1;
-                }
+                if (block.sources[slot] == source_index) removed_matches += 1;
             }
         }
     } else {
@@ -902,11 +1140,7 @@ fn rebuildReverseWithoutSource(
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
                 const live = @popCount(block.mask);
                 for (0..live) |slot| {
-                    if (block.sources[slot] == source_index) {
-                        removed_matches += 1;
-                    } else {
-                        live_after += 1;
-                    }
+                    if (block.sources[slot] == source_index) removed_matches += 1;
                 }
             }
             gidx = grp.next;
@@ -915,65 +1149,29 @@ fn rebuildReverseWithoutSource(
 
     if (removed_matches != 1) return error.CorruptGraph;
 
-    var new_blocks = try std.ArrayList(u32).initCapacity(graph.allocator, (live_after + 63) / 64);
-    defer new_blocks.deinit(graph.allocator);
+    var result = try sortedRebuildReverse(
+        graph,
+        published_adj.first_block_rev,
+        published_adj.block_count_rev,
+        published_adj.group_count_rev,
+        published_adj.first_group_rev,
+        source_index,
+        graph.allocator,
+    );
+    defer result.new_blocks.deinit(graph.allocator);
 
-    var current_block: ?u32 = null;
-    var current_live: u7 = 0;
+    var staging_adj = published_adj;
+    try buildAdjacencyFromBlocks(&staging_adj, graph, .rev, result.new_blocks.items);
+    updateRepairDebt(graph, &staging_adj, destination_index, .rev);
 
-    if (published_adj.group_count_rev == 0) {
-        for (published_adj.first_block_rev..published_adj.first_block_rev + published_adj.block_count_rev) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (block.sources[slot] == source_index) continue;
-                if (current_block == null or current_live == 64) {
-                    current_block = try page_ops.allocBlock(graph, .rev);
-                    try new_blocks.append(graph.allocator, current_block.?);
-                    current_live = 0;
-                }
-                copyEdgeSingle(graph, block, @intCast(slot), current_block.?, current_live, .rev);
-                current_live += 1;
-            }
-        }
-    } else {
-        var gidx = published_adj.first_group_rev;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (block.sources[slot] == source_index) continue;
-                    if (current_block == null or current_live == 64) {
-                        current_block = try page_ops.allocBlock(graph, .rev);
-                        try new_blocks.append(graph.allocator, current_block.?);
-                        current_live = 0;
-                    }
-                    copyEdgeSingle(graph, block, @intCast(slot), current_block.?, current_live, .rev);
-                    current_live += 1;
-                }
-            }
-            gidx = grp.next;
-        }
-    }
-
-    if (current_block) |block_idx| {
-        page_ops.edgeBlockAt(graph, block_idx, .rev).mask = constants.denseMask(current_live);
-    }
-
-    try buildAdjacencyFromBlocks(staging_adj, graph, .rev, new_blocks.items);
-    updateRepairDebt(graph, staging_adj, destination_index, .rev);
-    if (published_adj.flags.removed) {
-        destination_node.degree_rev = 0;
-    } else {
-        destination_node.degree_rev = if (live_after < constants.DEGREE_OVERFLOW) @intCast(live_after) else constants.DEGREE_OVERFLOW;
-    }
+    return .{ .staging_adj = staging_adj, .live_after = result.live_after };
 }
 
 const ReverseCleanupTarget = struct {
     node_buffer: *types.NodeBuffer,
     published_adj_before: types.NodeAdj,
+    staging_adj_after: types.NodeAdj,
+    new_degree_rev: u16,
 };
 
 fn repairForwardTombstonesWithReverseCleanup(
@@ -1012,26 +1210,29 @@ fn repairForwardTombstonesWithReverseCleanup(
     defer writer_guard.end();
 
     const source_adj_before = node_mut.publishedAdj();
-    const source_result = try rebuildForwardWithoutRemovedDestinations(graph, node.index, node_mut, source_adj_before);
+    const source_result = try rebuildForwardWithoutRemovedDestinations(graph, node.index, source_adj_before);
 
     for (tombstone_destinations.items, claimed_dest_nodes.items) |destination_index, destination_node| {
         const destination_adj_before = destination_node.publishedAdj();
-        try rebuildReverseWithoutSource(graph, destination_index, destination_node, destination_adj_before, node.index);
+        const reverse_result = try rebuildReverseWithoutSource(graph, destination_index, destination_adj_before, node.index);
         try reverse_updates.append(graph.allocator, .{
             .node_buffer = destination_node,
             .published_adj_before = destination_adj_before,
+            .staging_adj_after = reverse_result.staging_adj,
+            .new_degree_rev = if (destination_adj_before.flags.removed) 0 else @as(u16, @intCast(@min(reverse_result.live_after, constants.DEGREE_OVERFLOW))),
         });
     }
 
     for (reverse_updates.items) |update| {
-        update.node_buffer.publishStagingAdj();
+        update.node_buffer.degree_rev = update.new_degree_rev;
+        publishComposedAdj(update.node_buffer, update.staging_adj_after);
         try retireAdjacencySide(graph, update.published_adj_before, .rev);
     }
 
-    node_mut.publishStagingAdj();
+    node_mut.degree_fwd = if (source_result.live_after < constants.DEGREE_OVERFLOW) @intCast(source_result.live_after) else constants.DEGREE_OVERFLOW;
+    publishComposedAdj(node_mut, source_result.staging_adj);
     try retireAdjacencySide(graph, source_adj_before, .fwd);
 
-    _ = source_result;
     return 1;
 }
 
@@ -1084,10 +1285,9 @@ fn repairNodeSideLimited(
         }
     }
 
-    // Single-pass compaction: collect live edges from all blocks, pack into
-    // new blocks, publish once.  O(B) instead of O(B²).
-    node_mut.copyPublishedToStaging();
-    const staging_adj = node_mut.stagingAdj();
+    // Single-pass compaction with k-way merge: read sorted entries from
+    // all blocks, merge by key, pack into new blocks.  O(E log B).
+    var staging_adj = published_adj;
 
     var total_live: usize = 0;
     if (group_count == 0) {
@@ -1095,145 +1295,55 @@ fn repairNodeSideLimited(
             total_live += @popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask);
         }
     } else {
-        var gidx = first_group;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
+        var group_idx = first_group;
+        while (group_idx != constants.END_OF_CHAIN) {
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
                 total_live += @popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask);
             }
-            gidx = grp.next;
+            group_idx = group.next;
         }
     }
 
-    const new_block_count = (total_live + 63) / 64;
+    if (!computeNeedsRepair(graph, &staging_adj, side)) {
+        updateRepairDebt(graph, &staging_adj, node.index, side);
+        return 0;
+    }
 
-    // Skip compaction if the current layout already meets occupancy thresholds
-    // (e.g. a node with a full non-tail block and a tail block).
-    if (group_count == 0) {
-        const tail_start = first_block + block_count - 1;
-        var needs_repair = false;
-        for (first_block..tail_start) |block_idx| {
-            if (@popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask) < constants.MIN_OCCUPANCY) {
-                needs_repair = true;
-                break;
-            }
-        }
-        if (!needs_repair and group_count <= constants.MAX_GROUPS_PER_NODE) {
-            // Even if occupancy is fine, check for tombstoned edges.
-            if (!hasAnyTombstone(graph, first_block, block_count, group_count, first_group, side)) {
-                updateRepairDebt(graph, staging_adj, node.index, side);
-                return 0;
-            }
-        }
+    var sorted = switch (side) {
+        .fwd => try sortedRebuildForward(graph, first_block, block_count, group_count, first_group, graph.allocator),
+        .rev => try sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, null, graph.allocator),
+    };
+    defer sorted.new_blocks.deinit(graph.allocator);
+    const live_total: usize = sorted.live_after;
+
+    try buildAdjacencyFromBlocks(&staging_adj, graph, side, sorted.new_blocks.items);
+
+    updateRepairDebt(graph, &staging_adj, node.index, side);
+    if (side == .fwd) {
+        node_mut.degree_fwd = if (live_total < constants.DEGREE_OVERFLOW) @intCast(live_total) else constants.DEGREE_OVERFLOW;
     } else {
-        var gidx = first_group;
-        var needs_repair = false;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            const is_tail_group = grp.next == constants.END_OF_CHAIN;
-            const end = if (is_tail_group) grp.start + grp.count - 1 else grp.start + grp.count;
-            for (grp.start..end) |block_idx| {
-                if (@popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask) < constants.MIN_OCCUPANCY) {
-                    needs_repair = true;
-                    break;
-                }
-            }
-            if (needs_repair) break;
-            if (grp.next == constants.END_OF_CHAIN) break;
-            gidx = grp.next;
-        }
-        if (!needs_repair and group_count <= constants.MAX_GROUPS_PER_NODE) {
-            if (!hasAnyTombstone(graph, first_block, block_count, group_count, first_group, side)) {
-                updateRepairDebt(graph, staging_adj, node.index, side);
-                return 0;
-            }
-        }
+        node_mut.degree_rev = if (live_total < constants.DEGREE_OVERFLOW) @intCast(live_total) else constants.DEGREE_OVERFLOW;
     }
+    publishComposedAdj(node_mut, staging_adj);
 
-    var new_blocks = try std.ArrayList(u32).initCapacity(graph.allocator, new_block_count);
-    defer new_blocks.deinit(graph.allocator);
-
-    var current_block: ?u32 = null;
-    var current_live: u7 = 0;
-
-    // Iterate edges in sorted order, pack into new blocks
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                // Skip tombstones: edges to/from removed nodes.
-                if (edgePointsToRemoved(graph, block, @intCast(slot), side)) {
-                    total_live -= 1;
-                    continue;
-                }
-                if (current_block == null or current_live == 64) {
-                    current_block = try page_ops.allocBlock(graph, side);
-                    try new_blocks.append(graph.allocator, current_block.?);
-                    current_live = 0;
-                }
-                copyEdgeSingle(graph, block, @intCast(slot), current_block.?, current_live, side);
-                current_live += 1;
-            }
-        }
-    } else {
-        var gidx = first_group;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (edgePointsToRemoved(graph, block, @intCast(slot), side)) {
-                        total_live -= 1;
-                        continue;
-                    }
-                    if (current_block == null or current_live == 64) {
-                        current_block = try page_ops.allocBlock(graph, side);
-                        try new_blocks.append(graph.allocator, current_block.?);
-                        current_live = 0;
-                    }
-                    copyEdgeSingle(graph, block, @intCast(slot), current_block.?, current_live, side);
-                    current_live += 1;
-                }
-            }
-            gidx = grp.next;
-        }
-    }
-
-    // Set mask on the last block
-    if (current_block) |cb| {
-        page_ops.edgeBlockAt(graph, cb, side).mask = constants.denseMask(current_live);
-    }
-
-    // Rebuild staging adjacency from new blocks
-    try buildAdjacencyFromBlocks(staging_adj, graph, side, new_blocks.items);
-
-    // Retire old blocks
+    // Retire old blocks after publishing the replacement
     if (group_count == 0) {
         for (first_block..first_block + block_count) |block_idx| {
             try retireBlock(graph, @intCast(block_idx), side);
         }
     } else {
-        var gidx = first_group;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
+        var group_idx = first_group;
+        while (group_idx != constants.END_OF_CHAIN) {
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
                 try retireBlock(graph, @intCast(block_idx), side);
             }
-            const old_g = gidx;
-            gidx = grp.next;
-            rcu.retireGroup(graph, old_g);
+            const old_group = group_idx;
+            group_idx = group.next;
+            rcu.retireGroup(graph, old_group);
         }
     }
-
-    updateRepairDebt(graph, staging_adj, node.index, side);
-    if (side == .fwd) {
-        node_mut.degree_fwd = if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW;
-    } else {
-        node_mut.degree_rev = if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW;
-    }
-    node_mut.publishStagingAdj();
     return 1;
 }
 

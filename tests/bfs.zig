@@ -164,3 +164,10 @@ test "bfs visits neighbors across multiple edge blocks" {
         _ = idxOf(order, target.index);
     }
 }
+
+test "bfs on empty graph returns InvalidNode" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    try std.testing.expectError(error.InvalidNode, bfs_mod.bfs(&graph.graph, .{ .index = 0 }, std.testing.allocator));
+}

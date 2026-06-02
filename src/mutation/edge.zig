@@ -1,5 +1,5 @@
 //! Edge insertion and removal — mutable edge operations built on the shared
-//! RCU + COW mutation machinery.
+//! RCU + COW mutation machinery with per-side publication.
 
 const constants = @import("../constants.zig");
 const graph_core = @import("../graph_core.zig");
@@ -10,11 +10,7 @@ const rcu = @import("../rcu.zig");
 const repair = @import("../repair.zig");
 const common = @import("common.zig");
 const node_validity = @import("../node_validity.zig");
-
-const StagedAdj = struct {
-    published_index: u1,
-    staging_adj: *types.NodeAdj,
-};
+const std = @import("std");
 
 const PreparedAppendBlock = struct {
     old_block: ?u32 = null,
@@ -26,11 +22,10 @@ const OldGroupChain = struct {
     first_group: ?u32 = null,
     group_count: u16 = 0,
 
-    fn capture(node_adj: *const types.NodeAdj, comptime side: adjacency.AdjSide) OldGroupChain {
-        const count = adjGroupCount(node_adj, side);
+    fn captureSide(side_adj: *const types.SideAdj) OldGroupChain {
         return .{
-            .first_group = if (count > 0) adjFirstGroup(node_adj, side) else null,
-            .group_count = count,
+            .first_group = if (side_adj.group_count > 0) side_adj.first_group else null,
+            .group_count = side_adj.group_count,
         };
     }
 
@@ -46,74 +41,22 @@ const RemovalPlan = struct {
     live_before: u7,
 };
 
-fn adjFirstBlock(node_adj: *const types.NodeAdj, comptime side: adjacency.AdjSide) u32 {
-    return if (side == .fwd) node_adj.first_block_fwd else node_adj.first_block_rev;
-}
+const RemovalBuild = struct {
+    old_block: u32,
+    new_block: u32,
+    new_live: u7,
+};
 
-fn adjBlockCount(node_adj: *const types.NodeAdj, comptime side: adjacency.AdjSide) u16 {
-    return if (side == .fwd) node_adj.block_count_fwd else node_adj.block_count_rev;
-}
-
-fn adjGroupCount(node_adj: *const types.NodeAdj, comptime side: adjacency.AdjSide) u16 {
-    return if (side == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
-}
-
-fn adjFirstGroup(node_adj: *const types.NodeAdj, comptime side: adjacency.AdjSide) u32 {
-    return if (side == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
-}
-
-fn setAdjFirstBlock(node_adj: *types.NodeAdj, comptime side: adjacency.AdjSide, value: u32) void {
-    if (side == .fwd) {
-        node_adj.first_block_fwd = value;
-    } else {
-        node_adj.first_block_rev = value;
-    }
-}
-
-fn setAdjBlockCount(node_adj: *types.NodeAdj, comptime side: adjacency.AdjSide, value: u16) void {
-    if (side == .fwd) {
-        node_adj.block_count_fwd = value;
-    } else {
-        node_adj.block_count_rev = value;
-    }
-}
-
-fn incrementAdjBlockCount(node_adj: *types.NodeAdj, comptime side: adjacency.AdjSide) void {
-    if (side == .fwd) {
-        node_adj.block_count_fwd += 1;
-    } else {
-        node_adj.block_count_rev += 1;
-    }
-}
-
-fn stageAdjForMutation(node: *types.NodeBuffer) StagedAdj {
-    const published_index = node.loadPublishedAdjIndex();
-    const staging_index: u1 = 1 - published_index;
-    node.copyPublishedToStaging();
-    return .{
-        .published_index = published_index,
-        .staging_adj = &node.adj_buffers[staging_index],
-    };
-}
-
-fn publishEndpoints(source_node: *types.NodeBuffer, destination_node: *types.NodeBuffer, source: types.NodeId, destination: types.NodeId) void {
-    if (source.index == destination.index) {
-        source_node.publishStagingAdj();
-    } else {
-        destination_node.publishStagingAdj();
-        source_node.publishStagingAdj();
-    }
-}
-
-fn prepareAppendBlock(graph: *graph_core.GraphCore, node_adj: *const types.NodeAdj, comptime side: adjacency.AdjSide) !PreparedAppendBlock {
-    if (adjBlockCount(node_adj, side) == 0) {
+fn prepareAppendBlockSide(
+    graph: *graph_core.GraphCore,
+    side_adj: *const types.SideAdj,
+    comptime side: adjacency.AdjSide,
+) !PreparedAppendBlock {
+    if (side_adj.block_count == 0) {
         return .{ .new_block = try page_ops.allocBlock(graph, side) };
     }
 
-    const tail_index = switch (side) {
-        .fwd => adjacency.tailBlockIndex(graph, node_adj, .fwd).?,
-        .rev => adjacency.tailBlockIndex(graph, node_adj, .rev).?,
-    };
+    const tail_index = adjacency.tailBlockIndexSide(graph, side_adj).?;
     const new_block = try page_ops.allocBlock(graph, side);
 
     switch (side) {
@@ -133,25 +76,20 @@ fn prepareAppendBlock(graph: *graph_core.GraphCore, node_adj: *const types.NodeA
         },
     }
 
-    return .{
-        .old_block = tail_index,
-        .new_block = new_block,
-        .tail_index = tail_index,
-    };
+    return .{ .old_block = tail_index, .new_block = new_block, .tail_index = tail_index };
 }
 
-fn ensureTailCowGroupConstraint(
+fn ensureTailCowGroupConstraintSide(
     graph: *graph_core.GraphCore,
-    node_adj: *const types.NodeAdj,
+    side_adj: *const types.SideAdj,
     prepared: PreparedAppendBlock,
-    comptime side: adjacency.AdjSide,
 ) !void {
     if (prepared.old_block == null) return;
-    if (adjBlockCount(node_adj, side) <= 1) return;
-    if (adjGroupCount(node_adj, side) < constants.MAX_GROUPS_PER_NODE) return;
+    if (side_adj.block_count <= 1) return;
+    if (side_adj.group_count < constants.MAX_GROUPS_PER_NODE) return;
 
     const tail_index = prepared.tail_index.?;
-    var group_index = adjFirstGroup(node_adj, side);
+    var group_index = side_adj.first_group;
     while (group_index != constants.END_OF_CHAIN) {
         const group = page_ops.groupAtConst(graph, group_index);
         if (tail_index >= group.start and tail_index < group.start + group.count) {
@@ -162,74 +100,51 @@ fn ensureTailCowGroupConstraint(
     }
 }
 
-fn cloneGroupsForStagingIfNeeded(
+fn cloneGroupsForStagingIfNeededSide(
     graph: *graph_core.GraphCore,
-    node_adj: *types.NodeAdj,
-    comptime side: adjacency.AdjSide,
+    side_adj: *types.SideAdj,
 ) !OldGroupChain {
-    const old_groups = OldGroupChain.capture(node_adj, side);
+    const old_groups = OldGroupChain.captureSide(side_adj);
     if (old_groups.first_group != null) {
-        switch (side) {
-            .fwd => try adjacency.cloneGroupsForStaging(graph, node_adj, .fwd),
-            .rev => try adjacency.cloneGroupsForStaging(graph, node_adj, .rev),
-        }
+        try adjacency.cloneGroupsForStagingSide(graph, side_adj);
     }
     return old_groups;
 }
 
-fn applyPreparedAppend(
+fn applyPreparedAppendSide(
     graph: *graph_core.GraphCore,
-    node_adj: *types.NodeAdj,
+    side_adj: *types.SideAdj,
     prepared: PreparedAppendBlock,
-    comptime side: adjacency.AdjSide,
+    comptime _: adjacency.AdjSide,
 ) !void {
-    const block_count = adjBlockCount(node_adj, side);
-    if (block_count == 0) {
-        setAdjFirstBlock(node_adj, side, prepared.new_block);
-        setAdjBlockCount(node_adj, side, 1);
+    if (side_adj.block_count == 0) {
+        side_adj.first_block = prepared.new_block;
+        side_adj.block_count = 1;
         return;
     }
 
     if (prepared.old_block != null) {
-        if (block_count == 1) {
-            setAdjFirstBlock(node_adj, side, prepared.new_block);
+        if (side_adj.block_count == 1) {
+            side_adj.first_block = prepared.new_block;
         } else {
-            const was_contiguous = adjGroupCount(node_adj, side) == 0;
-            switch (side) {
-                .fwd => {
-                    adjacency.removeTailFromAdj(graph, node_adj, .fwd);
-                    try adjacency.appendGroupToAdj(graph, node_adj, prepared.new_block, .fwd);
-                },
-                .rev => {
-                    adjacency.removeTailFromAdj(graph, node_adj, .rev);
-                    try adjacency.appendGroupToAdj(graph, node_adj, prepared.new_block, .rev);
-                },
-            }
-            if (was_contiguous) incrementAdjBlockCount(node_adj, side);
+            const was_contiguous = side_adj.group_count == 0;
+            adjacency.removeTailFromSideAdj(graph, side_adj);
+            try adjacency.appendGroupToSideAdj(graph, side_adj, prepared.new_block);
+            if (was_contiguous) side_adj.block_count += 1;
         }
         return;
     }
 
     const tail_index = prepared.tail_index.?;
     if (prepared.new_block == tail_index + 1) {
-        if (adjGroupCount(node_adj, side) > 0) {
-            switch (side) {
-                .fwd => adjacency.extendTailGroup(graph, node_adj, .fwd),
-                .rev => adjacency.extendTailGroup(graph, node_adj, .rev),
-            }
-        }
-        incrementAdjBlockCount(node_adj, side);
+        if (side_adj.group_count > 0) adjacency.extendTailGroupSide(graph, side_adj);
+        side_adj.block_count += 1;
         return;
     }
 
-    if (adjGroupCount(node_adj, side) >= constants.MAX_GROUPS_PER_NODE) {
-        return error.RepairRequired;
-    }
-    switch (side) {
-        .fwd => try adjacency.appendGroupToAdj(graph, node_adj, prepared.new_block, .fwd),
-        .rev => try adjacency.appendGroupToAdj(graph, node_adj, prepared.new_block, .rev),
-    }
-    incrementAdjBlockCount(node_adj, side);
+    if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
+    try adjacency.appendGroupToSideAdj(graph, side_adj, prepared.new_block);
+    side_adj.block_count += 1;
 }
 
 fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination: types.NodeId, relation: u16, flags: u16) !void {
@@ -247,7 +162,6 @@ fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination
             search_end = probe;
         }
     }
-
     var shift: u7 = @intCast(live);
     while (shift > insertion_point) {
         forward_block.edges[shift] = forward_block.edges[shift - 1];
@@ -270,7 +184,6 @@ fn insertReverseEdge(graph: *graph_core.GraphCore, block_index: u32, source: typ
             search_end = probe;
         }
     }
-
     var shift: u7 = @intCast(live);
     while (shift > insertion_point) {
         reverse_block.sources[shift] = reverse_block.sources[shift - 1];
@@ -280,9 +193,9 @@ fn insertReverseEdge(graph: *graph_core.GraphCore, block_index: u32, source: typ
     reverse_block.mask = constants.denseMask(@intCast(live + 1));
 }
 
-fn planRemoval(
+fn planRemovalSide(
     graph: *graph_core.GraphCore,
-    published_adj: *const types.NodeAdj,
+    side_adj: *const types.SideAdj,
     found: common.AdjSlot,
     comptime side: adjacency.AdjSide,
 ) !RemovalPlan {
@@ -291,90 +204,54 @@ fn planRemoval(
         .rev => @intCast(@popCount(page_ops.edgeBlockAtConst(graph, found.block_idx, .rev).mask)),
     };
     const new_live: u7 = live_before - 1;
-    const tail_index = switch (side) {
-        .fwd => adjacency.tailBlockIndex(graph, published_adj, .fwd).?,
-        .rev => adjacency.tailBlockIndex(graph, published_adj, .rev).?,
-    };
+    const tail_index = adjacency.tailBlockIndexSide(graph, side_adj).?;
     const is_tail = found.block_idx == tail_index;
     if (!is_tail and new_live < constants.MIN_OCCUPANCY) return error.RepairRequired;
-
-    return .{
-        .found = found,
-        .live_before = live_before,
-    };
+    return .{ .found = found, .live_before = live_before };
 }
 
-fn applyRemovalPlan(
+fn applyRemovalPlanSide(
     graph: *graph_core.GraphCore,
-    staging_adj: *types.NodeAdj,
-    published_adj: *const types.NodeAdj,
+    staging_side: *types.SideAdj,
+    published_side: *const types.SideAdj,
     plan: RemovalPlan,
     comptime side: adjacency.AdjSide,
-) !void {
+) !RemovalBuild {
     const old_block = plan.found.block_idx;
     const new_block = try page_ops.allocBlock(graph, side);
+    errdefer page_ops.freeBlock(graph, new_block, side);
     const new_live: u7 = plan.live_before - 1;
 
     switch (side) {
         .fwd => {
             const block_before = page_ops.edgeBlockAtConst(graph, old_block, .fwd);
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = block_before.*;
-
             const block = page_ops.edgeBlockAt(graph, new_block, .fwd);
             var shift: u7 = plan.found.slot;
-            while (shift < plan.live_before - 1) : (shift += 1) {
-                block.edges[shift] = block.edges[shift + 1];
-            }
+            while (shift < plan.live_before - 1) : (shift += 1) block.edges[shift] = block.edges[shift + 1];
             block.mask = constants.denseMask(@intCast(new_live));
         },
         .rev => {
             const block_before = page_ops.edgeBlockAtConst(graph, old_block, .rev);
             page_ops.edgeBlockAt(graph, new_block, .rev).* = block_before.*;
-
             const block = page_ops.edgeBlockAt(graph, new_block, .rev);
             var shift: u7 = plan.found.slot;
-            while (shift < plan.live_before - 1) : (shift += 1) {
-                block.sources[shift] = block.sources[shift + 1];
-            }
+            while (shift < plan.live_before - 1) : (shift += 1) block.sources[shift] = block.sources[shift + 1];
             block.mask = constants.denseMask(@intCast(new_live));
         },
     }
 
-    try common.rebuildAdjWithReplace(
-        graph,
-        staging_adj,
-        adjFirstBlock(published_adj, side),
-        adjBlockCount(published_adj, side),
-        adjGroupCount(published_adj, side),
-        adjFirstGroup(published_adj, side),
-        old_block,
-        new_block,
-        side,
+    try common.rebuildAdjWithReplaceSide(
+        graph, staging_side,
+        published_side.first_block, published_side.block_count,
+        published_side.group_count, published_side.first_group,
+        old_block, new_block, side,
     );
 
-    switch (side) {
-        .fwd => try rcu.retireBlockFwd(graph, old_block),
-        .rev => try rcu.retireBlockRev(graph, old_block),
-    }
-
-    // If the new block ended up empty, rebuildAdjWithReplace skipped it
-    // and it was never inserted into the adjacency.  Retire it so it is
-    // reclaimed together with the old block.
-    if (new_live == 0) {
-        switch (side) {
-            .fwd => try rcu.retireBlockFwd(graph, new_block),
-            .rev => try rcu.retireBlockRev(graph, new_block),
-        }
-    }
+    return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
 }
 
 /// Adds a directed edge `source → destination` with a relation label and flags.
-///
-/// Fails with:
-///   - `InvalidNode` if either endpoint does not exist.
-///   - `EdgeAlreadyExists` if the edge is already present (non-multigraph mode).
-///
-/// Follows the RCU + COW mutation model.
 pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !void {
     if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
 
@@ -384,42 +261,68 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     var claims = try common.tryClaimAdjacencies(source_node, destination_node, source.index, destination.index);
     defer claims.release();
 
-    const source_published = source_node.publishedAdj();
-    const destination_published = destination_node.publishedAdj();
-    if (!node_validity.snapshotIsLive(source_published) or !node_validity.snapshotIsLive(destination_published)) {
+    const source_meta = source_node.loadPublishedMeta();
+    const destination_meta = destination_node.loadPublishedMeta();
+    const source_adj_before = source_node.publishedAdjFromMeta(source_meta);
+    const destination_adj_before = destination_node.publishedAdjFromMeta(destination_meta);
+    const source_pub = source_node.publishedFwdFromMeta(source_meta);
+    if (!node_validity.snapshotIsLive(source_adj_before) or !node_validity.snapshotIsLive(destination_adj_before)) {
         return error.InvalidNode;
     }
 
     var writer_guard = common.beginWriter(graph);
     defer writer_guard.end();
 
-    const source_stage = stageAdjForMutation(source_node);
-    const destination_stage = stageAdjForMutation(destination_node);
+    source_node.copyPublishedToStagingFwd(source_meta);
+    destination_node.copyPublishedToStagingRev(destination_meta);
+    const sfwd = source_node.stagingFwd(source_meta);
+    const srev = destination_node.stagingRev(destination_meta);
 
-    if (adjacency.hasEdgeInAdj(graph, source_published, destination.index)) {
+    if (adjacency.hasEdgeInSideAdj(graph, source_pub, destination.index)) {
         return error.EdgeAlreadyExists;
     }
 
-    const forward_prepared = try prepareAppendBlock(graph, source_stage.staging_adj, .fwd);
-    const reverse_prepared = try prepareAppendBlock(graph, destination_stage.staging_adj, .rev);
+    const forward_prepared = try prepareAppendBlockSide(graph, sfwd, .fwd);
+    const reverse_prepared = try prepareAppendBlockSide(graph, srev, .rev);
 
-    try ensureTailCowGroupConstraint(graph, source_stage.staging_adj, forward_prepared, .fwd);
-    try ensureTailCowGroupConstraint(graph, destination_stage.staging_adj, reverse_prepared, .rev);
+    try ensureTailCowGroupConstraintSide(graph, sfwd, forward_prepared);
+    try ensureTailCowGroupConstraintSide(graph, srev, reverse_prepared);
 
-    const old_forward_groups = try cloneGroupsForStagingIfNeeded(graph, source_stage.staging_adj, .fwd);
-    const old_reverse_groups = try cloneGroupsForStagingIfNeeded(graph, destination_stage.staging_adj, .rev);
+    const old_forward_groups = try cloneGroupsForStagingIfNeededSide(graph, sfwd);
+    const old_reverse_groups = try cloneGroupsForStagingIfNeededSide(graph, srev);
 
-    try applyPreparedAppend(graph, source_stage.staging_adj, forward_prepared, .fwd);
+    try applyPreparedAppendSide(graph, sfwd, forward_prepared, .fwd);
     try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags);
+    var source_publish_adj = source_adj_before;
+    source_publish_adj.first_block_fwd = sfwd.first_block;
+    source_publish_adj.block_count_fwd = sfwd.block_count;
+    source_publish_adj.group_count_fwd = sfwd.group_count;
+    source_publish_adj.first_group_fwd = sfwd.first_group;
+    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
 
-    try applyPreparedAppend(graph, destination_stage.staging_adj, reverse_prepared, .rev);
+    try applyPreparedAppendSide(graph, srev, reverse_prepared, .rev);
     insertReverseEdge(graph, reverse_prepared.new_block, source);
+    var destination_publish_adj = destination_adj_before;
+    destination_publish_adj.first_block_rev = srev.first_block;
+    destination_publish_adj.block_count_rev = srev.block_count;
+    destination_publish_adj.group_count_rev = srev.group_count;
+    destination_publish_adj.first_group_rev = srev.first_group;
+    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
 
-    repair.updateRepairDebt(graph, source_stage.staging_adj, source.index, .fwd);
-    repair.updateRepairDebt(graph, destination_stage.staging_adj, destination.index, .rev);
+    if (source.index == destination.index) {
+        std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
+        var merged_flags = source_publish_adj.flags;
+        merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
+        merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
+        _ = common.publishStagedBoth(source_node, source_meta, merged_flags);
+    } else {
+        // publish reverse first, then forward (RFC §5.2)
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags);
+    }
+
     common.incrementDegree(&source_node.degree_fwd);
     common.incrementDegree(&destination_node.degree_rev);
-    publishEndpoints(source_node, destination_node, source, destination);
 
     if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
     if (reverse_prepared.old_block) |old_block| try rcu.retireBlockRev(graph, old_block);
@@ -433,15 +336,6 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 }
 
 /// Removes the directed edge `source → destination` if it exists, returning `true`.
-/// Returns `false` if the edge was not found (no mutation performed).
-///
-/// Fails with:
-///   - `InvalidNode` if either endpoint does not exist.
-///   - `CorruptGraph` if forward and reverse adjacency disagree (internal invariant).
-///   - `RepairRequired` if a non-tail block would drop below `MIN_OCCUPANCY`.
-///
-/// Follows the RCU + COW mutation model. Works for any block position
-/// (first, middle, or last) in both contiguous and grouped adjacency chains.
 pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId) !bool {
     if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
 
@@ -451,54 +345,81 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     var claims = try common.tryClaimAdjacencies(source_node, destination_node, source.index, destination.index);
     defer claims.release();
 
-    const source_adj = source_node.publishedAdj();
-    const destination_adj = destination_node.publishedAdj();
+    const source_meta = source_node.loadPublishedMeta();
+    const destination_meta = destination_node.loadPublishedMeta();
+    const source_adj = source_node.publishedAdjFromMeta(source_meta);
+    const destination_adj = destination_node.publishedAdjFromMeta(destination_meta);
     if (!node_validity.snapshotIsLive(source_adj) or !node_validity.snapshotIsLive(destination_adj)) {
         return error.InvalidNode;
     }
 
     var writer_guard = common.beginWriter(graph);
     defer writer_guard.end();
-    const old_forward_groups = OldGroupChain.capture(&source_adj, .fwd);
-    const old_reverse_groups = OldGroupChain.capture(&destination_adj, .rev);
+
+    const source_pubfwd = source_node.publishedFwdFromMeta(source_meta);
+    const dest_pubrev = destination_node.publishedRevFromMeta(destination_meta);
+
+    const old_forward_groups = OldGroupChain.captureSide(&source_pubfwd);
+    const old_reverse_groups = OldGroupChain.captureSide(&dest_pubrev);
 
     const forward_found = common.findSlotInAdj(
-        graph,
-        source_adj.first_block_fwd,
-        source_adj.block_count_fwd,
-        source_adj.group_count_fwd,
-        source_adj.first_group_fwd,
-        destination.index,
-        .fwd,
+        graph, source_pubfwd.first_block, source_pubfwd.block_count,
+        source_pubfwd.group_count, source_pubfwd.first_group,
+        destination.index, .fwd,
     ) orelse return false;
 
     const reverse_found = common.findSlotInAdj(
-        graph,
-        destination_adj.first_block_rev,
-        destination_adj.block_count_rev,
-        destination_adj.group_count_rev,
-        destination_adj.first_group_rev,
-        source.index,
-        .rev,
+        graph, dest_pubrev.first_block, dest_pubrev.block_count,
+        dest_pubrev.group_count, dest_pubrev.first_group,
+        source.index, .rev,
     ) orelse return error.CorruptGraph;
 
-    const forward_plan = try planRemoval(graph, &source_adj, forward_found, .fwd);
-    const reverse_plan = try planRemoval(graph, &destination_adj, reverse_found, .rev);
+    const forward_plan = try planRemovalSide(graph, &source_pubfwd, forward_found, .fwd);
+    const reverse_plan = try planRemovalSide(graph, &dest_pubrev, reverse_found, .rev);
 
-    source_node.copyPublishedToStaging();
-    const source_staging_adj = source_node.stagingAdj();
+    source_node.copyPublishedToStagingFwd(source_meta);
+    destination_node.copyPublishedToStagingRev(destination_meta);
+    const sfwd = source_node.stagingFwd(source_meta);
+    const srev = destination_node.stagingRev(destination_meta);
 
-    destination_node.copyPublishedToStaging();
-    const destination_staging_adj = destination_node.stagingAdj();
+    const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd);
+    errdefer page_ops.freeBlock(graph, forward_build.new_block, .fwd);
+    const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev);
+    errdefer page_ops.freeBlock(graph, reverse_build.new_block, .rev);
+    var source_publish_adj = source_adj;
+    source_publish_adj.first_block_fwd = sfwd.first_block;
+    source_publish_adj.block_count_fwd = sfwd.block_count;
+    source_publish_adj.group_count_fwd = sfwd.group_count;
+    source_publish_adj.first_group_fwd = sfwd.first_group;
+    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
 
-    try applyRemovalPlan(graph, source_staging_adj, &source_adj, forward_plan, .fwd);
-    try applyRemovalPlan(graph, destination_staging_adj, &destination_adj, reverse_plan, .rev);
+    var destination_publish_adj = destination_adj;
+    destination_publish_adj.first_block_rev = srev.first_block;
+    destination_publish_adj.block_count_rev = srev.block_count;
+    destination_publish_adj.group_count_rev = srev.group_count;
+    destination_publish_adj.first_group_rev = srev.first_group;
+    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
 
-    repair.updateRepairDebt(graph, source_staging_adj, source.index, .fwd);
-    repair.updateRepairDebt(graph, destination_staging_adj, destination.index, .rev);
+    if (source.index == destination.index) {
+        std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
+        var merged_flags = source_publish_adj.flags;
+        merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
+        merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
+        _ = common.publishStagedBoth(source_node, source_meta, merged_flags);
+    } else {
+        // publish reverse first, then forward (RFC §5.2)
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags);
+    }
+
     common.decrementDegree(&source_node.degree_fwd);
     common.decrementDegree(&destination_node.degree_rev);
-    publishEndpoints(source_node, destination_node, source, destination);
+
+    try rcu.retireBlockFwd(graph, forward_build.old_block);
+    try rcu.retireBlockRev(graph, reverse_build.old_block);
+    if (forward_build.new_live == 0) try rcu.retireBlockFwd(graph, forward_build.new_block);
+    if (reverse_build.new_live == 0) try rcu.retireBlockRev(graph, reverse_build.new_block);
+
     old_forward_groups.retire(graph);
     old_reverse_groups.retire(graph);
 

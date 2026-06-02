@@ -22,6 +22,35 @@ pub const NodeFlags = packed struct(u32) {
     needs_repair_rev: bool,
     removed: bool,
     _reserved: u29 = 0,
+
+    pub fn fromMeta(meta: PublishedMeta) NodeFlags {
+        return .{
+            .needs_repair_fwd = meta.needs_repair_fwd,
+            .needs_repair_rev = meta.needs_repair_rev,
+            .removed = meta.removed,
+        };
+    }
+};
+
+pub const PublishedMeta = packed struct(u64) {
+    fwd_index: u1 = 0,
+    rev_index: u1 = 0,
+    needs_repair_fwd: bool = false,
+    needs_repair_rev: bool = false,
+    removed: bool = false,
+    _reserved: u59 = 0,
+
+    pub fn withFlags(self: PublishedMeta, node_flags: NodeFlags) PublishedMeta {
+        var next = self;
+        next.needs_repair_fwd = node_flags.needs_repair_fwd;
+        next.needs_repair_rev = node_flags.needs_repair_rev;
+        next.removed = node_flags.removed;
+        return next;
+    }
+
+    pub fn flags(self: PublishedMeta) NodeFlags {
+        return NodeFlags.fromMeta(self);
+    }
 };
 
 /// Edge-level boolean flags. 16 bits packed alongside relation and destination.
@@ -39,10 +68,20 @@ pub const Edge = packed struct {
     flags: EdgeFlags,
 };
 
-// ── Per-node adjacency descriptor ────────────────────────────────────
+// ── Per-side adjacency descriptor ─────────────────────────────────────
 
-/// Describes where the node's forward and reverse edge blocks live,
-/// how many there are, and whether they are contiguous or grouped.
+/// Forward or reverse side metadata. 12 bytes, 4-byte aligned.
+pub const SideAdj = extern struct {
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+};
+
+// ── Combined adjacency snapshot ───────────────────────────────────────
+
+/// Full-node adjacency snapshot for iteration, validation, and bulk operations.
+/// Obtained via `NodeBuffer.publishedAdj()` which composes from both sides.
 /// 28 bytes, naturally aligned (no padding).
 pub const NodeAdj = extern struct {
     first_block_fwd: u32,
@@ -58,61 +97,113 @@ pub const NodeAdj = extern struct {
     flags: NodeFlags,
 };
 
-/// RCU double-buffer for adjacency headers.
-/// Readers consume `publishedAdj()` with no locks.
-/// Writers copy published → staging, mutate staging, then publish it.
+// ── Per-node data ─────────────────────────────────────────────────────
+
+/// RCU double-buffer for adjacency headers, per side, with a single atomic
+/// publication word that selects both published side buffers and carries the
+/// public node flags. Readers load one coherent node snapshot from
+/// `published_meta`, while writers on disjoint logical sides still publish with
+/// per-side claims and CAS. Exactly 64 bytes.
 pub const NodeBuffer = extern struct {
-    /// Published adjacency buffer index (0 or 1).
-    /// Stored as u8 because Zig atomics require byte-sized integers.
-    published_adj_index_raw: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    published_meta: std.atomic.Value(u64) = std.atomic.Value(u64).init(@bitCast(PublishedMeta{})),
 
-    /// Per-node claim bits: forward adjacency (for writers mutating outgoing edges).
+    /// Per-node writer claims: forward side.
     fwd_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
-
-    /// Per-node claim bits: reverse adjacency (for writers mutating incoming edges).
+    /// Per-node writer claims: reverse side.
     rev_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
-    /// Double-buffered adjacency headers.
-    adj_buffers: [2]NodeAdj,
+    fwd_buffers: [2]SideAdj,
+    rev_buffers: [2]SideAdj,
 
     /// Cached edge counts maintained under the writer claim before publish.
-    /// Phase 1 keeps the cache exact for validation and future optimized reads,
-    /// while the public query layer may still scan blocks to guarantee exact
-    /// answers under concurrent mutation. 0xFFFF signals overflow.
     degree_fwd: u16 = 0,
     degree_rev: u16 = 0,
 
-    pub fn loadPublishedAdjIndex(self: *const NodeBuffer) u1 {
-        const raw = self.published_adj_index_raw.load(.acquire);
-        std.debug.assert(raw <= 1);
-        return @intCast(raw);
+    pub fn loadPublishedMeta(self: *const NodeBuffer) PublishedMeta {
+        return @bitCast(self.published_meta.load(.acquire));
     }
 
-    pub fn storePublishedAdjIndex(self: *NodeBuffer, index: u1) void {
-        self.published_adj_index_raw.store(@as(u8, index), .release);
+    pub fn storePublishedMeta(self: *NodeBuffer, meta: PublishedMeta) void {
+        self.published_meta.store(@bitCast(meta), .release);
     }
 
+    pub fn cmpxchgPublishedMeta(self: *NodeBuffer, expected: PublishedMeta, desired: PublishedMeta) ?PublishedMeta {
+        const actual = self.published_meta.cmpxchgStrong(@bitCast(expected), @bitCast(desired), .acq_rel, .acquire);
+        return if (actual) |raw| @as(PublishedMeta, @bitCast(raw)) else null;
+    }
+
+    pub fn publishedFwdFromMeta(self: *const NodeBuffer, meta: PublishedMeta) SideAdj {
+        return self.fwd_buffers[meta.fwd_index];
+    }
+
+    pub fn publishedRevFromMeta(self: *const NodeBuffer, meta: PublishedMeta) SideAdj {
+        return self.rev_buffers[meta.rev_index];
+    }
+
+    pub fn publishedFwd(self: *const NodeBuffer) SideAdj {
+        return self.publishedFwdFromMeta(self.loadPublishedMeta());
+    }
+
+    pub fn publishedRev(self: *const NodeBuffer) SideAdj {
+        return self.publishedRevFromMeta(self.loadPublishedMeta());
+    }
+
+    pub fn stagingFwd(self: *NodeBuffer, meta: PublishedMeta) *SideAdj {
+        return &self.fwd_buffers[1 - meta.fwd_index];
+    }
+
+    pub fn stagingRev(self: *NodeBuffer, meta: PublishedMeta) *SideAdj {
+        return &self.rev_buffers[1 - meta.rev_index];
+    }
+
+    pub fn copyPublishedToStagingFwd(self: *NodeBuffer, meta: PublishedMeta) void {
+        self.fwd_buffers[1 - meta.fwd_index] = self.fwd_buffers[meta.fwd_index];
+    }
+
+    pub fn copyPublishedToStagingRev(self: *NodeBuffer, meta: PublishedMeta) void {
+        self.rev_buffers[1 - meta.rev_index] = self.rev_buffers[meta.rev_index];
+    }
+
+    pub fn desiredMetaForPublishFwd(meta: PublishedMeta, flags: NodeFlags) PublishedMeta {
+        var desired = meta.withFlags(flags);
+        desired.fwd_index = 1 - meta.fwd_index;
+        return desired;
+    }
+
+    pub fn desiredMetaForPublishRev(meta: PublishedMeta, flags: NodeFlags) PublishedMeta {
+        var desired = meta.withFlags(flags);
+        desired.rev_index = 1 - meta.rev_index;
+        return desired;
+    }
+
+    pub fn desiredMetaForPublishBoth(meta: PublishedMeta, flags: NodeFlags) PublishedMeta {
+        var desired = meta.withFlags(flags);
+        desired.fwd_index = 1 - meta.fwd_index;
+        desired.rev_index = 1 - meta.rev_index;
+        return desired;
+    }
+
+    /// Composes a full NodeAdj snapshot from the current published sides.
+    /// Callers MUST NOT alias the returned value across RCU flips.
     pub fn publishedAdj(self: *const NodeBuffer) NodeAdj {
-        const published_index = self.loadPublishedAdjIndex();
-        return self.adj_buffers[published_index];
+        const meta = self.loadPublishedMeta();
+        return self.publishedAdjFromMeta(meta);
     }
 
-    pub fn stagingAdj(self: *NodeBuffer) *NodeAdj {
-        const published_index = self.loadPublishedAdjIndex();
-        const staging_index: u1 = 1 - published_index;
-        return &self.adj_buffers[staging_index];
-    }
-
-    pub fn copyPublishedToStaging(self: *NodeBuffer) void {
-        const published_index = self.loadPublishedAdjIndex();
-        const staging_index: u1 = 1 - published_index;
-        self.adj_buffers[staging_index] = self.adj_buffers[published_index];
-    }
-
-    pub fn publishStagingAdj(self: *NodeBuffer) void {
-        const published_index = self.loadPublishedAdjIndex();
-        const staging_index: u1 = 1 - published_index;
-        self.storePublishedAdjIndex(staging_index);
+    pub fn publishedAdjFromMeta(self: *const NodeBuffer, meta: PublishedMeta) NodeAdj {
+        const fwd = self.publishedFwdFromMeta(meta);
+        const rev = self.publishedRevFromMeta(meta);
+        return NodeAdj{
+            .first_block_fwd = fwd.first_block,
+            .block_count_fwd = fwd.block_count,
+            .group_count_fwd = fwd.group_count,
+            .first_group_fwd = fwd.first_group,
+            .first_block_rev = rev.first_block,
+            .block_count_rev = rev.block_count,
+            .group_count_rev = rev.group_count,
+            .first_group_rev = rev.first_group,
+            .flags = meta.flags(),
+        };
     }
 };
 
@@ -171,6 +262,8 @@ pub const Violation = union(enum) {
     unsorted_block: struct { node: u32, block: u32, slot: u32 },
     blockgroup_chain_cycle: struct { node: u32, group: u32 },
     blockgroup_overlap: struct { node: u32, group_a: u32, group_b: u32 },
+    run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u16 },
+    grouped_layout_needs_canonicalization: struct { node: u32, first_group: u32 },
     block_double_owned: struct { block: u32 },
     block_orphaned_in_free_list: struct { block: u32 },
     repair_debt_invalid_node: struct { entry: u32 },

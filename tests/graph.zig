@@ -5,6 +5,7 @@ const graph_mod = test_internals.graph;
 const constants = test_internals.constants;
 const page_ops = test_internals.page_ops;
 const types = test_internals.types;
+const helpers = @import("helpers.zig");
 
 const Graph = graph_mod.Graph;
 const testing = std.testing;
@@ -16,10 +17,9 @@ fn publishSingleReverseSource(graph: *Graph, destination_index: u32, source_inde
     block.mask = constants.denseMask(1);
 
     var node_buffer = try graph.nodeAt(.{ .index = destination_index });
-    node_buffer.adj_buffers[0].first_block_rev = block_index;
-    node_buffer.adj_buffers[0].block_count_rev = 1;
+    helpers.publishedRevSide(node_buffer).first_block = block_index;
+    helpers.publishedRevSide(node_buffer).block_count = 1;
     node_buffer.degree_rev = 1;
-    node_buffer.storePublishedAdjIndex(0);
 }
 
 fn publishReverseSourcesForForwardRange(graph: *Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -595,11 +595,10 @@ test "graph: repairNode compacts under-full adjacent blocks" {
     second_block_edges.mask = constants.denseMask(36);
 
     var node = try graph.nodeAt(src);
-    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node.adj_buffers[0].first_block_fwd = block0;
-    node.adj_buffers[0].block_count_fwd = 2;
+    helpers.clearPublishedSides(node);
+    helpers.publishedFwdSide(node).first_block = block0;
+    helpers.publishedFwdSide(node).block_count = 2;
     node.degree_fwd = 83;
-    node.storePublishedAdjIndex(0);
     try publishReverseSourcesForForwardRange(&graph, src.index, 1, 47);
     try publishReverseSourcesForForwardRange(&graph, src.index, 48, 36);
     graph.graph.edge_count.store(83, .release);
@@ -694,11 +693,10 @@ test "graph: debugValidate detects forward entry without reverse entry" {
     fwd.edges[0] = types.Edge{ .destination = b.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
     fwd.mask = constants.denseMask(1);
 
-    var a_node = try graph.nodeAt(a);
-    a_node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    a_node.adj_buffers[0].first_block_fwd = block;
-    a_node.adj_buffers[0].block_count_fwd = 1;
-    a_node.storePublishedAdjIndex(0);
+    const a_node = try graph.nodeAt(a);
+    helpers.clearPublishedSides(a_node);
+    helpers.publishedFwdSide(a_node).first_block = block;
+    helpers.publishedFwdSide(a_node).block_count = 1;
     graph.graph.edge_count.store(1, .release);
 
     const violations = try graph.debugValidate(testing.allocator);
@@ -731,17 +729,15 @@ test "graph: debugValidate detects removed node with outgoing adjacency" {
     rev.mask = constants.denseMask(1);
 
     var removed_raw = page_ops.nodeAt(&graph.graph, removed);
-    const removed_published_index = removed_raw.loadPublishedAdjIndex();
-    removed_raw.adj_buffers[removed_published_index].first_block_fwd = fwd_block;
-    removed_raw.adj_buffers[removed_published_index].block_count_fwd = 1;
-    removed_raw.adj_buffers[removed_published_index].flags.needs_repair_fwd = true;
+    helpers.publishedFwdSide(removed_raw).first_block = fwd_block;
+    helpers.publishedFwdSide(removed_raw).block_count = 1;
+    helpers.setPublishedFlags(removed_raw, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = true });
     removed_raw.degree_fwd = 1;
 
     var live_raw = try graph.nodeAt(live);
-    live_raw.adj_buffers[0].first_block_rev = rev_block;
-    live_raw.adj_buffers[0].block_count_rev = 1;
+    helpers.publishedRevSide(live_raw).first_block = rev_block;
+    helpers.publishedRevSide(live_raw).block_count = 1;
     live_raw.degree_rev = 1;
-    live_raw.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(1, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -772,11 +768,10 @@ test "graph: debugValidate detects reverse entry without forward entry" {
     rev.sources[0] = a.index;
     rev.mask = constants.denseMask(1);
 
-    var b_node = try graph.nodeAt(b);
-    b_node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    b_node.adj_buffers[0].first_block_rev = block;
-    b_node.adj_buffers[0].block_count_rev = 1;
-    b_node.storePublishedAdjIndex(0);
+    const b_node = try graph.nodeAt(b);
+    helpers.clearPublishedSides(b_node);
+    helpers.publishedRevSide(b_node).first_block = block;
+    helpers.publishedRevSide(b_node).block_count = 1;
 
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
@@ -892,12 +887,11 @@ test "graph: repairBudgeted processes queued repair debt" {
     second_block_edges.mask = constants.denseMask(36);
 
     var node = try graph.nodeAt(src);
-    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node.adj_buffers[0].first_block_fwd = block0;
-    node.adj_buffers[0].block_count_fwd = 2;
-    node.adj_buffers[0].flags.needs_repair_fwd = true;
+    helpers.clearPublishedSides(node);
+    helpers.publishedFwdSide(node).first_block = block0;
+    helpers.publishedFwdSide(node).block_count = 2;
+    helpers.setPublishedFlags(node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     node.degree_fwd = 83;
-    node.storePublishedAdjIndex(0);
     try publishReverseSourcesForForwardRange(&graph, src.index, 1, 47);
     try publishReverseSourcesForForwardRange(&graph, src.index, 48, 36);
     graph.graph.edge_count.store(83, .release);

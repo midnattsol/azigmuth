@@ -437,7 +437,9 @@ fn validateAdjacencyOwnershipAndLayoutFast(
         return;
     }
 
-    if (groups > constants.MAX_GROUPS_PER_NODE and !needsRepairFlag(adjacency, side)) return error.CorruptGraph;
+    if (groups > constants.MAX_GROUPS_PER_NODE and !needsRepairFlag(adjacency, side)) {
+        if (!adjacency.flags.removed) return error.CorruptGraph;
+    }
 
     var group_index = firstGroup(adjacency, side);
     var visited_groups: u32 = 0;
@@ -452,7 +454,9 @@ fn validateAdjacencyOwnershipAndLayoutFast(
         const group = page_ops.groupAtConst(graph, group_index);
         if (group.count == 0) return error.CorruptGraph;
         const is_last_group = group.next == constants.END_OF_CHAIN;
-        if (!is_last_group and group.count < 4 and !needsRepairFlag(adjacency, side)) return error.CorruptGraph;
+        if (!is_last_group and group.count < 4 and !needsRepairFlag(adjacency, side)) {
+            if (!adjacency.flags.removed) return error.CorruptGraph;
+        }
 
         if (previous_group_end) |expected_start| {
             if (group.start != expected_start) chain_is_contiguous = false;
@@ -467,7 +471,9 @@ fn validateAdjacencyOwnershipAndLayoutFast(
     }
 
     if (visited_groups != groups) return error.CorruptGraph;
-    if (chain_is_contiguous and !needsRepairFlag(adjacency, side)) return error.CorruptGraph;
+    if (chain_is_contiguous and !needsRepairFlag(adjacency, side)) {
+        if (!adjacency.flags.removed) return error.CorruptGraph;
+    }
 }
 
 fn validateRepairDebtFast(graph: *const graph_core.GraphCore, node_count: u32) !void {
@@ -819,6 +825,51 @@ fn appendRepairDebtViolations(
     }
 }
 
+fn appendLayoutDebtViolations(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    violations: *std.ArrayList(types.Violation),
+    node_id: u32,
+    adjacency: types.NodeAdj,
+    comptime side: Side,
+) !void {
+    const groups = groupCount(adjacency, side);
+    if (groups == 0) return;
+
+    var group_index = firstGroup(adjacency, side);
+    var visited_groups: u32 = 0;
+    var previous_group_end: ?u32 = null;
+    var chain_is_contiguous = true;
+
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return;
+        if (visited_groups >= graph.group_count or visited_groups >= groups) return;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        const is_last_group = group.next == constants.END_OF_CHAIN;
+        if (!is_last_group and group.count < 4 and !needsRepairFlag(adjacency, side)) {
+            try violations.append(allocator, .{ .run_fragmentation_requires_repair = .{
+                .node = node_id,
+                .group = group_index,
+                .count = group.count,
+            } });
+        }
+        if (previous_group_end) |expected_start| {
+            if (group.start != expected_start) chain_is_contiguous = false;
+        }
+        previous_group_end = group.start + group.count;
+        group_index = group.next;
+    }
+
+    if (chain_is_contiguous and !needsRepairFlag(adjacency, side)) {
+        try violations.append(allocator, .{ .grouped_layout_needs_canonicalization = .{
+            .node = node_id,
+            .first_group = firstGroup(adjacency, side),
+        } });
+    }
+}
+
 fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source_node: u32, adjacency: types.NodeAdj) !void {
     if (blockCount(adjacency, .fwd) == 0) return;
 
@@ -937,11 +988,13 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
 
         const fwd_visible = sumVisibleAdjacency(graph, adjacency, .fwd);
         const rev_visible = sumVisibleAdjacency(graph, adjacency, .rev);
-        if (node_buffer.degree_fwd < constants.DEGREE_OVERFLOW and fwd_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_fwd != fwd_visible) {
-            return error.CorruptGraph;
-        }
-        if (node_buffer.degree_rev < constants.DEGREE_OVERFLOW and rev_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_rev != rev_visible) {
-            return error.CorruptGraph;
+        if (!adjacency.flags.removed) {
+            if (node_buffer.degree_fwd < constants.DEGREE_OVERFLOW and fwd_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_fwd != fwd_visible) {
+                return error.CorruptGraph;
+            }
+            if (node_buffer.degree_rev < constants.DEGREE_OVERFLOW and rev_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_rev != rev_visible) {
+                return error.CorruptGraph;
+            }
         }
     }
 
@@ -1025,6 +1078,8 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) {
             try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
         }
+        try appendLayoutDebtViolations(graph, allocator, &violations, node_id, adjacency, .fwd);
+        try appendLayoutDebtViolations(graph, allocator, &violations, node_id, adjacency, .rev);
     }
 
     try appendRepairDebtViolations(graph, allocator, &violations);

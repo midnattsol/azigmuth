@@ -31,6 +31,7 @@ pub const NeighborIterator = query.NeighborIterator;
 pub const NODES_PER_PAGE = constants.NODES_PER_PAGE;
 pub const EDGE_BLOCKS_PER_PAGE = constants.EDGE_BLOCKS_PER_PAGE;
 pub const EDGE_GROUPS_PER_PAGE = constants.EDGE_GROUPS_PER_PAGE;
+pub const GraphCore = graph_core.GraphCore;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -182,14 +183,6 @@ pub const Graph = struct {
 
     pub fn publishedNodeAdj(self: *const Graph, node: types.NodeId) !types.NodeAdj {
         return adjacency.publishedNodeAdj(&self.graph, node);
-    }
-
-    pub fn prepareStagingAdj(self: *Graph, node: types.NodeId) !*types.NodeAdj {
-        return adjacency.prepareStagingAdj(&self.graph, node);
-    }
-
-    pub fn publishStagingAdj(self: *Graph, node: types.NodeId) !void {
-        return adjacency.publishStagingAdj(&self.graph, node);
     }
 
     // ── RCU methods ───────────────────────────────────────────────────
@@ -357,9 +350,11 @@ pub const GraphBuilder = struct {
     fn resetPublishedAdjacencyBuffers(self: *GraphBuilder) void {
         for (0..self.graph.nodeCount()) |node_index| {
             const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
-            node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-            node_buffer.adj_buffers[1] = std.mem.zeroes(types.NodeAdj);
-            node_buffer.storePublishedAdjIndex(0);
+            node_buffer.fwd_buffers[0] = std.mem.zeroes(types.SideAdj);
+            node_buffer.fwd_buffers[1] = std.mem.zeroes(types.SideAdj);
+            node_buffer.rev_buffers[0] = std.mem.zeroes(types.SideAdj);
+            node_buffer.rev_buffers[1] = std.mem.zeroes(types.SideAdj);
+            node_buffer.storePublishedMeta(.{});
         }
     }
 
@@ -397,10 +392,10 @@ pub const GraphBuilder = struct {
         }
 
         const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = source_index });
-        node_buffer.adj_buffers[0].first_block_fwd = first_block;
-        node_buffer.adj_buffers[0].block_count_fwd = block_count;
-        node_buffer.adj_buffers[0].group_count_fwd = 0;
-        node_buffer.adj_buffers[0].first_group_fwd = 0;
+        node_buffer.fwd_buffers[0].first_block = first_block;
+        node_buffer.fwd_buffers[0].block_count = block_count;
+        node_buffer.fwd_buffers[0].group_count = 0;
+        node_buffer.fwd_buffers[0].first_group = 0;
     }
 
     fn publishReverseRun(self: *GraphBuilder, destination_index: u32, run: []const BuilderEdge) !void {
@@ -426,10 +421,10 @@ pub const GraphBuilder = struct {
         }
 
         const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = destination_index });
-        node_buffer.adj_buffers[0].first_block_rev = first_block;
-        node_buffer.adj_buffers[0].block_count_rev = block_count;
-        node_buffer.adj_buffers[0].group_count_rev = 0;
-        node_buffer.adj_buffers[0].first_group_rev = 0;
+        node_buffer.rev_buffers[0].first_block = first_block;
+        node_buffer.rev_buffers[0].block_count = block_count;
+        node_buffer.rev_buffers[0].group_count = 0;
+        node_buffer.rev_buffers[0].first_group = 0;
     }
 
     fn publishForwardAdjacencies(self: *GraphBuilder) !void {
@@ -475,17 +470,17 @@ pub const GraphBuilder = struct {
             if (adj.block_count_fwd > 0) {
                 if (adj.group_count_fwd == 0) {
                     const end = adj.first_block_fwd + adj.block_count_fwd;
-                    for (adj.first_block_fwd..end) |bi| {
-                        fwd += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(bi), .fwd).mask);
+                    for (adj.first_block_fwd..end) |block_index| {
+                        fwd += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask);
                     }
                 } else {
-                    var gidx = adj.first_group_fwd;
-                    while (gidx != constants.END_OF_CHAIN) {
-                        const grp = page_ops.groupAtConst(&self.graph.graph, gidx);
-                        for (grp.start..grp.start + grp.count) |bi| {
-                            fwd += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(bi), .fwd).mask);
+                    var group_idx = adj.first_group_fwd;
+                    while (group_idx != constants.END_OF_CHAIN) {
+                        const group = page_ops.groupAtConst(&self.graph.graph, group_idx);
+                        for (group.start..group.start + group.count) |block_index| {
+                            fwd += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask);
                         }
-                        gidx = grp.next;
+                        group_idx = group.next;
                     }
                 }
             }
@@ -495,17 +490,17 @@ pub const GraphBuilder = struct {
             if (adj.block_count_rev > 0) {
                 if (adj.group_count_rev == 0) {
                     const end = adj.first_block_rev + adj.block_count_rev;
-                    for (adj.first_block_rev..end) |bi| {
-                        rev += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(bi), .rev).mask);
+                    for (adj.first_block_rev..end) |block_index| {
+                        rev += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask);
                     }
                 } else {
-                    var gidx = adj.first_group_rev;
-                    while (gidx != constants.END_OF_CHAIN) {
-                        const grp = page_ops.groupAtConst(&self.graph.graph, gidx);
-                        for (grp.start..grp.start + grp.count) |bi| {
-                            rev += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(bi), .rev).mask);
+                    var group_idx = adj.first_group_rev;
+                    while (group_idx != constants.END_OF_CHAIN) {
+                        const group = page_ops.groupAtConst(&self.graph.graph, group_idx);
+                        for (group.start..group.start + group.count) |block_index| {
+                            rev += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask);
                         }
-                        gidx = grp.next;
+                        group_idx = group.next;
                     }
                 }
             }

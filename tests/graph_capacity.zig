@@ -1,0 +1,65 @@
+const std = @import("std");
+const test_internals = @import("test_internals");
+
+const graph_mod = test_internals.graph;
+const constants = test_internals.constants;
+const testing = std.testing;
+
+test "node pages: nodePageCount returns 1 for a graph with up to NODES_PER_PAGE nodes" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    for (0..constants.NODES_PER_PAGE) |_| {
+        _ = try graph.addNode();
+    }
+    try testing.expectEqual(@as(usize, 1), graph.nodePageCount());
+    try testing.expectEqual(@as(usize, constants.NODES_PER_PAGE), graph.nodeCount());
+}
+
+test "node pages: crossing into the second page reports nodePageCount = 2" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    for (0..constants.NODES_PER_PAGE + 5) |_| {
+        _ = try graph.addNode();
+    }
+    try testing.expectEqual(@as(usize, 2), graph.nodePageCount());
+    try testing.expectEqual(@as(usize, constants.NODES_PER_PAGE + 5), graph.nodeCount());
+}
+
+test "node pages: crossing three pages reports nodePageCount = 3" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const total_nodes: usize = constants.NODES_PER_PAGE * 3;
+    for (0..total_nodes) |_| {
+        _ = try graph.addNode();
+    }
+    try testing.expectEqual(@as(usize, 3), graph.nodePageCount());
+    try testing.expectEqual(@as(usize, total_nodes), graph.nodeCount());
+    try graph.validate();
+}
+
+test "node pages: a node that lives in the second page still answers neighbors correctly" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    for (0..constants.NODES_PER_PAGE - 1) |_| {
+        _ = try graph.addNode();
+    }
+    const cross_page_target = try graph.addNode();
+    try graph.addEdge(source, cross_page_target, 0, 0);
+
+    var iterator = try graph.neighbors(source);
+    const list = try iterator.materialize(testing.allocator);
+    defer testing.allocator.free(list);
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqual(cross_page_target.index, list[0].index);
+
+    var incoming = try graph.inNeighbors(cross_page_target);
+    const incoming_list = try incoming.materialize(testing.allocator);
+    defer testing.allocator.free(incoming_list);
+    try testing.expectEqual(@as(usize, 1), incoming_list.len);
+    try testing.expectEqual(source.index, incoming_list[0].index);
+}

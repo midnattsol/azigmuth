@@ -159,3 +159,10 @@ test "dfs visits neighbors across multiple edge blocks" {
 
     try std.testing.expectEqual(@as(usize, 71), order.len);
 }
+
+test "dfs on empty graph returns InvalidNode" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    try std.testing.expectError(error.InvalidNode, dfs_mod.dfs(&graph.graph, .{ .index = 0 }, std.testing.allocator));
+}

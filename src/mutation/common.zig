@@ -37,18 +37,37 @@ pub const ClaimedAdjacencies = struct {
         if (self.source_fwd_claimed) self.source_node.fwd_claim.store(0, .release);
     }
 
-    fn claimSource(self: *ClaimedAdjacencies) !void {
-        if (self.source_node.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
-        self.source_fwd_claimed = true;
-        if (self.source_node.rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
-        self.source_rev_claimed = true;
+    fn claimNodeFwd(self: *ClaimedAdjacencies, node: *types.NodeBuffer) !void {
+        if (node.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+        if (node == self.source_node) self.source_fwd_claimed = true else self.destination_fwd_claimed = true;
     }
 
-    fn claimDestination(self: *ClaimedAdjacencies) !void {
-        if (self.destination_node.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
-        self.destination_fwd_claimed = true;
-        if (self.destination_node.rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
-        self.destination_rev_claimed = true;
+    fn claimNodeRev(self: *ClaimedAdjacencies, node: *types.NodeBuffer) !void {
+        if (node.rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+        if (node == self.source_node) self.source_rev_claimed = true else self.destination_rev_claimed = true;
+    }
+};
+
+pub const ClaimedNodeSides = struct {
+    node: *types.NodeBuffer,
+    fwd_claimed: bool = false,
+    rev_claimed: bool = false,
+
+    pub fn release(self: *ClaimedNodeSides) void {
+        if (self.rev_claimed) self.node.rev_claim.store(0, .release);
+        if (self.fwd_claimed) self.node.fwd_claim.store(0, .release);
+    }
+
+    pub fn ensureFwd(self: *ClaimedNodeSides) !void {
+        if (self.fwd_claimed) return;
+        if (self.node.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+        self.fwd_claimed = true;
+    }
+
+    pub fn ensureRev(self: *ClaimedNodeSides) !void {
+        if (self.rev_claimed) return;
+        if (self.node.rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+        self.rev_claimed = true;
     }
 };
 
@@ -91,21 +110,60 @@ pub fn tryClaimAdjacencies(source_node: *types.NodeBuffer, destination_node: *ty
     };
     errdefer claims.release();
 
-    // `NodeAdj` is published as a whole, so a writer that changes either side
-    // must exclude writers touching the other side of the same node. Claim in a
-    // deterministic node order so opposite-edge writers do not both take one
-    // endpoint and then fail each other unnecessarily.
+    // Forward and reverse adjacency are published independently via per-side RCU.
+    // `addEdge(from, to)` touches only `forward(from)` and `reverse(to)`, so we
+    // claim exactly those two logical sides.  Self-edges claim both sides of the
+    // same node.
     if (source_index == destination_index) {
-        try claims.claimSource();
-    } else if (source_index < destination_index) {
-        try claims.claimSource();
-        try claims.claimDestination();
+        try claims.claimNodeFwd(source_node);
+        try claims.claimNodeRev(source_node);
     } else {
-        try claims.claimDestination();
-        try claims.claimSource();
+        try claims.claimNodeFwd(source_node);
+        try claims.claimNodeRev(destination_node);
     }
 
     return claims;
+}
+
+pub fn tryClaimNodeSides(node: *types.NodeBuffer, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
+    var claims = ClaimedNodeSides{ .node = node };
+    errdefer claims.release();
+    if (want_fwd) try claims.ensureFwd();
+    if (want_rev) try claims.ensureRev();
+    return claims;
+}
+
+pub fn publishStagedFwd(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        var merged_flags = expected.flags();
+        merged_flags.needs_repair_fwd = flags.needs_repair_fwd;
+        merged_flags.removed = flags.removed;
+        const desired = types.NodeBuffer.desiredMetaForPublishFwd(expected, merged_flags);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
+}
+
+pub fn publishStagedRev(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        var merged_flags = expected.flags();
+        merged_flags.needs_repair_rev = flags.needs_repair_rev;
+        merged_flags.removed = flags.removed;
+        const desired = types.NodeBuffer.desiredMetaForPublishRev(expected, merged_flags);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
+}
+
+pub fn publishStagedBoth(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        const desired = types.NodeBuffer.desiredMetaForPublishBoth(expected, flags);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
 }
 
 /// Searches a contiguous or grouped adjacency chain for a single target value.
@@ -339,4 +397,104 @@ pub fn rebuildAdjWithReplace(
         .fwd => staging_adj.block_count_fwd = total_blocks,
         .rev => staging_adj.block_count_rev = total_blocks,
     }
+}
+
+/// SideAdj version of rebuildAdjWithReplace for per-side publication model.
+pub fn rebuildAdjWithReplaceSide(
+    graph: *graph_core.GraphCore,
+    staging_side: *types.SideAdj,
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+    old_block: u32,
+    new_block: u32,
+    comptime side: adjacency.AdjSide,
+) !void {
+    staging_side.first_block = 0;
+    staging_side.block_count = 0;
+    staging_side.group_count = 0;
+    staging_side.first_group = 0;
+    if (block_count == 0) return;
+
+    var run_start: u32 = 0;
+    var run_count: u16 = 0;
+    var total_blocks: u16 = 0;
+    var first_block_set: bool = false;
+    var tail_group: ?u32 = null;
+
+    const EmitCtx = struct {
+        fn flush(
+            adj: *types.SideAdj,
+            graph_ptr: *graph_core.GraphCore,
+            run_start_ptr: *u32,
+            run_count_ptr: *u16,
+            total_blocks_ptr: *u16,
+            first_block_set_ptr: *bool,
+            tail_group_ptr: *?u32,
+        ) !void {
+            if (run_count_ptr.* == 0) return;
+            if (!first_block_set_ptr.*) {
+                adj.first_block = run_start_ptr.*;
+                adj.block_count = run_count_ptr.*;
+                first_block_set_ptr.* = true;
+            } else if (tail_group_ptr.* == null and adj.group_count == 0) {
+                const prefix_group = try page_ops.allocGroup(graph_ptr);
+                const group = try page_ops.allocGroup(graph_ptr);
+                page_ops.groupAt(graph_ptr, prefix_group).* = .{ .start = adj.first_block, .count = adj.block_count, .next = group };
+                page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
+                adj.first_group = prefix_group;
+                adj.group_count = 2;
+                tail_group_ptr.* = group;
+            } else {
+                const group = try page_ops.allocGroup(graph_ptr);
+                page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
+                page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
+                tail_group_ptr.* = group;
+                adj.group_count += 1;
+            }
+            total_blocks_ptr.* += run_count_ptr.*;
+            run_count_ptr.* = 0;
+        }
+    };
+
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |block_idx| {
+            if (block_idx == old_block) {
+                if (@popCount(page_ops.edgeBlockAtConst(graph, new_block, side).mask) == 0) continue;
+            }
+            const idx: u32 = if (block_idx == old_block) new_block else @intCast(block_idx);
+            if (run_count > 0 and idx == run_start + run_count) {
+                run_count += 1;
+            } else {
+                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                run_start = idx;
+                run_count = 1;
+            }
+        }
+        try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+        staging_side.block_count = total_blocks;
+        return;
+    }
+
+    var group_idx = first_group;
+    while (group_idx != constants.END_OF_CHAIN) {
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
+            if (block_idx == old_block) {
+                if (@popCount(page_ops.edgeBlockAtConst(graph, new_block, side).mask) == 0) continue;
+            }
+            const idx: u32 = if (block_idx == old_block) new_block else @intCast(block_idx);
+            if (run_count > 0 and idx == run_start + run_count) {
+                run_count += 1;
+            } else {
+                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                run_start = idx;
+                run_count = 1;
+            }
+        }
+        group_idx = group.next;
+    }
+    try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+    staging_side.block_count = total_blocks;
 }

@@ -5,6 +5,7 @@ const graph_mod = test_internals.graph;
 const constants = test_internals.constants;
 const page_ops = test_internals.page_ops;
 const types = test_internals.types;
+const helpers = @import("helpers.zig");
 
 const testing = std.testing;
 
@@ -22,11 +23,10 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
 }
 
 fn publishForwardBlock(graph: *graph_mod.Graph, node: graph_mod.NodeId, block_index: u32, block_count: u16) !void {
-    var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].first_block_fwd = block_index;
-    node_buffer.adj_buffers[0].block_count_fwd = block_count;
-    node_buffer.storePublishedAdjIndex(0);
+    const node_buffer = try graph.nodeAt(node);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).first_block = block_index;
+    helpers.publishedFwdSide(node_buffer).block_count = block_count;
 }
 
 fn publishForwardGroups(
@@ -36,12 +36,11 @@ fn publishForwardGroups(
     block_count: u16,
     group_count: u16,
 ) !void {
-    var node_buffer = try graph.nodeAt(node);
-    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
-    node_buffer.adj_buffers[0].block_count_fwd = block_count;
-    node_buffer.adj_buffers[0].group_count_fwd = group_count;
-    node_buffer.adj_buffers[0].first_group_fwd = first_group;
-    node_buffer.storePublishedAdjIndex(0);
+    const node_buffer = try graph.nodeAt(node);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = block_count;
+    helpers.publishedFwdSide(node_buffer).group_count = group_count;
+    helpers.publishedFwdSide(node_buffer).first_group = first_group;
 }
 
 test "validation: detects non-dense masks" {
