@@ -9,6 +9,7 @@ const adjacency = @import("../adjacency.zig");
 const rcu = @import("../rcu.zig");
 const repair = @import("../repair.zig");
 const common = @import("common.zig");
+const node_validity = @import("../node_validity.zig");
 
 const StagedAdj = struct {
     published_index: u1,
@@ -110,8 +111,8 @@ fn prepareAppendBlock(graph: *graph_core.GraphCore, node_adj: *const types.NodeA
     }
 
     const tail_index = switch (side) {
-        .fwd => adjacency.tailBlockIndex(graph, node_adj, .fwd),
-        .rev => adjacency.tailBlockIndex(graph, node_adj, .rev),
+        .fwd => adjacency.tailBlockIndex(graph, node_adj, .fwd).?,
+        .rev => adjacency.tailBlockIndex(graph, node_adj, .rev).?,
     };
     const new_block = try page_ops.allocBlock(graph, side);
 
@@ -291,8 +292,8 @@ fn planRemoval(
     };
     const new_live: u7 = live_before - 1;
     const tail_index = switch (side) {
-        .fwd => adjacency.tailBlockIndex(graph, published_adj, .fwd),
-        .rev => adjacency.tailBlockIndex(graph, published_adj, .rev),
+        .fwd => adjacency.tailBlockIndex(graph, published_adj, .fwd).?,
+        .rev => adjacency.tailBlockIndex(graph, published_adj, .rev).?,
     };
     const is_tail = found.block_idx == tail_index;
     if (!is_tail and new_live < constants.MIN_OCCUPANCY) return error.RepairRequired;
@@ -375,7 +376,7 @@ fn applyRemovalPlan(
 ///
 /// Follows the RCU + COW mutation model.
 pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !void {
-    if (source.index >= graph.node_count or destination.index >= graph.node_count) return error.InvalidNode;
+    if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
 
     const source_node = page_ops.nodeAt(graph, source);
     const destination_node = page_ops.nodeAt(graph, destination);
@@ -383,13 +384,19 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     var claims = try common.tryClaimAdjacencies(source_node, destination_node, source.index, destination.index);
     defer claims.release();
 
+    const source_published = source_node.publishedAdj();
+    const destination_published = destination_node.publishedAdj();
+    if (!node_validity.snapshotIsLive(source_published) or !node_validity.snapshotIsLive(destination_published)) {
+        return error.InvalidNode;
+    }
+
     var writer_guard = common.beginWriter(graph);
     defer writer_guard.end();
 
     const source_stage = stageAdjForMutation(source_node);
     const destination_stage = stageAdjForMutation(destination_node);
 
-    if (adjacency.hasEdgeInAdj(graph, source_node.adj_buffers[source_stage.published_index], destination.index)) {
+    if (adjacency.hasEdgeInAdj(graph, source_published, destination.index)) {
         return error.EdgeAlreadyExists;
     }
 
@@ -408,6 +415,8 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     try applyPreparedAppend(graph, destination_stage.staging_adj, reverse_prepared, .rev);
     insertReverseEdge(graph, reverse_prepared.new_block, source);
 
+    repair.updateRepairDebt(graph, source_stage.staging_adj, source.index, .fwd);
+    repair.updateRepairDebt(graph, destination_stage.staging_adj, destination.index, .rev);
     common.incrementDegree(&source_node.degree_fwd);
     common.incrementDegree(&destination_node.degree_rev);
     publishEndpoints(source_node, destination_node, source, destination);
@@ -417,7 +426,7 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     old_forward_groups.retire(graph);
     old_reverse_groups.retire(graph);
 
-    _ = graph.edge_count.fetchAdd(1, .monotonic);
+    _ = graph.edge_count.fetchAdd(1, .release);
     rcu.bumpEpoch(graph);
     writer_guard.end();
     rcu.reclaimRetired(graph);
@@ -434,7 +443,7 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 /// Follows the RCU + COW mutation model. Works for any block position
 /// (first, middle, or last) in both contiguous and grouped adjacency chains.
 pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId) !bool {
-    if (source.index >= graph.node_count or destination.index >= graph.node_count) return error.InvalidNode;
+    if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
 
     const source_node = page_ops.nodeAt(graph, source);
     const destination_node = page_ops.nodeAt(graph, destination);
@@ -442,11 +451,14 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     var claims = try common.tryClaimAdjacencies(source_node, destination_node, source.index, destination.index);
     defer claims.release();
 
-    var writer_guard = common.beginWriter(graph);
-    defer writer_guard.end();
-
     const source_adj = source_node.publishedAdj();
     const destination_adj = destination_node.publishedAdj();
+    if (!node_validity.snapshotIsLive(source_adj) or !node_validity.snapshotIsLive(destination_adj)) {
+        return error.InvalidNode;
+    }
+
+    var writer_guard = common.beginWriter(graph);
+    defer writer_guard.end();
     const old_forward_groups = OldGroupChain.capture(&source_adj, .fwd);
     const old_reverse_groups = OldGroupChain.capture(&destination_adj, .rev);
 
@@ -490,7 +502,7 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     old_forward_groups.retire(graph);
     old_reverse_groups.retire(graph);
 
-    _ = graph.edge_count.fetchSub(1, .monotonic);
+    _ = graph.edge_count.fetchSub(1, .release);
     rcu.bumpEpoch(graph);
     writer_guard.end();
     rcu.reclaimRetired(graph);

@@ -33,6 +33,7 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     var node_buffer = try graph.nodeAt(.{ .index = destination_index });
     node_buffer.adj_buffers[0].first_block_rev = block_index;
     node_buffer.adj_buffers[0].block_count_rev = 1;
+    node_buffer.degree_rev = 1;
     node_buffer.storePublishedAdjIndex(0);
 }
 
@@ -54,6 +55,7 @@ fn publishRepairCandidate(graph: *graph_mod.Graph, node: graph_mod.NodeId) !stru
     node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
     node_buffer.adj_buffers[0].first_block_fwd = first_block;
     node_buffer.adj_buffers[0].block_count_fwd = 2;
+    node_buffer.degree_fwd = 40;
     node_buffer.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(40, .release);
 

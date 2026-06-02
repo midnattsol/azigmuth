@@ -20,6 +20,11 @@ fn publishForwardBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
     node_buffer.adj_buffers[0].first_block_fwd = first_block;
     node_buffer.adj_buffers[0].block_count_fwd = block_count;
+    var total: usize = 0;
+    for (first_block..first_block + block_count) |block_index| {
+        total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .fwd).mask);
+    }
+    node_buffer.degree_fwd = @intCast(total);
     node_buffer.storePublishedAdjIndex(0);
 }
 
@@ -28,6 +33,11 @@ fn publishReverseBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
     node_buffer.adj_buffers[0].first_block_rev = first_block;
     node_buffer.adj_buffers[0].block_count_rev = block_count;
+    var total: usize = 0;
+    for (first_block..first_block + block_count) |block_index| {
+        total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .rev).mask);
+    }
+    node_buffer.degree_rev = @intCast(total);
     node_buffer.storePublishedAdjIndex(0);
 }
 
@@ -56,6 +66,7 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     var node_buffer = try graph.nodeAt(.{ .index = destination_index });
     node_buffer.adj_buffers[0].first_block_rev = block_index;
     node_buffer.adj_buffers[0].block_count_rev = 1;
+    node_buffer.degree_rev = 1;
     node_buffer.storePublishedAdjIndex(0);
 }
 
@@ -175,6 +186,45 @@ test "repair: repairBudgeted processes at most the requested work" {
     try testing.expectEqual(@as(usize, 1), graph.graph.repair_fwd.items.len);
 }
 
+test "repair: repairBudgeted counts a node with forward and reverse debt once" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 90);
+    const node = graph_mod.NodeId{ .index = 0 };
+
+    const fwd0 = try graph.allocBlockFwd();
+    const fwd1 = try graph.allocBlockFwd();
+    fillForwardBlock(&graph, fwd0, 1, 20);
+    fillForwardBlock(&graph, fwd1, 21, 20);
+
+    const rev0 = try graph.allocBlockRev();
+    const rev1 = try graph.allocBlockRev();
+    fillReverseBlock(&graph, rev0, 40, 20);
+    fillReverseBlock(&graph, rev1, 60, 20);
+
+    var node_buffer = try graph.nodeAt(node);
+    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node_buffer.adj_buffers[0].first_block_fwd = fwd0;
+    node_buffer.adj_buffers[0].block_count_fwd = 2;
+    node_buffer.adj_buffers[0].first_block_rev = rev0;
+    node_buffer.adj_buffers[0].block_count_rev = 2;
+    node_buffer.adj_buffers[0].flags.needs_repair_fwd = true;
+    node_buffer.adj_buffers[0].flags.needs_repair_rev = true;
+    node_buffer.storePublishedAdjIndex(0);
+    node_buffer.degree_fwd = 40;
+    node_buffer.degree_rev = 40;
+
+    try graph.graph.repair_fwd.append(graph.graph.allocator, node.index);
+    try graph.graph.repair_rev.append(graph.graph.allocator, node.index);
+
+    const compacted = try repair.repairBudgeted(&graph.graph, 1);
+    try testing.expectEqual(@as(usize, 1), compacted);
+    const repaired = try graph.publishedNodeAdj(node);
+    try testing.expect(!repaired.flags.needs_repair_fwd);
+    try testing.expect(!repaired.flags.needs_repair_rev);
+}
+
 test "repair: updateRepairDebt does not enqueue duplicates" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -217,6 +267,7 @@ test "repair: grouped adjacency can compact across group boundary" {
     node_buffer.adj_buffers[0].block_count_fwd = 2;
     node_buffer.adj_buffers[0].group_count_fwd = 2;
     node_buffer.adj_buffers[0].first_group_fwd = first_group;
+    node_buffer.degree_fwd = 40;
     node_buffer.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(40, .release);
 
@@ -293,6 +344,7 @@ test "repair: grouped adjacency becomes contiguous after repair" {
     node_buffer.adj_buffers[0].block_count_fwd = 3;
     node_buffer.adj_buffers[0].group_count_fwd = 3;
     node_buffer.adj_buffers[0].first_group_fwd = g0;
+    node_buffer.degree_fwd = 60;
     node_buffer.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(60, .release);
 
@@ -325,6 +377,7 @@ test "repair: valid forward blocks produce valid reverse after repair" {
         var dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         dn.adj_buffers[0].first_block_rev = r;
         dn.adj_buffers[0].block_count_rev = 1;
+        dn.degree_rev = 1;
         dn.storePublishedAdjIndex(0);
     }
 

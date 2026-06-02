@@ -2,16 +2,18 @@ const std = @import("std");
 const graph_core = @import("../graph_core.zig");
 const types = @import("../types.zig");
 const query = @import("../query.zig");
+const node_validity = @import("../node_validity.zig");
 
 /// Returns nodes in depth-first order starting from `start`.
 /// The caller owns the returned slice.
 pub fn dfs(graph: *const graph_core.GraphCore, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
-    if (start.index >= graph.node_count) return error.InvalidNode;
+    const node_count = graph.publishedNodeCount();
+    try node_validity.ensureLiveNode(graph, start);
 
-    var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.node_count);
+    var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer visited.deinit(allocator);
 
-    var stack = try std.ArrayList(types.NodeId).initCapacity(allocator, graph.node_count);
+    var stack = try std.ArrayList(types.NodeId).initCapacity(allocator, node_count);
     defer stack.deinit(allocator);
     var order: std.ArrayList(types.NodeId) = .empty;
     errdefer order.deinit(allocator);

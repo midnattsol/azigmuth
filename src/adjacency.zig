@@ -1,9 +1,11 @@
 //! Adjacency chain manipulation — groups, block traversal, and edge search.
 
+const std = @import("std");
 const constants = @import("constants.zig");
 const graph_core = @import("graph_core.zig");
 const types = @import("types.zig");
 const page_ops = @import("page_ops.zig");
+const node_validity = @import("node_validity.zig");
 
 pub const AdjSide = enum { fwd, rev };
 
@@ -82,7 +84,7 @@ pub fn searchInBlock(comptime BlockType: type, block: *const BlockType, target: 
     return null;
 }
 
-pub fn appendGroupToAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, new_block: u32, comptime dir: enum { fwd, rev }) !void {
+pub fn appendGroupToAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, new_block: u32, comptime dir: AdjSide) !void {
     const group_count = if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
 
     if (group_count == 0) {
@@ -126,12 +128,13 @@ pub fn appendGroupToAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, 
     }
 }
 
-pub fn tailBlockIndex(graph: *graph_core.GraphCore, node_adj: *const types.NodeAdj, comptime dir: enum { fwd, rev }) u32 {
+pub fn tailBlockIndex(graph: *graph_core.GraphCore, node_adj: *const types.NodeAdj, comptime dir: AdjSide) ?u32 {
     const first = if (dir == .fwd) node_adj.first_block_fwd else node_adj.first_block_rev;
     const total = if (dir == .fwd) node_adj.block_count_fwd else node_adj.block_count_rev;
     const groups = if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
     const first_group = if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
 
+    if (total == 0) return null;
     if (groups == 0) return first + total - 1;
 
     var group_index = first_group;
@@ -142,7 +145,7 @@ pub fn tailBlockIndex(graph: *graph_core.GraphCore, node_adj: *const types.NodeA
     }
 }
 
-pub fn extendTailGroup(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: enum { fwd, rev }) void {
+pub fn extendTailGroup(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: AdjSide) void {
     const first_group = if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
     var group_index = first_group;
     while (true) {
@@ -155,7 +158,7 @@ pub fn extendTailGroup(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, c
     }
 }
 
-pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: enum { fwd, rev }) void {
+pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: AdjSide) void {
     if ((if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev) > 0) {
         const first_group = if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
         var group_index = first_group;
@@ -163,10 +166,16 @@ pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj,
         while (true) {
             const group = page_ops.groupAt(graph, group_index);
             if (group.next == constants.END_OF_CHAIN) {
+                std.debug.assert(group.count > 0);
                 page_ops.groupAt(graph, group_index).count -= 1;
                 if (page_ops.groupAt(graph, group_index).count == 0) {
                     if (prev_group) |prev| {
                         page_ops.groupAt(graph, prev).next = constants.END_OF_CHAIN;
+                        if (dir == .fwd) {
+                            node_adj.group_count_fwd -= 1;
+                        } else {
+                            node_adj.group_count_rev -= 1;
+                        }
                     } else {
                         if (dir == .fwd) {
                             node_adj.group_count_fwd = 0;
@@ -175,11 +184,6 @@ pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj,
                             node_adj.group_count_rev = 0;
                             node_adj.first_group_rev = 0;
                         }
-                    }
-                    if (dir == .fwd) {
-                        node_adj.group_count_fwd -= 1;
-                    } else {
-                        node_adj.group_count_rev -= 1;
                     }
                     page_ops.freeGroup(graph, group_index);
                 }
@@ -190,8 +194,10 @@ pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj,
         }
     } else {
         if (dir == .fwd) {
+            std.debug.assert(node_adj.block_count_fwd > 0);
             node_adj.block_count_fwd -= 1;
         } else {
+            std.debug.assert(node_adj.block_count_rev > 0);
             node_adj.block_count_rev -= 1;
         }
     }
@@ -259,20 +265,20 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
 }
 
 pub fn publishedNodeAdj(graph: *const graph_core.GraphCore, node: types.NodeId) !types.NodeAdj {
-    if (node.index >= graph.node_count) return error.InvalidNode;
+    try node_validity.ensureLiveNode(graph, node);
     const node_buffer = page_ops.nodeAtConst(graph, node);
     return node_buffer.publishedAdj();
 }
 
 pub fn prepareStagingAdj(graph: *graph_core.GraphCore, node: types.NodeId) !*types.NodeAdj {
-    if (node.index >= graph.node_count) return error.InvalidNode;
+    try node_validity.ensureLiveNode(graph, node);
     const node_buffer = page_ops.nodeAt(graph, node);
     node_buffer.copyPublishedToStaging();
     return node_buffer.stagingAdj();
 }
 
 pub fn publishStagingAdj(graph: *graph_core.GraphCore, node: types.NodeId) !void {
-    if (node.index >= graph.node_count) return error.InvalidNode;
+    try node_validity.ensureLiveNode(graph, node);
     const node_buffer = page_ops.nodeAt(graph, node);
     node_buffer.publishStagingAdj();
 }

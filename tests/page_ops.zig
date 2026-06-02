@@ -29,7 +29,7 @@ test "page_ops: addNode crosses node page boundary" {
     }
 
     try testing.expectEqual(@as(u32, constants.NODES_PER_PAGE), last_node.index);
-    try testing.expectEqual(@as(usize, 2), graph.graph.node_pages.items.len);
+    try testing.expectEqual(@as(usize, 2), graph.nodePageCount());
     try testing.expect(graph.hasNode(.{ .index = constants.NODES_PER_PAGE - 1 }));
     try testing.expect(graph.hasNode(.{ .index = constants.NODES_PER_PAGE }));
 }

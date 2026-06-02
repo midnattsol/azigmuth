@@ -76,6 +76,7 @@ test "validation: detects invalid destinations" {
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(1, .release);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .invalid_dst));
@@ -94,6 +95,7 @@ test "validation: detects unsorted blocks" {
     try publishForwardBlock(&graph, .{ .index = 0 }, block, 1);
     graph.graph.edge_count.store(2, .release);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .unsorted_block));
@@ -151,6 +153,7 @@ test "validation: detects block group cycles without hanging" {
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = group };
     try publishForwardGroups(&graph, node, group, 1, 1);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .blockgroup_chain_cycle));
@@ -170,6 +173,7 @@ test "validation: detects overlapping block groups" {
     page_ops.groupAt(&graph.graph, group1).* = .{ .start = block0 + 1, .count = 1, .next = constants.END_OF_CHAIN };
     try publishForwardGroups(&graph, node, group0, 3, 2);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .blockgroup_overlap));
@@ -187,6 +191,7 @@ test "validation: detects double-owned blocks" {
     try publishForwardBlock(&graph, node0, block, 1);
     try publishForwardBlock(&graph, node1, block, 1);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .block_double_owned));
@@ -200,8 +205,9 @@ test "validation: detects owned blocks present in free list" {
     const block = try graph.allocBlockFwd();
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
     try publishForwardBlock(&graph, node, block, 1);
-    try graph.graph.free_blocks_fwd.append(graph.graph.allocator, block);
+    page_ops.freeBlock(&graph.graph, block, .fwd);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .block_orphaned_in_free_list));
@@ -215,8 +221,9 @@ test "validation: detects retired blocks still reachable" {
     const block = try graph.allocBlockFwd();
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
     try publishForwardBlock(&graph, node, block, 1);
-    try graph.graph.retired_blocks_fwd.append(graph.graph.allocator, .{ .block = block, .epoch = 0 });
+    try graph.retireBlockFwd(block);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .retired_block_reachable));
@@ -230,7 +237,22 @@ test "validation: detects invalid repair debt entries" {
     try graph.graph.repair_fwd.append(graph.graph.allocator, 123);
     try graph.graph.repair_rev.append(graph.graph.allocator, 456);
 
+    try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expect(containsViolation(violations, .repair_debt_invalid_node));
+}
+
+test "validation: detects degree cache mismatch in fast validate" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, 0);
+
+    var node = try graph.nodeAt(source);
+    node.degree_fwd = 7;
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
 }

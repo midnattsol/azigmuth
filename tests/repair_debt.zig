@@ -22,6 +22,25 @@ fn fillBlock(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u
     block.mask = constants.denseMask(count);
 }
 
+fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
+    const block_index = try graph.allocBlockRev();
+    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
+    block.sources[0] = source_index;
+    block.mask = constants.denseMask(1);
+
+    var node_buffer = try graph.nodeAt(.{ .index = destination_index });
+    node_buffer.adj_buffers[0].first_block_rev = block_index;
+    node_buffer.adj_buffers[0].block_count_rev = 1;
+    node_buffer.degree_rev = 1;
+    node_buffer.storePublishedAdjIndex(0);
+}
+
+fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
+    for (0..count) |offset| {
+        try publishSingleReverseSource(graph, first_destination + @as(u32, @intCast(offset)), source_index);
+    }
+}
+
 test "repair debt: needs_repair flag is cleared after repairNode" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -155,7 +174,88 @@ test "repair: repairBudgeted with max_steps zero returns zero" {
     try testing.expectEqual(@as(usize, 0), compacted);
 }
 
-test "repair debt: exactly MAX_GROUPS_PER_NODE groups does not trigger needs_repair" {
+test "repair debt: grouped non-tail runs below 4 blocks trigger repair debt" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodesForTest(&graph, 130);
+    const node = graph_mod.NodeId{ .index = 0 };
+
+    const b0 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b4 = try graph.allocBlockFwd();
+    fillBlock(&graph, b0, 1, 64);
+    fillBlock(&graph, b2, 65, 64);
+    fillBlock(&graph, b4, 129, 1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node_buffer = try graph.nodeAt(node);
+    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node_buffer.adj_buffers[0].block_count_fwd = 3;
+    node_buffer.adj_buffers[0].group_count_fwd = 3;
+    node_buffer.adj_buffers[0].first_group_fwd = g0;
+    node_buffer.degree_fwd = 129;
+    node_buffer.storePublishedAdjIndex(0);
+
+    node_buffer.copyPublishedToStaging();
+    const staging_adj = node_buffer.stagingAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, staging_adj, node.index, .fwd);
+    try testing.expect(staging_adj.flags.needs_repair_fwd);
+}
+
+test "repair debt: validate requires run fragmentation debt to be marked" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodesForTest(&graph, 130);
+    const node = graph_mod.NodeId{ .index = 0 };
+
+    const b0 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b4 = try graph.allocBlockFwd();
+    fillBlock(&graph, b0, 1, 64);
+    fillBlock(&graph, b2, 65, 64);
+    fillBlock(&graph, b4, 129, 1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+
+    try publishReverseSourcesForForwardRange(&graph, node.index, 1, 64);
+    try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
+    try publishReverseSourcesForForwardRange(&graph, node.index, 129, 1);
+
+    var node_buffer = try graph.nodeAt(node);
+    node_buffer.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node_buffer.adj_buffers[0].block_count_fwd = 3;
+    node_buffer.adj_buffers[0].group_count_fwd = 3;
+    node_buffer.adj_buffers[0].first_group_fwd = g0;
+    node_buffer.degree_fwd = 129;
+    node_buffer.storePublishedAdjIndex(0);
+    graph.graph.edge_count.store(129, .release);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+
+    node_buffer.copyPublishedToStaging();
+    node_buffer.stagingAdj().flags.needs_repair_fwd = true;
+    node_buffer.publishStagingAdj();
+    try graph.validate();
+}
+
+test "repair debt: contiguous MAX_GROUPS_PER_NODE groups trigger canonical repair debt" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -188,11 +288,12 @@ test "repair debt: exactly MAX_GROUPS_PER_NODE groups does not trigger needs_rep
     node_buffer.adj_buffers[0].first_group_fwd = g0;
     node_buffer.storePublishedAdjIndex(0);
 
-    // updateRepairDebt must NOT flag this (4 <= MAX_GROUPS_PER_NODE).
+    // Even at exactly MAX_GROUPS_PER_NODE, a fully contiguous grouped chain
+    // should be canonicalized back to contiguous representation.
     node_buffer.copyPublishedToStaging();
     const staging_adj = node_buffer.stagingAdj();
     test_internals.repair.updateRepairDebt(&graph.graph, staging_adj, node.index, .fwd);
-    try testing.expect(!staging_adj.flags.needs_repair_fwd);
+    try testing.expect(staging_adj.flags.needs_repair_fwd);
 }
 
 test "repair debt: repairBudgeted continues past stale queue entry" {
@@ -238,4 +339,39 @@ test "repair debt: repairBudgeted continues past stale queue entry" {
     const compacted = try graph.repairBudgeted(2);
     try testing.expect(compacted > 0);
     try testing.expect(!node1_buf.publishedAdj().flags.needs_repair_fwd);
+}
+
+test "repair debt: updateRepairDebt marks single-block tombstone debt" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const removed = try graph.addNode();
+    const source = try graph.addNode();
+    try graph.addEdge(source, removed, 0, 0);
+    try graph.removeNode(removed);
+
+    var source_buffer = try graph.nodeAt(source);
+    source_buffer.copyPublishedToStaging();
+    const staging_adj = source_buffer.stagingAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, staging_adj, source.index, .fwd);
+
+    try testing.expect(staging_adj.flags.needs_repair_fwd);
+}
+
+test "repair debt: repairBudgeted skips removed queue entries and still compacts tombstones" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const removed = try graph.addNode();
+    const source = try graph.addNode();
+    try graph.addEdge(source, removed, 0, 0);
+    try graph.removeNode(removed);
+
+    try graph.graph.repair_fwd.append(graph.graph.allocator, removed.index);
+
+    const compacted = try graph.repairBudgeted(1);
+    try testing.expectEqual(@as(usize, 1), compacted);
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
 }

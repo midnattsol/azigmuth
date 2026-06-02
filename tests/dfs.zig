@@ -94,6 +94,17 @@ test "dfs returns error on invalid start node" {
     try std.testing.expectError(error.InvalidNode, dfs_mod.dfs(&graph.graph, .{ .index = 99 }, std.testing.allocator));
 }
 
+test "dfs returns error on removed start node" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const start = try graph.addNode();
+    _ = try graph.addNode();
+    try graph.removeNode(start);
+
+    try std.testing.expectError(error.InvalidNode, dfs_mod.dfs(&graph.graph, start, std.testing.allocator));
+}
+
 test "dfs from isolated node returns only the start node" {
     var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();

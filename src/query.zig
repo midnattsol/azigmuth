@@ -6,6 +6,7 @@ const graph_core = @import("graph_core.zig");
 const types = @import("types.zig");
 const page_ops = @import("page_ops.zig");
 const rcu = @import("rcu.zig");
+const node_validity = @import("node_validity.zig");
 
 pub const Direction = enum { fwd, rev };
 
@@ -77,20 +78,25 @@ pub const NeighborIterator = struct {
     }
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
-        while (self.current_mask == 0) {
-            if (!self.loadNextNonEmptyMask()) return null;
-        }
+        while (true) {
+            while (self.current_mask == 0) {
+                if (!self.loadNextNonEmptyMask()) return null;
+            }
 
-        const bit_index: u6 = @intCast(@ctz(self.current_mask));
-        self.current_mask &= self.current_mask - 1;
-        return switch (self.direction) {
-            .fwd => blk: {
-                break :blk types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination };
-            },
-            .rev => blk: {
-                break :blk types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] };
-            },
-        };
+            const bit_index: u6 = @intCast(@ctz(self.current_mask));
+            self.current_mask &= self.current_mask - 1;
+            const candidate = switch (self.direction) {
+                .fwd => blk: {
+                    break :blk types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination };
+                },
+                .rev => blk: {
+                    break :blk types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] };
+                },
+            };
+            // Skip tombstoned (removed) nodes.
+            if (!node_validity.isNodeLive(self.core, candidate)) continue;
+            return candidate;
+        }
     }
 
     pub fn deinit(self: *NeighborIterator) void {
@@ -101,8 +107,8 @@ pub const NeighborIterator = struct {
 
     pub fn snapshotDegree(self: *const NeighborIterator) usize {
         return switch (self.direction) {
-            .fwd => sumPopCount(self.core, self.node_adj_snapshot, .fwd),
-            .rev => sumPopCount(self.core, self.node_adj_snapshot, .rev),
+            .fwd => sumVisibleCount(self.core, self.node_adj_snapshot, .fwd),
+            .rev => sumVisibleCount(self.core, self.node_adj_snapshot, .rev),
         };
     }
 
@@ -162,13 +168,14 @@ fn buildIteratorState(direction: Direction, node_adj: types.NodeAdj) struct {
 }
 
 fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, direction: Direction) types.GraphError!NeighborIterator {
-    if (node.index >= graph.node_count) return error.InvalidNode;
+    if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 
     const reader_token = rcu.readerEnter(@constCast(graph));
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
     const node_buffer = page_ops.nodeAtConst(graph, node);
     const node_adj_snapshot = node_buffer.publishedAdj();
+    try node_validity.ensureLiveSnapshot(node_adj_snapshot);
 
     const initial = buildIteratorState(direction, node_adj_snapshot);
 
@@ -203,7 +210,24 @@ pub fn inNeighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types
     return initNeighborIterator(graph, node, .rev);
 }
 
-fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comptime side: Direction) usize {
+fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Direction) usize {
+    const block = page_ops.edgeBlockAtConst(graph, block_index, switch (side) {
+        .fwd => .fwd,
+        .rev => .rev,
+    });
+    const live = @popCount(block.mask);
+    var total: usize = 0;
+    for (0..live) |slot| {
+        const candidate_index = switch (side) {
+            .fwd => block.edges[slot].destination,
+            .rev => block.sources[slot],
+        };
+        if (node_validity.isNodeLiveIndex(graph, candidate_index)) total += 1;
+    }
+    return total;
+}
+
+fn sumVisibleCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comptime side: Direction) usize {
     const block_count: u32 = switch (side) {
         .fwd => node_adj.block_count_fwd,
         .rev => node_adj.block_count_rev,
@@ -223,11 +247,7 @@ fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comp
             .rev => node_adj.first_block_rev,
         };
         for (start..start + block_count) |block_index| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), switch (side) {
-                .fwd => .fwd,
-                .rev => .rev,
-            });
-            total += @popCount(block.mask);
+            total += countVisibleEntriesInBlock(graph, @intCast(block_index), side);
         }
         return total;
     }
@@ -239,11 +259,7 @@ fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comp
     while (group_index != constants.END_OF_CHAIN) {
         const group = page_ops.groupAtConst(graph, group_index);
         for (group.start..group.start + group.count) |block_index| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), switch (side) {
-                .fwd => .fwd,
-                .rev => .rev,
-            });
-            total += @popCount(block.mask);
+            total += countVisibleEntriesInBlock(graph, @intCast(block_index), side);
         }
         group_index = group.next;
     }
@@ -252,38 +268,21 @@ fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comp
 }
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
-    if (node.index >= graph.node_count) return error.InvalidNode;
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    // Lightweight seqlock: degree read between two claim checks.
-    // If the claim is held the writer may be mid-mutation → scan.
-    if (node_buffer.fwd_claim.load(.acquire) == 0) {
-        const deg = node_buffer.degree_fwd;
-        if (node_buffer.fwd_claim.load(.acquire) == 0) {
-            if (deg < constants.DEGREE_OVERFLOW) {
-                if (deg > 0) return deg;
-                // Cold cache: only trust zero if no blocks exist.
-                if (node_buffer.publishedAdj().block_count_fwd == 0) return 0;
-            }
-        }
-    }
+    if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
     const reader_token = rcu.readerEnter(@constCast(graph));
     defer rcu.readerExit(@constCast(graph), reader_token);
-    return sumPopCount(graph, node_buffer.publishedAdj(), .fwd);
+    const node_buffer = page_ops.nodeAtConst(graph, node);
+    const node_adj = node_buffer.publishedAdj();
+    try node_validity.ensureLiveSnapshot(node_adj);
+    return sumVisibleCount(graph, node_adj, .fwd);
 }
 
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
-    if (node.index >= graph.node_count) return error.InvalidNode;
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    if (node_buffer.rev_claim.load(.acquire) == 0) {
-        const deg = node_buffer.degree_rev;
-        if (node_buffer.rev_claim.load(.acquire) == 0) {
-            if (deg < constants.DEGREE_OVERFLOW) {
-                if (deg > 0) return deg;
-                if (node_buffer.publishedAdj().block_count_rev == 0) return 0;
-            }
-        }
-    }
+    if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
     const reader_token = rcu.readerEnter(@constCast(graph));
     defer rcu.readerExit(@constCast(graph), reader_token);
-    return sumPopCount(graph, node_buffer.publishedAdj(), .rev);
+    const node_buffer = page_ops.nodeAtConst(graph, node);
+    const node_adj = node_buffer.publishedAdj();
+    try node_validity.ensureLiveSnapshot(node_adj);
+    return sumVisibleCount(graph, node_adj, .rev);
 }

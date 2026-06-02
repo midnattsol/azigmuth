@@ -11,6 +11,7 @@ const mutation = @import("mutation.zig");
 const query = @import("query.zig");
 const repair = @import("repair.zig");
 const validate_mod = @import("validate.zig");
+const node_validity = @import("node_validity.zig");
 
 // ── Re-exports ───────────────────────────────────────────────────────────
 pub const NodeId = types.NodeId;
@@ -63,21 +64,21 @@ pub const Graph = struct {
             .retired_blocks_rev = .empty,
             .repair_fwd = .empty,
             .repair_rev = .empty,
-            .node_count = 0,
         };
         try state_value.retired_blocks_fwd.ensureTotalCapacity(allocator, constants.MAX_TRACKED_RETIRED_BLOCKS);
         errdefer state_value.retired_blocks_fwd.deinit(allocator);
         try state_value.retired_blocks_rev.ensureTotalCapacity(allocator, constants.MAX_TRACKED_RETIRED_BLOCKS);
         errdefer state_value.retired_blocks_rev.deinit(allocator);
 
-        try state_value.node_pages.append(allocator, first_page);
+        state_value.node_pages_pages[0].store(@intFromPtr(first_page.ptr), .release);
+        state_value.node_pages.append(allocator, first_page) catch {};
 
         return .{ .graph = state_value };
     }
 
     pub fn deinit(self: *Graph) void {
         const alloc = self.graph.allocator;
-        for (self.graph.node_pages.items) |page| alloc.free(page);
+        freeAtomicPages(types.NodeBuffer, alloc, self.graph.node_pages_pages[0..], constants.NODES_PER_PAGE);
         freeAtomicPages(types.EdgeBlockFwd, alloc, self.graph.edge_blocks_fwd_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockRev, alloc, self.graph.edge_blocks_rev_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockGroup, alloc, self.graph.edge_block_group_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
@@ -102,21 +103,19 @@ pub const Graph = struct {
     // ── Node API ──────────────────────────────────────────────────────
 
     pub fn addNode(self: *Graph) !types.NodeId {
-        const index = self.graph.node_count;
-        const page = page_ops.pageOf(index, constants.NODES_PER_PAGE);
+        while (true) {
+            const index = self.graph.publishedNodeCount();
+            const page = page_ops.pageOf(index, constants.NODES_PER_PAGE);
+            _ = try page_ops.ensureNodePage(&self.graph, page);
 
-        if (page == self.graph.node_pages.items.len) {
-            const new_page = try self.graph.allocator.alloc(types.NodeBuffer, constants.NODES_PER_PAGE);
-            @memset(new_page, std.mem.zeroes(types.NodeBuffer));
-            try self.graph.node_pages.append(self.graph.allocator, new_page);
+            if (self.graph.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
+                return types.NodeId{ .index = index };
+            }
         }
-
-        self.graph.node_count += 1;
-        return types.NodeId{ .index = index };
     }
 
     pub fn nodeCount(self: *const Graph) usize {
-        return self.graph.node_count;
+        return self.graph.publishedNodeCount();
     }
 
     pub fn edgeCount(self: *const Graph) u64 {
@@ -124,19 +123,25 @@ pub const Graph = struct {
     }
 
     pub fn hasNode(self: *const Graph, id: types.NodeId) bool {
-        return id.index < self.graph.node_count;
+        return node_validity.isNodeLive(&self.graph, id);
     }
 
     // ── Paged storage access ──────────────────────────────────────────
 
     pub fn nodeAt(self: *Graph, node: types.NodeId) !*types.NodeBuffer {
-        if (!self.hasNode(node)) return error.InvalidNode;
+        try node_validity.ensureLiveNode(&self.graph, node);
         return page_ops.nodeAt(&self.graph, node);
     }
 
     pub fn nodeAtConst(self: *const Graph, node: types.NodeId) !*const types.NodeBuffer {
-        if (!self.hasNode(node)) return error.InvalidNode;
+        try node_validity.ensureLiveNode(&self.graph, node);
         return page_ops.nodeAtConst(&self.graph, node);
+    }
+
+    pub fn nodePageCount(self: *const Graph) usize {
+        const node_count = self.graph.publishedNodeCount();
+        if (node_count == 0) return 1;
+        return @as(usize, @intCast(page_ops.pageOf(node_count - 1, constants.NODES_PER_PAGE) + 1));
     }
 
     // ── Block allocation ──────────────────────────────────────────────
@@ -159,15 +164,15 @@ pub const Graph = struct {
 
     // ── Adjacency methods ─────────────────────────────────────────────
 
-    pub fn appendGroupToAdj(self: *Graph, adj: *types.NodeAdj, new_block: u32, comptime dir: enum { fwd, rev }) !void {
+    pub fn appendGroupToAdj(self: *Graph, adj: *types.NodeAdj, new_block: u32, comptime dir: adjacency.AdjSide) !void {
         return adjacency.appendGroupToAdj(&self.graph, adj, new_block, dir);
     }
 
-    pub fn tailBlockIndex(self: *Graph, adj: *const types.NodeAdj, comptime dir: enum { fwd, rev }) u32 {
+    pub fn tailBlockIndex(self: *Graph, adj: *const types.NodeAdj, comptime dir: adjacency.AdjSide) ?u32 {
         return adjacency.tailBlockIndex(&self.graph, adj, dir);
     }
 
-    pub fn removeTailFromAdj(self: *Graph, adj: *types.NodeAdj, comptime dir: enum { fwd, rev }) void {
+    pub fn removeTailFromAdj(self: *Graph, adj: *types.NodeAdj, comptime dir: adjacency.AdjSide) void {
         adjacency.removeTailFromAdj(&self.graph, adj, dir);
     }
 
@@ -264,8 +269,7 @@ pub const Graph = struct {
     }
 
     pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!void {
-        if (!self.hasNode(node)) return error.InvalidNode;
-        return error.UnsupportedOperation;
+        return mutation.removeNode(&self.graph, node);
     }
 };
 

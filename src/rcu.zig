@@ -80,9 +80,6 @@ pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
 fn safeReclaimEpoch(graph: *graph_core.GraphCore) ?u64 {
     if (graph.reader_epoch_overflow.load(.acquire) != 0) return null;
 
-    // Fast path: no readers active, no need to scan slots.
-    if (graph.active_readers.load(.acquire) == 0) return graph.epoch.load(.acquire) +% 1;
-
     var min_epoch: ?u64 = null;
     for (&graph.reader_epochs) |*slot| {
         const encoded_epoch = slot.load(.acquire);

@@ -18,6 +18,7 @@ fn publishSingleReverseSource(graph: *Graph, destination_index: u32, source_inde
     var node_buffer = try graph.nodeAt(.{ .index = destination_index });
     node_buffer.adj_buffers[0].first_block_rev = block_index;
     node_buffer.adj_buffers[0].block_count_rev = 1;
+    node_buffer.degree_rev = 1;
     node_buffer.storePublishedAdjIndex(0);
 }
 
@@ -111,6 +112,46 @@ test "graph: query APIs return InvalidNode for out-of-bounds node" {
     try testing.expectError(error.InvalidNode, graph.inNeighbors(.{ .index = 77 }));
     try testing.expectError(error.InvalidNode, graph.outDegree(.{ .index = 77 }));
     try testing.expectError(error.InvalidNode, graph.inDegree(.{ .index = 77 }));
+}
+
+test "graph: removed node is absent from public node API" {
+    var graph = try Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const node = try graph.addNode();
+    try graph.removeNode(node);
+
+    try testing.expect(!graph.hasNode(node));
+    try testing.expectError(error.InvalidNode, graph.nodeAt(node));
+    try testing.expectError(error.InvalidNode, graph.nodeAtConst(node));
+    try testing.expectError(error.InvalidNode, graph.publishedNodeAdj(node));
+}
+
+test "graph: tailBlockIndex returns null for empty adjacency" {
+    var graph = try Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    var adjacency = std.mem.zeroes(types.NodeAdj);
+    try testing.expectEqual(@as(?u32, null), graph.tailBlockIndex(&adjacency, .fwd));
+    try testing.expectEqual(@as(?u32, null), graph.tailBlockIndex(&adjacency, .rev));
+}
+
+test "graph: removeTailFromAdj clears a single-group adjacency without underflow" {
+    var graph = try Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const block = try graph.allocBlockFwd();
+    const group = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var adjacency = std.mem.zeroes(types.NodeAdj);
+    adjacency.block_count_fwd = 1;
+    adjacency.group_count_fwd = 1;
+    adjacency.first_group_fwd = group;
+
+    graph.removeTailFromAdj(&adjacency, .fwd);
+    try testing.expectEqual(@as(u16, 0), adjacency.group_count_fwd);
+    try testing.expectEqual(@as(u32, 0), adjacency.first_group_fwd);
 }
 
 test "graph: self-edge appears in both neighbors and inNeighbors" {
@@ -557,6 +598,7 @@ test "graph: repairNode compacts under-full adjacent blocks" {
     node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
     node.adj_buffers[0].first_block_fwd = block0;
     node.adj_buffers[0].block_count_fwd = 2;
+    node.degree_fwd = 83;
     node.storePublishedAdjIndex(0);
     try publishReverseSourcesForForwardRange(&graph, src.index, 1, 47);
     try publishReverseSourcesForForwardRange(&graph, src.index, 48, 36);
@@ -668,6 +710,54 @@ test "graph: debugValidate detects forward entry without reverse entry" {
         else => {},
     };
     try testing.expect(found);
+}
+
+test "graph: debugValidate detects removed node with outgoing adjacency" {
+    var graph = try Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const removed = try graph.addNode();
+    const live = try graph.addNode();
+    try graph.removeNode(removed);
+
+    const fwd_block = try graph.allocBlockFwd();
+    var fwd = page_ops.edgeBlockAt(&graph.graph, fwd_block, .fwd);
+    fwd.edges[0] = types.Edge{ .destination = live.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    fwd.mask = constants.denseMask(1);
+
+    const rev_block = try graph.allocBlockRev();
+    var rev = page_ops.edgeBlockAt(&graph.graph, rev_block, .rev);
+    rev.sources[0] = removed.index;
+    rev.mask = constants.denseMask(1);
+
+    var removed_raw = page_ops.nodeAt(&graph.graph, removed);
+    const removed_published_index = removed_raw.loadPublishedAdjIndex();
+    removed_raw.adj_buffers[removed_published_index].first_block_fwd = fwd_block;
+    removed_raw.adj_buffers[removed_published_index].block_count_fwd = 1;
+    removed_raw.adj_buffers[removed_published_index].flags.needs_repair_fwd = true;
+    removed_raw.degree_fwd = 1;
+
+    var live_raw = try graph.nodeAt(live);
+    live_raw.adj_buffers[0].first_block_rev = rev_block;
+    live_raw.adj_buffers[0].block_count_rev = 1;
+    live_raw.degree_rev = 1;
+    live_raw.storePublishedAdjIndex(0);
+    graph.graph.edge_count.store(1, .release);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+
+    var found_outgoing = false;
+    var found_repair_flag = false;
+    for (violations) |violation| switch (violation) {
+        .removed_node_has_outgoing => |payload| found_outgoing = found_outgoing or payload.node == removed.index,
+        .removed_node_marked_for_repair => |payload| found_repair_flag = found_repair_flag or payload.node == removed.index,
+        else => {},
+    };
+    try testing.expect(found_outgoing);
+    try testing.expect(found_repair_flag);
 }
 
 test "graph: debugValidate detects reverse entry without forward entry" {
@@ -806,6 +896,7 @@ test "graph: repairBudgeted processes queued repair debt" {
     node.adj_buffers[0].first_block_fwd = block0;
     node.adj_buffers[0].block_count_fwd = 2;
     node.adj_buffers[0].flags.needs_repair_fwd = true;
+    node.degree_fwd = 83;
     node.storePublishedAdjIndex(0);
     try publishReverseSourcesForForwardRange(&graph, src.index, 1, 47);
     try publishReverseSourcesForForwardRange(&graph, src.index, 48, 36);

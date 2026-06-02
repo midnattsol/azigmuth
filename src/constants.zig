@@ -33,6 +33,7 @@ pub const DEGREE_OVERFLOW: u16 = 0xFFFF;
 
 /// Maximum page directory sizes for atomically-published storage pages.
 /// These keep page lookup lock-free while preserving stable page addresses.
+pub const MAX_NODE_PAGES: usize = 4096;
 pub const MAX_EDGE_BLOCK_PAGES: usize = 4096;
 pub const MAX_EDGE_GROUP_PAGES: usize = 4096;
 

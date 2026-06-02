@@ -75,10 +75,10 @@ pub const NodeBuffer = extern struct {
     /// Double-buffered adjacency headers.
     adj_buffers: [2]NodeAdj,
 
-    /// Cached edge counts so outDegree / inDegree are O(1).
-    /// Written under the writer claim before publishing; readers double-check
-    /// the claim as a lightweight seqlock before trusting the value.
-    /// 0xFFFF signals overflow → O(B) fallback scan.
+    /// Cached edge counts maintained under the writer claim before publish.
+    /// Phase 1 keeps the cache exact for validation and future optimized reads,
+    /// while the public query layer may still scan blocks to guarantee exact
+    /// answers under concurrent mutation. 0xFFFF signals overflow.
     degree_fwd: u16 = 0,
     degree_rev: u16 = 0,
 
@@ -174,6 +174,8 @@ pub const Violation = union(enum) {
     block_double_owned: struct { block: u32 },
     block_orphaned_in_free_list: struct { block: u32 },
     repair_debt_invalid_node: struct { entry: u32 },
+    removed_node_has_outgoing: struct { node: u32 },
+    removed_node_marked_for_repair: struct { node: u32 },
     edge_count_mismatch: struct { expected: u64, actual: u64 },
     retired_block_reachable: struct { block: u32, node: u32 },
 };

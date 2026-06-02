@@ -164,3 +164,28 @@ test "rcu: reader threads can iterate while a writer publishes updates" {
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
     try graph.validate();
 }
+
+test "rcu: reclaimRetired scans reader epoch slots even before active_readers increments" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const block = try graph.allocBlockFwd();
+    try graph.retireBlockFwd(block);
+    try testing.expect(graph.graph.retired_blocks_fwd.items.len > 0);
+    try testing.expectEqual(@as(usize, 0), graph.graph.free_blocks_fwd.items.len);
+
+    // Simulate the critical window in readerEnter: the reader published its
+    // epoch slot but has not yet incremented active_readers.
+    graph.graph.reader_epochs[0].store(1, .release);
+    graph.reclaimRetired();
+
+    try testing.expect(graph.graph.retired_blocks_fwd.items.len > 0);
+    try testing.expectEqual(@as(usize, 0), graph.graph.free_blocks_fwd.items.len);
+
+    graph.graph.reader_epochs[0].store(0, .release);
+    graph.bumpEpoch();
+    graph.reclaimRetired();
+
+    try testing.expectEqual(@as(usize, 0), graph.graph.retired_blocks_fwd.items.len);
+    try testing.expect(graph.graph.free_blocks_fwd.items.len > 0);
+}

@@ -574,6 +574,28 @@ test "mutation: outDegree works on manually constructed adjacency (cold cache)" 
     try testing.expectEqual(@as(usize, 65), try graph.outDegree(src));
 }
 
+test "mutation: outDegree ignores stale positive degree cache" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    _ = try graph.addNode();
+
+    const block = try graph.allocBlockFwd();
+    var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
+    edges.edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    edges.mask = constants.denseMask(1);
+
+    var node = try graph.nodeAt(src);
+    node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
+    node.adj_buffers[0].first_block_fwd = block;
+    node.adj_buffers[0].block_count_fwd = 1;
+    node.degree_fwd = 99;
+    node.storePublishedAdjIndex(0);
+
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(src));
+}
+
 test "mutation: empty block between live blocks in contiguous adjacency" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -964,6 +986,7 @@ test "mutation: degree cache survives repair" {
         var dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         dn.adj_buffers[0].first_block_rev = r;
         dn.adj_buffers[0].block_count_rev = 1;
+        dn.degree_rev = 1;
         dn.storePublishedAdjIndex(0);
     }
 
@@ -971,6 +994,7 @@ test "mutation: degree cache survives repair" {
     node.adj_buffers[0] = std.mem.zeroes(types.NodeAdj);
     node.adj_buffers[0].first_block_fwd = b0;
     node.adj_buffers[0].block_count_fwd = 2;
+    node.degree_fwd = 83;
     node.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(83, .release);
 
@@ -1053,6 +1077,9 @@ test "mutation: degree cache at overflow falls back to O(B) scan" {
     defer graph.deinit();
 
     const src = try graph.addNode();
+    for (0..65535) |_| {
+        _ = try graph.addNode();
+    }
 
     // Build 65536 edges manually (1024 blocks of 64)
     var first_block: u32 = 0;

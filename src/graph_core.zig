@@ -9,9 +9,14 @@ const types = @import("types.zig");
 pub const GraphCore = struct {
     allocator: std.mem.Allocator,
 
-    /// Node pages. 256 NodeBuffer per page (~15 KB). Never moved.
-    /// Node creation is not part of the concurrent-writer contract.
+    /// Legacy/debug mirror of node pages for tests and inspection.
+    /// Runtime lookup uses the atomic page directory below.
     node_pages: std.ArrayList([]types.NodeBuffer),
+
+    /// Atomically-published node pages for lock-free node lookup during
+    /// concurrent reads and `addNode` growth.
+    node_pages_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
 
     /// Legacy page lists kept for direct page-allocation tests and single-writer
     /// inspection. Concurrent mutation paths use the atomic page directories.
@@ -68,13 +73,9 @@ pub const GraphCore = struct {
     repair_fwd: std.ArrayList(u32),
     repair_rev: std.ArrayList(u32),
 
-    /// Total number of nodes that have been created.
-    /// Phase 1 note: non-atomic.  addNode is single-writer only;
-    /// concurrent readers must not observe a node_count increase
-    /// before the backing page is visible.  Phase 5 will make this
-    /// atomic and publish node pages via the same lock-free directory
-    /// mechanism used for edge blocks.
-    node_count: u32 = 0,
+    /// Total number of nodes that have been published.
+    /// Readers load this atomically before dereferencing a node page.
+    node_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Monotonic counters — total blocks/groups ever allocated.
     block_fwd_count: u32 = 0,
@@ -109,8 +110,17 @@ pub const GraphCore = struct {
     /// re-pushing of the retired stack under a long-running reader.
     last_reclaim_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
-    /// Rotating cursors for findRepairDebtByFlag so repeated scans do not
+    /// Rotating cursors for repair-debt scans so repeated scans do not
     /// restart from node 0 every time.
     repair_scan_cursor_fwd: u32 = 0,
     repair_scan_cursor_rev: u32 = 0,
+    repair_scan_cursor_tombstone: u32 = 0,
+
+    pub inline fn publishedNodeCount(self: *const GraphCore) u32 {
+        return self.node_count.load(.acquire);
+    }
+
+    pub inline fn hasNode(self: *const GraphCore, node: types.NodeId) bool {
+        return node.index < self.publishedNodeCount();
+    }
 };

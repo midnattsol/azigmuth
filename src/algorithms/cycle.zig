@@ -2,6 +2,7 @@ const std = @import("std");
 const graph_core = @import("../graph_core.zig");
 const types = @import("../types.zig");
 const query = @import("../query.zig");
+const node_validity = @import("../node_validity.zig");
 
 /// A frame in the iterative DFS stack used by `hasCycle`.
 const StackEntry = struct {
@@ -14,21 +15,26 @@ const StackEntry = struct {
 /// Uses an iterative DFS and materializes each frame's neighbors from a
 /// single iterator snapshot.
 pub fn hasCycle(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator) types.GraphError!bool {
-    if (graph.node_count == 0) return false;
+    const node_count = graph.publishedNodeCount();
+    if (node_count == 0) return false;
 
-    var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.node_count);
+    var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer seen.deinit(allocator);
-    var active = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.node_count);
+    var active = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer active.deinit(allocator);
 
-    var stack = try std.ArrayList(StackEntry).initCapacity(allocator, graph.node_count);
+    var stack = try std.ArrayList(StackEntry).initCapacity(allocator, node_count);
     defer {
         for (stack.items) |entry| allocator.free(entry.neighbors);
         stack.deinit(allocator);
     }
 
-    for (0..graph.node_count) |node_index| {
+    for (0..node_count) |node_index| {
         if (seen.isSet(node_index)) continue;
+        if (node_validity.isNodeRemovedIndex(graph, @intCast(node_index))) {
+            seen.set(node_index);
+            continue;
+        }
 
         seen.set(node_index);
         active.set(node_index);

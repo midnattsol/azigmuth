@@ -21,8 +21,6 @@ fn bounded24(random_state: *[4]u64, limit: u32) u32 {
     return @intCast(xoshiro256StarStar(random_state) % limit);
 }
 
-
-
 fn waitForReaders(graph: *graph_mod.Graph) void {
     var patience: usize = 10000;
     while (patience > 0 and graph.graph.active_readers.load(.acquire) > 0) {

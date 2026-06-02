@@ -184,6 +184,20 @@ test "cycle detection handles duplicate paths to completed nodes" {
     try std.testing.expectEqual(false, try cycle_mod.hasCycle(&graph.graph, std.testing.allocator));
 }
 
+test "cycle detection ignores removed nodes" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(a, b, 0, 0);
+    try graph.addEdge(b, a, 0, 0);
+    try graph.removeNode(a);
+
+    try graph.validate();
+    try std.testing.expectEqual(false, try cycle_mod.hasCycle(&graph.graph, std.testing.allocator));
+}
+
 test "cycle detection handles nodes with more than 64 outgoing edges" {
     var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();

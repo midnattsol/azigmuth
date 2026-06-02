@@ -119,3 +119,41 @@ test "oom: removeEdge induced allocation failures do not publish or retire parti
         }
     }
 }
+
+test "oom: removeNode induced allocation failures do not publish partial state" {
+    for (0..12) |failure_offset| {
+        var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
+        var graph = try graph_mod.Graph.init(failing_allocator.allocator());
+        defer graph.deinit();
+
+        const removed = try graph.addNode();
+        const destination = try graph.addNode();
+        const other_source = try graph.addNode();
+        try graph.addEdge(removed, destination, 0, 0);
+        try graph.addEdge(other_source, destination, 0, 0);
+        try expectNoDebugViolations(&graph);
+
+        failing_allocator.fail_index = failing_allocator.alloc_index + failure_offset;
+        const result = graph.removeNode(removed);
+
+        if (result) |_| {
+            try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+            try testing.expect(!graph.hasNode(removed));
+            try testing.expectEqual(@as(usize, 1), try graph.inDegree(destination));
+            try testing.expectEqual(@as(usize, 1), try graph.outDegree(other_source));
+            try graph.validate();
+            try expectNoDebugViolations(&graph);
+        } else |err| switch (err) {
+            error.OutOfMemory => {
+                try testing.expect(graph.hasNode(removed));
+                try testing.expectEqual(@as(u64, 2), graph.edgeCount());
+                try testing.expectEqual(@as(usize, 1), try graph.outDegree(removed));
+                try testing.expectEqual(@as(usize, 2), try graph.inDegree(destination));
+                try testing.expectEqual(@as(usize, 1), try graph.outDegree(other_source));
+                try graph.validate();
+                try expectNoDebugViolations(&graph);
+            },
+            else => return err,
+        }
+    }
+}

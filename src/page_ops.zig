@@ -23,12 +23,14 @@ pub inline fn makeIndex(page_index: u32, slot_index: u32, comptime entries_per_p
 
 pub fn nodeAt(graph: *graph_core.GraphCore, id: types.NodeId) *types.NodeBuffer {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    return &graph.node_pages.items[page_index][slotOf(id.index, constants.NODES_PER_PAGE)];
+    const page = loadPageMut(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
 pub fn nodeAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const types.NodeBuffer {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    return &graph.node_pages.items[page_index][slotOf(id.index, constants.NODES_PER_PAGE)];
+    const page = loadPage(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
 fn ptrFromRaw(comptime T: type, raw: usize, comptime len: usize) []T {
@@ -92,6 +94,10 @@ fn ensurePage(
         legacy_pages.append(graph.allocator, new_page) catch {};
     }
     return new_page;
+}
+
+pub fn ensureNodePage(graph: *graph_core.GraphCore, page_index: u32) ![]types.NodeBuffer {
+    return ensurePage(graph, types.NodeBuffer, graph.node_pages_pages[0..], &graph.node_pages, page_index, constants.NODES_PER_PAGE);
 }
 
 fn ensureMetaPage(graph: *graph_core.GraphCore, pages: []std.atomic.Value(usize), page_index: u32) ![]types.BlockMeta {

@@ -92,6 +92,17 @@ test "bfs returns error on invalid start node" {
     try std.testing.expectError(error.InvalidNode, bfs_mod.bfs(&graph.graph, .{ .index = 99 }, std.testing.allocator));
 }
 
+test "bfs returns error on removed start node" {
+    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    defer graph.deinit();
+
+    const start = try graph.addNode();
+    _ = try graph.addNode();
+    try graph.removeNode(start);
+
+    try std.testing.expectError(error.InvalidNode, bfs_mod.bfs(&graph.graph, start, std.testing.allocator));
+}
+
 test "bfs from isolated node returns only the start node" {
     var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
