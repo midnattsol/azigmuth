@@ -313,6 +313,9 @@ fn computeNeedsRepair(
     var needs_repair = side == .fwd and block_count > 0 and hasAnyTombstone(graph, first_block, block_count, group_count, first_group, .fwd);
 
     if (block_count <= 1) {
+        // A grouped single-block adjacency is always a canonicalization
+        // opportunity regardless of tombstones or occupancy.
+        if (group_count > 0) needs_repair = true;
         return needs_repair;
     }
 
@@ -1309,22 +1312,13 @@ fn repairNodeSideLimited(
     const first_group: u32 = if (side == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
 
     if (block_count <= 1) {
-        // Check for tombstoned edges — if the single block has edges to
-        // removed nodes, we still need to compact.
-        if (block_count == 1) {
-            const b = page_ops.edgeBlockAtConst(graph, first_block, side);
-            const live: u7 = @intCast(@popCount(b.mask));
-            var has_tombstone = false;
-            for (0..live) |slot| {
-                if (edgePointsToRemoved(graph, b, @intCast(slot), side)) {
-                    has_tombstone = true;
-                    break;
-                }
-            }
-            if (!has_tombstone) return 0;
-        } else {
-            return 0;
-        }
+        if (block_count == 0) return 0;
+        // Single block with repair debt: tombstones (detected by
+        // computeNeedsRepair) or grouped layout awaiting canonicalization
+        // (group_count > 0 — not detected by computeNeedsRepair for
+        // single blocks but the flag is already set).
+        if (!computeNeedsRepair(graph, &node_adj, side) and group_count == 0) return 0;
+        // Fall through to rebuild.
     }
 
     // Single-pass compaction with k-way merge: read sorted entries from

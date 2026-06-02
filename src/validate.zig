@@ -483,6 +483,7 @@ fn validateAdjacencyOwnershipAndLayoutFast(
 
     var group_index = firstGroup(adjacency, side);
     var visited_groups: u32 = 0;
+    var counted_blocks: u16 = 0;
     var previous_group_end: ?u32 = null;
     var chain_is_contiguous = true;
 
@@ -511,11 +512,13 @@ fn validateAdjacencyOwnershipAndLayoutFast(
         for (group.start..group.start + group.count) |block_index| {
             try validateOwnedBlockFast(graph, owned_blocks, free_blocks, retired_blocks, @intCast(block_index), side);
         }
+        counted_blocks += group.count;
 
         group_index = group.next;
     }
 
     if (visited_groups != groups) return error.CorruptGraph;
+    if (counted_blocks != count) return error.CorruptGraph;
     if (chain_is_contiguous and !needsRepairFlag(adjacency, side)) {
         if (!adjacency.flags.removed) return error.CorruptGraph;
     }
@@ -1130,7 +1133,8 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
 
     var violations: std.ArrayList(types.Violation) = .empty;
     errdefer violations.deinit(allocator);
-    var total_visible: u64 = 0;
+    var total_visible_fwd: u64 = 0;
+    var total_visible_rev: u64 = 0;
 
     var owned_forward_blocks = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire));
     defer owned_forward_blocks.deinit(allocator);
@@ -1167,6 +1171,13 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
 
         try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &forward_blocks, .fwd);
         try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &reverse_blocks, .rev);
+
+        if (forward_blocks.items.len != adjacency.block_count_fwd) {
+            try violations.append(allocator, .{ .block_count_group_mismatch = .{ .node = node_id, .declared = adjacency.block_count_fwd, .actual = @intCast(forward_blocks.items.len) } });
+        }
+        if (reverse_blocks.items.len != adjacency.block_count_rev) {
+            try violations.append(allocator, .{ .block_count_group_mismatch = .{ .node = node_id, .declared = adjacency.block_count_rev, .actual = @intCast(reverse_blocks.items.len) } });
+        }
 
         if (adjacency.group_count_fwd > 0) {
             var group_idx = adjacency.first_group_fwd;
@@ -1214,7 +1225,10 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
 
         if (!adjacency.flags.removed) {
             for (forward_blocks.items) |block| {
-                total_visible += countVisibleEntriesInBlock(graph, block.block_index, .fwd);
+                total_visible_fwd += countVisibleEntriesInBlock(graph, block.block_index, .fwd);
+            }
+            for (reverse_blocks.items) |block| {
+                total_visible_rev += countVisibleEntriesInBlock(graph, block.block_index, .rev);
             }
         }
 
@@ -1292,8 +1306,11 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         }
     }
 
-    if (total_visible != graph.edge_count.load(.acquire)) {
-        try violations.append(allocator, .{ .edge_count_mismatch = .{ .expected = total_visible, .actual = graph.edge_count.load(.acquire) } });
+    if (total_visible_fwd != total_visible_rev) {
+        try violations.append(allocator, .{ .forward_reverse_count_mismatch = .{ .forward_total = total_visible_fwd, .reverse_total = total_visible_rev } });
+    }
+    if (total_visible_fwd != graph.edge_count.load(.acquire)) {
+        try violations.append(allocator, .{ .edge_count_mismatch = .{ .expected = total_visible_fwd, .actual = graph.edge_count.load(.acquire) } });
     }
 
     return violations.toOwnedSlice(allocator);

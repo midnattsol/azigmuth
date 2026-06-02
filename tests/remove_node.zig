@@ -131,3 +131,33 @@ test "removeNode: returns InvalidNode for out-of-bounds index" {
     _ = try graph.addNode();
     try testing.expectError(error.InvalidNode, graph.removeNode(.{ .index = 999 }));
 }
+
+test "removeNode: predecessor forward tombstone debt flag IS set immediately" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, 0);
+
+    try graph.removeNode(target);
+    try graph.validate();
+
+    // After removeNode, the source's forward adjacency still contains
+    // a tombstoned reference to target (structurally).  That is repair
+    // debt and MUST be flagged immediately so repairBudgeted can find it.
+    const source_adj = (try graph.nodeAtConst(source)).publishedAdj();
+    try testing.expect(source_adj.flags.needs_repair_fwd);
+
+    // The tombstoned edge is excluded from the public logical graph.
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+
+    // repairBudgeted discovers and compacts the tombstone, clearing the flag.
+    _ = try graph.repairBudgeted(1);
+    try graph.validate();
+
+    const after = (try graph.nodeAtConst(source)).publishedAdj();
+    try testing.expect(!after.flags.needs_repair_fwd);
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+}

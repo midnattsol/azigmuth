@@ -242,6 +242,84 @@ test "validation: detects invalid repair debt entries" {
     try testing.expect(containsViolation(violations, .repair_debt_invalid_node));
 }
 
+test "validation: grouped block_count mismatch vs sum of group.count is detected" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 5);
+
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    fillBlockWithDst(&graph, b0, 1, 1);
+    fillBlockWithDst(&graph, b1, 2, 1);
+
+    const g0 = try graph.allocGroup();
+    // Single group covering 2 physically contiguous blocks.
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 2, .next = constants.END_OF_CHAIN };
+
+    // Reverse adjacency for both destinations so forward/reverse consistency passes.
+    const rb0 = try graph.allocBlockRev();
+    const rb1 = try graph.allocBlockRev();
+    page_ops.edgeBlockAt(&graph.graph, rb0, .rev).sources[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, rb0, .rev).mask = constants.denseMask(1);
+    page_ops.edgeBlockAt(&graph.graph, rb1, .rev).sources[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, rb1, .rev).mask = constants.denseMask(1);
+    {
+        const d1 = try graph.nodeAt(.{ .index = 1 });
+        helpers.clearPublishedSides(d1);
+        helpers.publishedRevSide(d1).first_block = rb0;
+        helpers.publishedRevSide(d1).block_count = 1;
+        d1.degree_rev = 1;
+    }
+    {
+        const d2 = try graph.nodeAt(.{ .index = 2 });
+        helpers.clearPublishedSides(d2);
+        helpers.publishedRevSide(d2).first_block = rb1;
+        helpers.publishedRevSide(d2).block_count = 1;
+        d2.degree_rev = 1;
+    }
+
+    const node = try graph.nodeAt(.{ .index = 0 });
+    helpers.clearPublishedSides(node);
+    // block_count says 1, but the chain spans 2 blocks.
+    helpers.publishedFwdSide(node).first_block = b0;
+    helpers.publishedFwdSide(node).block_count = 1;
+    helpers.publishedFwdSide(node).group_count = 1;
+    helpers.publishedFwdSide(node).first_group = g0;
+    node.degree_fwd = 2;
+    graph.graph.edge_count.store(2, .release);
+
+    // validate() must now detect this mismatch.
+    try testing.expectError(error.CorruptGraph, graph.validate());
+}
+
+fn fillBlockWithDst(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u7) void {
+    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
+    for (0..count) |i| {
+        block.edges[i] = .{ .destination = first_dst + @as(u32, @intCast(i)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    block.mask = constants.denseMask(count);
+}
+
+test "validation: removed node entry in repair queue is currently accepted" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, 0);
+    try graph.removeNode(target);
+
+    try graph.graph.repair_fwd.append(graph.graph.allocator, target.index);
+
+    // Current semantics: validate does not reject in-range-but-removed queue entries.
+    try graph.validate();
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(!containsViolation(violations, .repair_debt_invalid_node));
+}
+
 test "validation: detects degree cache mismatch in fast validate" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

@@ -157,3 +157,39 @@ test "validation: debugValidate emits degree_mismatch when cached degree diverge
     try testing.expect(saw_fwd);
     try testing.expect(saw_rev);
 }
+
+test "validation: debugValidate detects forward/reverse visible count mismatch" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    const c = try graph.addNode();
+
+    try graph.addEdge(a, b, 0, 0);
+    try graph.addEdge(c, b, 0, 0);
+    try graph.validate();
+
+    const b_node = try graph.nodeAt(b);
+    const b_adj = b_node.publishedAdj();
+    const rev_block = page_ops.edgeBlockAt(&graph.graph, b_adj.first_block_rev, .rev);
+    const live: u7 = @intCast(@popCount(rev_block.mask));
+
+    // Duplicate the first source entry to create 3 reverse but only 2 forward.
+    if (live < 64) {
+        const dup_source = rev_block.sources[0];
+        rev_block.sources[live] = dup_source;
+        rev_block.mask = constants.denseMask(@intCast(live + 1));
+    }
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(hasViolationTag(violations, .forward_reverse_count_mismatch));
+
+    for (violations) |v| {
+        if (v == .forward_reverse_count_mismatch) {
+            try testing.expectEqual(@as(u64, 2), v.forward_reverse_count_mismatch.forward_total);
+            try testing.expectEqual(@as(u64, 3), v.forward_reverse_count_mismatch.reverse_total);
+        }
+    }
+}

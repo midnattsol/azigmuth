@@ -515,6 +515,18 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
 
     publishBothAdj(source_node, source_staging_adj);
 
+    // With the target node now marked removed, recompute forward repair debt
+    // on each live predecessor.  Their forward adjacency still contains a
+    // tombstoned reference that needs compaction, and the flag makes it
+    // immediately discoverable by repairBudgeted.
+    // Also recover exact degree cache if it was previously saturated.
+    for (destination_updates.items) |update| {
+        if (update.decrement_visible_fwd) {
+            repair.updateRepairDebtSide(graph, update.node_buffer, update.node_index, .fwd);
+            common.recomputeDegreeIfOverflow(graph, &update.node_buffer.degree_fwd, update.node_index, .fwd);
+        }
+    }
+
     for (destination_updates.items) |update| {
         if (update.needs_reverse_retire) {
             try retireAdjacencySide(graph, update.published_adj_before, .rev);

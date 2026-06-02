@@ -577,6 +577,8 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     common.decrementDegree(&source_node.degree_fwd);
     common.decrementDegree(&destination_node.degree_rev);
+    common.recomputeDegreeIfOverflow(graph, &source_node.degree_fwd, source.index, .fwd);
+    common.recomputeDegreeIfOverflow(graph, &destination_node.degree_rev, destination.index, .rev);
 
     try rcu.retireBlockFwd(graph, forward_build.old_block);
     try rcu.retireBlockRev(graph, reverse_build.old_block);

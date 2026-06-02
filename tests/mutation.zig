@@ -1101,3 +1101,27 @@ test "mutation: degree cache at overflow falls back to O(B) scan" {
     try testing.expectEqual(@as(usize, 65536), try graph.outDegree(src));
     try testing.expectEqual(constants.DEGREE_OVERFLOW, node.degree_fwd);
 }
+
+test "mutation: degree cache recovers exact value after decrement from overflow" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const dst1 = try graph.addNode();
+    const dst2 = try graph.addNode();
+    try graph.addEdge(src, dst1, 0, 0);
+    try graph.addEdge(src, dst2, 0, 0);
+
+    // Simulate a node whose degree cache previously overflowed.
+    var node = try graph.nodeAt(src);
+    node.degree_fwd = constants.DEGREE_OVERFLOW;
+
+    // removeEdge must recover the exact degree from overflow rather than
+    // leaving the cache sticky.
+    try testing.expect(try graph.removeEdge(src, dst1));
+    try graph.validate();
+
+    try testing.expectEqual(@as(u16, 1), node.degree_fwd);
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(src));
+    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+}

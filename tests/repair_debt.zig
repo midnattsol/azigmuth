@@ -413,3 +413,46 @@ test "repair debt: repairBudgeted skips removed queue entries and still compacts
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
 }
+
+test "repair debt: repairNode canonicalizes single-block grouped contiguous adjacency" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodesForTest(&graph, 3);
+
+    const b0 = try graph.allocBlockFwd();
+    fillBlock(&graph, b0, 1, 1);
+
+    const g0 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
+
+    // Reverse backlink so forward/reverse consistency holds.
+    const rb = try graph.allocBlockRev();
+    page_ops.edgeBlockAt(&graph.graph, rb, .rev).sources[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, rb, .rev).mask = constants.denseMask(1);
+    {
+        const d1 = try graph.nodeAt(.{ .index = 1 });
+        helpers.clearPublishedSides(d1);
+        helpers.publishedRevSide(d1).first_block = rb;
+        helpers.publishedRevSide(d1).block_count = 1;
+        d1.degree_rev = 1;
+    }
+
+    const node = try graph.nodeAt(.{ .index = 0 });
+    helpers.clearPublishedSides(node);
+    helpers.publishedFwdSide(node).first_block = b0;
+    helpers.publishedFwdSide(node).block_count = 1;
+    helpers.publishedFwdSide(node).group_count = 1;
+    helpers.publishedFwdSide(node).first_group = g0;
+    node.degree_fwd = 1;
+    helpers.setPublishedFlags(node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    graph.graph.edge_count.store(1, .release);
+
+    try graph.repairNode(.{ .index = 0 });
+    try graph.validate();
+
+    const repaired = (try graph.nodeAtConst(.{ .index = 0 })).publishedAdj();
+    try testing.expectEqual(@as(u16, 0), repaired.group_count_fwd);
+    try testing.expectEqual(@as(u16, 1), repaired.block_count_fwd);
+    try testing.expect(!repaired.flags.needs_repair_fwd);
+}

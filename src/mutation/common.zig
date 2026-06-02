@@ -8,6 +8,7 @@ const types = @import("../types.zig");
 const page_ops = @import("../page_ops.zig");
 const adjacency = @import("../adjacency.zig");
 const rcu = @import("../rcu.zig");
+const node_validity = @import("../node_validity.zig");
 
 /// Increment the degree cache.  Caller must hold the writer claim.
 pub fn incrementDegree(deg: *u16) void {
@@ -19,6 +20,65 @@ pub fn incrementDegree(deg: *u16) void {
 /// `DEGREE_OVERFLOW` so callers fall back to the O(B) scan.
 pub fn decrementDegree(deg: *u16) void {
     if (deg.* > 0 and deg.* < constants.DEGREE_OVERFLOW) deg.* -= 1 else deg.* = constants.DEGREE_OVERFLOW;
+}
+
+/// When a mutation drops the logical edge count of a side that was
+/// previously at overflow, recompute the exact visible degree and
+/// store it in `deg`.  Caller must hold the writer claim for that side.
+pub fn recomputeDegreeIfOverflow(
+    graph: *const graph_core.GraphCore,
+    deg: *u16,
+    node_index: u32,
+    comptime side: adjacency.AdjSide,
+) void {
+    if (deg.* != constants.DEGREE_OVERFLOW) return;
+
+    const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_index });
+    const adj = node_buffer.publishedAdj();
+
+    const block_count: u16 = if (side == .fwd) adj.block_count_fwd else adj.block_count_rev;
+    if (block_count == 0) {
+        deg.* = 0;
+        return;
+    }
+
+    var total: usize = 0;
+    const first_block: u32 = if (side == .fwd) adj.first_block_fwd else adj.first_block_rev;
+    const group_count: u16 = if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
+    const first_group: u32 = if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
+
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |block_idx| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
+            const live = @popCount(block.mask);
+            for (0..live) |slot| {
+                const candidate = switch (side) {
+                    .fwd => block.edges[slot].destination,
+                    .rev => block.sources[slot],
+                };
+                if (node_validity.isNodeLiveIndex(graph, candidate)) total += 1;
+            }
+        }
+    } else {
+        var group_idx = first_group;
+        while (group_idx != constants.END_OF_CHAIN) {
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
+                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
+                const live = @popCount(block.mask);
+                for (0..live) |slot| {
+                    const candidate = switch (side) {
+                        .fwd => block.edges[slot].destination,
+                        .rev => block.sources[slot],
+                    };
+                    if (node_validity.isNodeLiveIndex(graph, candidate)) total += 1;
+                }
+            }
+            group_idx = group.next;
+        }
+    }
+
+    deg.* = if (total < constants.DEGREE_OVERFLOW) @intCast(total) else constants.DEGREE_OVERFLOW;
 }
 
 /// Tracks which adjacency claims were successfully acquired during a mutation,
