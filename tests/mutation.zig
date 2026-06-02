@@ -1069,11 +1069,11 @@ test "mutation: degree cache at overflow falls back to O(B) scan" {
     var node = try graph.nodeAt(src);
     node.adj_buffers[0].first_block_fwd = first_block;
     node.adj_buffers[0].block_count_fwd = 1024;
-    @atomicStore(u16, &node.degree_fwd, constants.DEGREE_OVERFLOW, .release);
+    node.degree_fwd = constants.DEGREE_OVERFLOW;
     node.storePublishedAdjIndex(0);
     graph.graph.edge_count.store(65536, .release);
 
     // Cache is at DEGREE_OVERFLOW → O(B) scan must return the real count
     try testing.expectEqual(@as(usize, 65536), try graph.outDegree(src));
-    try testing.expectEqual(constants.DEGREE_OVERFLOW, @atomicLoad(u16, &node.degree_fwd, .acquire));
+    try testing.expectEqual(constants.DEGREE_OVERFLOW, node.degree_fwd);
 }

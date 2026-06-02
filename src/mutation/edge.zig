@@ -408,9 +408,9 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     try applyPreparedAppend(graph, destination_stage.staging_adj, reverse_prepared, .rev);
     insertReverseEdge(graph, reverse_prepared.new_block, source);
 
-    publishEndpoints(source_node, destination_node, source, destination);
     common.incrementDegree(&source_node.degree_fwd);
     common.incrementDegree(&destination_node.degree_rev);
+    publishEndpoints(source_node, destination_node, source, destination);
 
     if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
     if (reverse_prepared.old_block) |old_block| try rcu.retireBlockRev(graph, old_block);
@@ -484,9 +484,9 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     repair.updateRepairDebt(graph, source_staging_adj, source.index, .fwd);
     repair.updateRepairDebt(graph, destination_staging_adj, destination.index, .rev);
-    publishEndpoints(source_node, destination_node, source, destination);
     common.decrementDegree(&source_node.degree_fwd);
     common.decrementDegree(&destination_node.degree_rev);
+    publishEndpoints(source_node, destination_node, source, destination);
     old_forward_groups.retire(graph);
     old_reverse_groups.retire(graph);
 

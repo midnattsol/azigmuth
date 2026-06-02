@@ -711,6 +711,16 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         // RFC §3.2: at most MAX_GROUPS_PER_NODE runs without repair.
         if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) return error.CorruptGraph;
         if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) return error.CorruptGraph;
+
+        // RFC: canonical representation — all-contiguous must use group_count==0.
+        if (adjacency.group_count_fwd == 1 and !adjacency.flags.needs_repair_fwd) {
+            const grp = page_ops.groupAtConst(graph, adjacency.first_group_fwd);
+            if (grp.start == adjacency.first_block_fwd and grp.count == adjacency.block_count_fwd) return error.CorruptGraph;
+        }
+        if (adjacency.group_count_rev == 1 and !adjacency.flags.needs_repair_rev) {
+            const grp = page_ops.groupAtConst(graph, adjacency.first_group_rev);
+            if (grp.start == adjacency.first_block_rev and grp.count == adjacency.block_count_rev) return error.CorruptGraph;
+        }
     }
 
     if (total_forward != total_reverse) return error.CorruptGraph;
@@ -761,8 +771,8 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
 
         // RFC §2.5: degree cache consistency.
         const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
-        const cached_fwd: usize = @atomicLoad(u16, &node_buffer.degree_fwd, .acquire);
-        const cached_rev: usize = @atomicLoad(u16, &node_buffer.degree_rev, .acquire);
+        const cached_fwd: usize = node_buffer.degree_fwd;
+        const cached_rev: usize = node_buffer.degree_rev;
         const live_fwd: usize = if (forward_blocks.items.len > 0) blk: {
             var s: usize = 0;
             for (forward_blocks.items) |b| s += @popCount(blockMask(graph, b.block_index, .fwd));

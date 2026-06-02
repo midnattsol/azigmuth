@@ -69,6 +69,11 @@ pub const GraphCore = struct {
     repair_rev: std.ArrayList(u32),
 
     /// Total number of nodes that have been created.
+    /// Phase 1 note: non-atomic.  addNode is single-writer only;
+    /// concurrent readers must not observe a node_count increase
+    /// before the backing page is visible.  Phase 5 will make this
+    /// atomic and publish node pages via the same lock-free directory
+    /// mechanism used for edge blocks.
     node_count: u32 = 0,
 
     /// Monotonic counters — total blocks/groups ever allocated.

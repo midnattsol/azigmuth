@@ -83,8 +83,8 @@ fn clearForwardAdjacencyAndMarkRemoved(graph: *graph_core.GraphCore, node: types
     staging_adj.group_count_fwd = 0;
     staging_adj.first_group_fwd = 0;
     staging_adj.flags.removed = true;
+    node_buffer.degree_fwd = 0;
     node_buffer.publishStagingAdj();
-    @atomicStore(u16, &node_buffer.degree_fwd, 0, .release);
     if (old_first_group_fwd) |first_group| common.retireGroupChain(graph, first_group, old_group_count_fwd);
     writer_guard.end();
 }
@@ -188,8 +188,8 @@ fn removeReverseSlot(
 
     // Self-edges: forward adjacency was already published in the caller;
     // the reverse side here operates on the same node buffer, so publish.
-    destination_node.publishStagingAdj();
     common.decrementDegree(&destination_node.degree_rev);
+    destination_node.publishStagingAdj();
     if (old_first_group_rev) |first_group| common.retireGroupChain(graph, first_group, old_group_count_rev);
 
     _ = graph.edge_count.fetchSub(1, .monotonic);

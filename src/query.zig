@@ -254,14 +254,18 @@ fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comp
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (node.index >= graph.node_count) return error.InvalidNode;
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const deg = @atomicLoad(u16, &node_buffer.degree_fwd, .acquire);
-    if (deg < constants.DEGREE_OVERFLOW) {
-        // Degree cache is trusted only when it agrees with the existence
-        // of forward blocks.  Tests that build adjacencies by hand leave
-        // the cache at zero; we detect the mismatch and fall back.
-        if (deg > 0 or node_buffer.publishedAdj().block_count_fwd == 0) return deg;
+    // Lightweight seqlock: degree read between two claim checks.
+    // If the claim is held the writer may be mid-mutation → scan.
+    if (node_buffer.fwd_claim.load(.acquire) == 0) {
+        const deg = node_buffer.degree_fwd;
+        if (node_buffer.fwd_claim.load(.acquire) == 0) {
+            if (deg < constants.DEGREE_OVERFLOW) {
+                if (deg > 0) return deg;
+                // Cold cache: only trust zero if no blocks exist.
+                if (node_buffer.publishedAdj().block_count_fwd == 0) return 0;
+            }
+        }
     }
-    // Overflow or cache mismatch: fall back to scanning blocks.
     const reader_token = rcu.readerEnter(@constCast(graph));
     defer rcu.readerExit(@constCast(graph), reader_token);
     return sumPopCount(graph, node_buffer.publishedAdj(), .fwd);
@@ -270,11 +274,15 @@ pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.G
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (node.index >= graph.node_count) return error.InvalidNode;
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const deg = @atomicLoad(u16, &node_buffer.degree_rev, .acquire);
-    if (deg < constants.DEGREE_OVERFLOW) {
-        if (deg > 0 or node_buffer.publishedAdj().block_count_rev == 0) return deg;
+    if (node_buffer.rev_claim.load(.acquire) == 0) {
+        const deg = node_buffer.degree_rev;
+        if (node_buffer.rev_claim.load(.acquire) == 0) {
+            if (deg < constants.DEGREE_OVERFLOW) {
+                if (deg > 0) return deg;
+                if (node_buffer.publishedAdj().block_count_rev == 0) return 0;
+            }
+        }
     }
-    // Overflow or cache mismatch: fall back to scanning blocks.
     const reader_token = rcu.readerEnter(@constCast(graph));
     defer rcu.readerExit(@constCast(graph), reader_token);
     return sumPopCount(graph, node_buffer.publishedAdj(), .rev);

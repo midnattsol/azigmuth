@@ -249,8 +249,8 @@ pub const Graph = struct {
         return repair.repairNode(&self.graph, node);
     }
 
-    pub fn repairBudgeted(self: *Graph, max_steps: usize) GraphError!usize {
-        return repair.repairBudgeted(&self.graph, max_steps);
+    pub fn repairBudgeted(self: *Graph, max_nodes: usize) GraphError!usize {
+        return repair.repairBudgeted(&self.graph, max_nodes);
     }
 
     // ── Mutation ──────────────────────────────────────────────────────
@@ -485,7 +485,7 @@ pub const GraphBuilder = struct {
                     }
                 }
             }
-            @atomicStore(u16, &node_buffer.degree_fwd, if (fwd < constants.DEGREE_OVERFLOW) @intCast(fwd) else constants.DEGREE_OVERFLOW, .release);
+            node_buffer.degree_fwd = if (fwd < constants.DEGREE_OVERFLOW) @intCast(fwd) else constants.DEGREE_OVERFLOW;
 
             var rev: usize = 0;
             if (adj.block_count_rev > 0) {
@@ -505,7 +505,7 @@ pub const GraphBuilder = struct {
                     }
                 }
             }
-            @atomicStore(u16, &node_buffer.degree_rev, if (rev < constants.DEGREE_OVERFLOW) @intCast(rev) else constants.DEGREE_OVERFLOW, .release);
+            node_buffer.degree_rev = if (rev < constants.DEGREE_OVERFLOW) @intCast(rev) else constants.DEGREE_OVERFLOW;
         }
     }
 

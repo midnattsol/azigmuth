@@ -770,12 +770,12 @@ fn repairNodeSideLimited(
     }
 
     updateRepairDebt(graph, staging_adj, node.index, side);
-    node_mut.publishStagingAdj();
     if (side == .fwd) {
-        @atomicStore(u16, &node_mut.degree_fwd, if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW, .release);
+        node_mut.degree_fwd = if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW;
     } else {
-        @atomicStore(u16, &node_mut.degree_rev, if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW, .release);
+        node_mut.degree_rev = if (total_live < constants.DEGREE_OVERFLOW) @intCast(total_live) else constants.DEGREE_OVERFLOW;
     }
+    node_mut.publishStagingAdj();
     return 1;
 }
 
@@ -800,27 +800,28 @@ pub fn repairNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     }
 }
 
-/// Run up to `max_steps` repair operations across the repair debt queue.
-/// Returns the number of block-pair compactions performed.
-pub fn repairBudgeted(graph: *graph_core.GraphCore, max_steps: usize) !usize {
+/// Run up to `max_nodes` repair operations across the repair debt queue.
+/// Each operation rebuilds one side of one node (O(B) for that node).
+/// Returns the number of nodes repaired.
+pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     var total_compacted: usize = 0;
 
     // Process forward repair debt. Prefer the single-writer queue when it is
     // available, but fall back to scanning published flags so concurrent
     // writers do not need a global queue lock.
-    while (total_compacted < max_steps) {
+    while (total_compacted < max_nodes) {
         const node_index = popRepairDebtBestEffort(graph, .fwd) orelse findRepairDebtByFlag(graph, .fwd) orelse break;
-        const remaining_steps = max_steps - total_compacted;
-        const compacted = try repairNodeSideLimited(graph, .{ .index = node_index }, .fwd, remaining_steps);
+        const remaining = max_nodes - total_compacted;
+        const compacted = try repairNodeSideLimited(graph, .{ .index = node_index }, .fwd, remaining);
         total_compacted += compacted;
         if (compacted == 0) continue;
     }
 
     // Process reverse repair debt.
-    while (total_compacted < max_steps) {
+    while (total_compacted < max_nodes) {
         const node_index = popRepairDebtBestEffort(graph, .rev) orelse findRepairDebtByFlag(graph, .rev) orelse break;
-        const remaining_steps = max_steps - total_compacted;
-        const compacted = try repairNodeSideLimited(graph, .{ .index = node_index }, .rev, remaining_steps);
+        const remaining = max_nodes - total_compacted;
+        const compacted = try repairNodeSideLimited(graph, .{ .index = node_index }, .rev, remaining);
         total_compacted += compacted;
         if (compacted == 0) continue;
     }
