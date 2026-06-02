@@ -24,7 +24,7 @@ pub const NodeFlags = packed struct(u32) {
     _reserved: u29 = 0,
 };
 
-/// Edge-level boolean flags. 16 bits packed alongside relation and dst.
+/// Edge-level boolean flags. 16 bits packed alongside relation and destination.
 /// Unused in v0; reserved for future features (pinned, hidden, traversed...).
 pub const EdgeFlags = packed struct(u16) {
     _unused: u16 = 0,
@@ -43,7 +43,6 @@ pub const Edge = packed struct {
 
 /// Describes where the node's forward and reverse edge blocks live,
 /// how many there are, and whether they are contiguous or grouped.
-/// `degree` is NOT stored — it is computed from `@popCount(block.mask)`.
 /// 28 bytes, naturally aligned (no padding).
 pub const NodeAdj = extern struct {
     first_block_fwd: u32,
@@ -76,9 +75,12 @@ pub const NodeBuffer = extern struct {
     /// Double-buffered adjacency headers.
     adj_buffers: [2]NodeAdj,
 
-    /// Explicit padding so each NodeBuffer occupies exactly one 64-byte cache line
-    /// when stored in the node page array.
-    _cache_pad: [4]u8 = [_]u8{0} ** 4,
+    /// Cached forward / reverse degree.  Updated under the writer claim
+    /// immediately after publishing so that `outDegree` / `inDegree` are
+    /// O(1) for nodes with fewer than 65535 edges.  The sentinel 0xFFFF
+    /// signals overflow; the query layer falls back to an O(B) scan.
+    degree_fwd: u16 = 0,
+    degree_rev: u16 = 0,
 
     pub fn loadPublishedAdjIndex(self: *const NodeBuffer) u1 {
         const raw = self.published_adj_index_raw.load(.acquire);
@@ -118,7 +120,7 @@ pub const NodeBuffer = extern struct {
 
 /// 64 outgoing edges (520 bytes). Dense storage: live entries occupy
 /// slots [0, live_count) with no holes. `mask = denseMask(live_count)`.
-/// Sorted by dest for binary-search lookup. Iteration via `@ctz(mask)` +
+/// Sorted by destination for binary-search lookup. Iteration via `@ctz(mask)` +
 /// `mask &= mask - 1` with zero branches.
 pub const EdgeBlockFwd = struct {
     mask: u64,

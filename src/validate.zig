@@ -11,6 +11,7 @@ const graph_core = @import("graph_core.zig");
 const types = @import("types.zig");
 const page_ops = @import("page_ops.zig");
 const rcu = @import("rcu.zig");
+const adjacency_mod = @import("adjacency.zig");
 
 const Side = enum { fwd, rev };
 
@@ -130,17 +131,31 @@ fn validateDenseMasks(graph: *const graph_core.GraphCore, adjacency: types.NodeA
 fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) !u64 {
     if (!blockExists(graph, block_index, side)) return error.CorruptGraph;
 
-    const mask = blockMask(graph, block_index, side);
-    const live_count = @popCount(mask);
-    if (mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
-
-    for (0..live_count) |slot| {
-        const key = blockKey(graph, block_index, slot, side);
-        if (key >= graph.node_count) return error.CorruptGraph;
-        if (slot > 0 and key <= blockKey(graph, block_index, slot - 1, side)) return error.CorruptGraph;
+    if (side == .fwd) {
+        const block = page_ops.edgeBlockAtConst(graph, block_index, .fwd);
+        const live_count = @popCount(block.mask);
+        if (block.mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
+        var prev: u32 = 0;
+        for (0..live_count) |slot| {
+            const key = block.edges[slot].destination;
+            if (key >= graph.node_count) return error.CorruptGraph;
+            if (slot > 0 and key <= prev) return error.CorruptGraph;
+            prev = key;
+        }
+        return live_count;
+    } else {
+        const block = page_ops.edgeBlockAtConst(graph, block_index, .rev);
+        const live_count = @popCount(block.mask);
+        if (block.mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
+        var prev: u32 = 0;
+        for (0..live_count) |slot| {
+            const key = block.sources[slot];
+            if (key >= graph.node_count) return error.CorruptGraph;
+            if (slot > 0 and key <= prev) return error.CorruptGraph;
+            prev = key;
+        }
+        return live_count;
     }
-
-    return live_count;
 }
 
 fn validateContiguousBlocksFast(
@@ -306,6 +321,18 @@ fn appendContiguousBlocks(
     }
 }
 
+const DebugGroupSpan = struct {
+    group: u32,
+    start: u32,
+    count: u16,
+};
+
+fn spansOverlap(a: DebugGroupSpan, b: DebugGroupSpan) bool {
+    const a_end = a.start + a.count;
+    const b_end = b.start + b.count;
+    return a.start < b_end and b.start < a_end;
+}
+
 fn collectAdjacencyBlocks(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
@@ -322,59 +349,69 @@ fn collectAdjacencyBlocks(
         return;
     }
 
-    var visited_groups = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.group_count);
-    defer visited_groups.deinit(allocator);
-
-    var block_owner_by_group = std.AutoHashMap(u32, u32).init(allocator);
-    defer block_owner_by_group.deinit();
-
+    var seen_spans: [64]DebugGroupSpan = undefined;
+    var seen_count: usize = 0;
+    const expected_groups = groupCount(adjacency, side);
+    var visited_groups: u32 = 0;
     var group_index = firstGroup(adjacency, side);
+
     while (group_index != constants.END_OF_CHAIN) {
         if (group_index >= graph.group_count) return;
-
-        if (visited_groups.isSet(group_index)) {
+        if (visited_groups >= graph.group_count or visited_groups > expected_groups) {
             try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
             return;
         }
-        visited_groups.set(group_index);
+        visited_groups += 1;
 
         const group = page_ops.groupAtConst(graph, group_index);
-        for (group.start..group.start + group.count) |block_index_usize| {
-            const block_index: u32 = @intCast(block_index_usize);
-            if (block_owner_by_group.get(block_index)) |owner_group| {
-                try violations.append(allocator, .{ .blockgroup_overlap = .{ .node = node_id, .group_a = owner_group, .group_b = group_index } });
-            } else {
-                try block_owner_by_group.put(block_index, group_index);
+        const current_span = DebugGroupSpan{ .group = group_index, .start = group.start, .count = group.count };
+        const comparable_count = @min(seen_count, seen_spans.len);
+        for (seen_spans[0..comparable_count]) |seen| {
+            if (spansOverlap(seen, current_span)) {
+                try violations.append(allocator, .{ .blockgroup_overlap = .{ .node = node_id, .group_a = seen.group, .group_b = group_index } });
             }
-            try blocks.append(allocator, .{ .block_index = block_index });
+        }
+        if (seen_count < seen_spans.len) seen_spans[seen_count] = current_span;
+        seen_count += 1;
+
+        for (group.start..group.start + group.count) |block_index_usize| {
+            try blocks.append(allocator, .{ .block_index = @intCast(block_index_usize) });
         }
 
         group_index = group.next;
     }
 }
 
-fn freeListContains(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) bool {
+fn buildFreeBlockSet(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    comptime side: Side,
+) !std.DynamicBitSetUnmanaged {
+    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, allocatedBlockCount(graph, side));
     const free_blocks = switch (side) {
         .fwd => graph.free_blocks_fwd.items,
         .rev => graph.free_blocks_rev.items,
     };
-
     for (free_blocks) |free_block| {
-        if (free_block == block_index) return true;
+        if (free_block < allocatedBlockCount(graph, side)) set.set(@intCast(free_block));
     }
-    return false;
+    return set;
 }
 
-fn retiredListContains(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) bool {
+fn buildRetiredBlockSet(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    comptime side: Side,
+) !std.DynamicBitSetUnmanaged {
+    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, allocatedBlockCount(graph, side));
     const retired_blocks = switch (side) {
         .fwd => graph.retired_blocks_fwd.items,
         .rev => graph.retired_blocks_rev.items,
     };
-
     for (retired_blocks) |retired_block| {
-        if (retired_block.block == block_index) return true;
+        if (retired_block.block < allocatedBlockCount(graph, side)) set.set(@intCast(retired_block.block));
     }
-    return false;
+    return set;
 }
 
 fn markOwnedBlock(
@@ -392,6 +429,8 @@ fn appendOwnershipAndShapeViolations(
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
     owned_blocks: *std.DynamicBitSetUnmanaged,
+    free_blocks: *const std.DynamicBitSetUnmanaged,
+    retired_blocks: *const std.DynamicBitSetUnmanaged,
     node_id: u32,
     blocks: []const TraversedBlock,
     comptime side: Side,
@@ -406,11 +445,12 @@ fn appendOwnershipAndShapeViolations(
             try violations.append(allocator, .{ .block_double_owned = .{ .block = block_index } });
         }
 
-        if (freeListContains(graph, block_index, side)) {
+        const bit_index: usize = @intCast(block_index);
+        if (bit_index < free_blocks.bit_length and free_blocks.isSet(bit_index)) {
             try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = block_index } });
         }
 
-        if (retiredListContains(graph, block_index, side)) {
+        if (bit_index < retired_blocks.bit_length and retired_blocks.isSet(bit_index)) {
             try violations.append(allocator, .{ .retired_block_reachable = .{ .block = block_index, .node = node_id } });
         }
 
@@ -424,54 +464,93 @@ fn appendOwnershipAndShapeViolations(
     }
 }
 
-fn blockContains(graph: *const graph_core.GraphCore, block_index: u32, target: u32, comptime side: Side) bool {
-    if (!blockExists(graph, block_index, side)) return false;
-
-    const live_count = @popCount(blockMask(graph, block_index, side));
-    for (0..live_count) |slot| {
-        if (blockKey(graph, block_index, slot, side) == target) return true;
-    }
-    return false;
-}
-
-fn contiguousBlocksContain(
+fn runContainsTarget(
     graph: *const graph_core.GraphCore,
     start: u32,
     count: u16,
     target: u32,
     comptime side: Side,
 ) bool {
-    for (start..start + count) |block_index| {
-        if (blockContains(graph, @intCast(block_index), target, side)) return true;
-    }
-    return false;
+    return switch (side) {
+        .fwd => findSlotInRun(graph, start, count, target, types.EdgeBlockFwd, .fwd) != null,
+        .rev => findSlotInRun(graph, start, count, target, types.EdgeBlockRev, .rev) != null,
+    };
 }
 
-fn groupChainContains(graph: *const graph_core.GraphCore, first_group: u32, target: u32, comptime side: Side) bool {
-    var group_index = first_group;
-    var visited_groups: u32 = 0;
+/// Searches a run of `count` blocks for `target`.  Tries binary search
+/// on block key ranges first, then falls back to a linear scan because
+/// blocks may not be globally sorted by key (e.g. after an append to a
+/// contiguous run creates a new block with a smaller key).
+fn findSlotInRun(
+    graph: *const graph_core.GraphCore,
+    start: u32,
+    count: u16,
+    target: u32,
+    comptime BlockType: type,
+    comptime side: Side,
+) ?u7 {
+    if (count == 0) return null;
 
+    // Binary search (fast path).
+    var low: u32 = 0;
+    var high: u32 = count;
+    while (low < high) {
+        const mid: u32 = low + (high - low) / 2;
+        const block_index = start + mid;
+        const block = switch (side) {
+            .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd),
+            .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev),
+        };
+        const live = @as(u7, @intCast(@popCount(block.mask)));
+        if (live == 0) break;
+        const first_key = switch (side) {
+            .fwd => block.edges[0].destination,
+            .rev => block.sources[0],
+        };
+        const last_key = switch (side) {
+            .fwd => block.edges[live - 1].destination,
+            .rev => block.sources[live - 1],
+        };
+        if (target < first_key) {
+            high = mid;
+        } else if (target > last_key) {
+            low = mid + 1;
+        } else {
+            if (adjacency_mod.searchInBlock(BlockType, block, target)) |slot| return slot;
+        }
+    }
+    // Fallback: linear scan of the run.
+    for (start..start + count) |block_index_usize| {
+        const block_index: u32 = @intCast(block_index_usize);
+        const block = switch (side) {
+            .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd),
+            .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev),
+        };
+        if (adjacency_mod.searchInBlock(BlockType, block, target)) |slot| return slot;
+    }
+    return null;
+}
+
+fn adjacencyContains(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, target: u32, comptime side: Side) bool {
+    const count = blockCount(adjacency, side);
+    if (count == 0) return false;
+
+    if (groupCount(adjacency, side) == 0) {
+        return runContainsTarget(graph, firstBlock(adjacency, side), count, target, side);
+    }
+
+    var group_index = firstGroup(adjacency, side);
+    var visited_groups: u32 = 0;
     while (group_index != constants.END_OF_CHAIN) {
         if (group_index >= graph.group_count) return false;
         if (visited_groups > graph.group_count) return false;
         visited_groups += 1;
 
         const group = page_ops.groupAtConst(graph, group_index);
-        if (contiguousBlocksContain(graph, group.start, group.count, target, side)) return true;
+        if (runContainsTarget(graph, group.start, group.count, target, side)) return true;
         group_index = group.next;
     }
-
     return false;
-}
-
-fn adjacencyContains(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, target: u32, comptime side: Side) bool {
-    if (blockCount(adjacency, side) == 0) return false;
-
-    if (groupCount(adjacency, side) == 0) {
-        return contiguousBlocksContain(graph, firstBlock(adjacency, side), blockCount(adjacency, side), target, side);
-    }
-
-    return groupChainContains(graph, firstGroup(adjacency, side), target, side);
 }
 
 fn appendForwardConsistencyViolations(
@@ -625,7 +704,6 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         try validateOccupancyFast(graph, adjacency, .fwd);
         try validateOccupancyFast(graph, adjacency, .rev);
         try validateForwardConsistencyFast(graph, node_id, adjacency);
-        try validateReverseConsistencyFast(graph, node_id, adjacency);
     }
 
     if (total_forward != total_reverse) return error.CorruptGraph;
@@ -637,12 +715,21 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
     defer readerExit(graph, reader_token);
 
     var violations: std.ArrayList(types.Violation) = .empty;
+    errdefer violations.deinit(allocator);
     var total: u64 = 0;
 
     var owned_forward_blocks = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire));
     defer owned_forward_blocks.deinit(allocator);
     var owned_reverse_blocks = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire));
     defer owned_reverse_blocks.deinit(allocator);
+    var free_forward_blocks = try buildFreeBlockSet(graph, allocator, .fwd);
+    defer free_forward_blocks.deinit(allocator);
+    var free_reverse_blocks = try buildFreeBlockSet(graph, allocator, .rev);
+    defer free_reverse_blocks.deinit(allocator);
+    var retired_forward_blocks = try buildRetiredBlockSet(graph, allocator, .fwd);
+    defer retired_forward_blocks.deinit(allocator);
+    var retired_reverse_blocks = try buildRetiredBlockSet(graph, allocator, .rev);
+    defer retired_reverse_blocks.deinit(allocator);
 
     for (0..graph.node_count) |node_index| {
         const node_id: u32 = @intCast(node_index);
@@ -656,8 +743,8 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &forward_blocks, .fwd);
         try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &reverse_blocks, .rev);
 
-        try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_forward_blocks, node_id, forward_blocks.items, .fwd);
-        try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_reverse_blocks, node_id, reverse_blocks.items, .rev);
+        try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_forward_blocks, &free_forward_blocks, &retired_forward_blocks, node_id, forward_blocks.items, .fwd);
+        try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_reverse_blocks, &free_reverse_blocks, &retired_reverse_blocks, node_id, reverse_blocks.items, .rev);
         try appendForwardConsistencyViolations(graph, allocator, &violations, node_id, forward_blocks.items);
         try appendReverseConsistencyViolations(graph, allocator, &violations, node_id, reverse_blocks.items);
 

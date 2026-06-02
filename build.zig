@@ -15,7 +15,8 @@ pub fn build(b: *std.Build) void {
         .name = "graphz",
         .root_module = mod,
     });
-    _ = b.step("check", "Check that the library compiles");
+    const check_step = b.step("check", "Check that the library compiles");
+    check_step.dependOn(&lib_check.step);
     b.getInstallStep().dependOn(&lib_check.step);
 
     // ---- test: run all test-bearing modules ----

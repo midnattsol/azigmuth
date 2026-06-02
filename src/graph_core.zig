@@ -28,6 +28,10 @@ pub const GraphCore = struct {
     edge_block_group_pages: [constants.MAX_EDGE_GROUP_PAGES]std.atomic.Value(usize) =
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_GROUP_PAGES,
 
+    /// Per-group metadata pages for lock-free retired/free stacks.
+    edge_block_group_meta_pages: [constants.MAX_EDGE_GROUP_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_GROUP_PAGES,
+
     /// Per-block metadata pages for lock-free retired/free stacks.
     edge_blocks_fwd_meta_pages: [constants.MAX_EDGE_BLOCK_PAGES]std.atomic.Value(usize) =
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_BLOCK_PAGES,
@@ -39,6 +43,10 @@ pub const GraphCore = struct {
     free_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+
+    /// Tagged stack heads for group retirement/reuse.
+    free_groups_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    retired_groups_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
 
     /// Legacy/debug LIFO free lists. The runtime allocator path uses the
     /// lock-free stack heads above; these lists are maintained only when safe
@@ -91,4 +99,13 @@ pub const GraphCore = struct {
     /// Readers that could not acquire an epoch slot. Any overflow reader makes
     /// reclamation conservative until it exits.
     reader_epoch_overflow: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// Most recent safe_epoch for which reclaim already ran. Avoids O(M²)
+    /// re-pushing of the retired stack under a long-running reader.
+    last_reclaim_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    /// Rotating cursors for findRepairDebtByFlag so repeated scans do not
+    /// restart from node 0 every time.
+    repair_scan_cursor_fwd: u32 = 0,
+    repair_scan_cursor_rev: u32 = 0,
 };

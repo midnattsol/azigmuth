@@ -11,6 +11,8 @@ const StackEntry = struct {
 };
 
 /// Returns true if the graph contains at least one directed cycle.
+/// Uses an iterative DFS and materializes each frame's neighbors from a
+/// single iterator snapshot.
 pub fn hasCycle(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator) types.GraphError!bool {
     if (graph.node_count == 0) return false;
 

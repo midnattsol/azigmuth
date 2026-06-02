@@ -16,6 +16,7 @@ pub const NodeFlags = graph.NodeFlags;
 
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = graph.Graph;
+pub const GraphBuilder = graph.GraphBuilder;
 pub const GraphError = graph.GraphError;
 pub const Violation = graph.Violation;
 pub const NeighborIterator = graph.NeighborIterator;

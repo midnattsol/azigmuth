@@ -68,6 +68,11 @@ pub fn retireBlockRev(graph: *graph_core.GraphCore, block_idx: u32) !void {
     appendDebugRetired(graph, &graph.retired_blocks_rev, .{ .block = block_idx, .epoch = current_epoch });
 }
 
+pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
+    const current_epoch = graph.epoch.load(.acquire);
+    page_ops.retireGroup(graph, group_idx, current_epoch);
+}
+
 pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
     _ = graph.epoch.fetchAdd(1, .monotonic);
 }
@@ -100,8 +105,16 @@ fn pruneDebugRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime sid
 pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     const safe_epoch = safeReclaimEpoch(graph) orelse return;
 
+    // Skip reclaim if safe_epoch has not advanced since the last pass.
+    // Without this, every mutation under a long reader would detach and
+    // re-push the entire retired stack — O(M²) accumulated cost.
+    const last_safe_epoch = graph.last_reclaim_epoch.load(.monotonic);
+    if (safe_epoch <= last_safe_epoch) return;
+    graph.last_reclaim_epoch.store(safe_epoch, .monotonic);
+
     page_ops.reclaimRetired(graph, safe_epoch, .fwd);
     page_ops.reclaimRetired(graph, safe_epoch, .rev);
+    page_ops.reclaimRetiredGroups(graph, safe_epoch);
 
     if (graph.active_writers.load(.monotonic) == 0) {
         if (graph.debug_retired_enabled.load(.monotonic)) {
@@ -112,6 +125,7 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
             @atomicStore(usize, &graph.retired_blocks_rev.items.len, 0, .release);
             graph.free_blocks_fwd.clearRetainingCapacity();
             graph.free_blocks_rev.clearRetainingCapacity();
+            graph.free_groups.clearRetainingCapacity();
         }
     }
 }

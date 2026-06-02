@@ -99,11 +99,28 @@ pub const NeighborIterator = struct {
         self.reader_active = false;
     }
 
+    pub fn snapshotDegree(self: *const NeighborIterator) usize {
+        return switch (self.direction) {
+            .fwd => sumPopCount(self.core, self.node_adj_snapshot, .fwd),
+            .rev => sumPopCount(self.core, self.node_adj_snapshot, .rev),
+        };
+    }
+
     pub fn materialize(self: *NeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
         defer self.deinit();
-        var out: std.ArrayList(types.NodeId) = .empty;
+        var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.snapshotDegree());
         while (self.next()) |neighbor| {
-            try out.append(allocator, neighbor);
+            out.appendAssumeCapacity(neighbor);
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn materializeExact(self: *NeighborIterator, allocator: std.mem.Allocator, capacity: usize) ![]types.NodeId {
+        defer self.deinit();
+        const snapshot_capacity = self.snapshotDegree();
+        var out = try std.ArrayList(types.NodeId).initCapacity(allocator, @max(capacity, snapshot_capacity));
+        while (self.next()) |neighbor| {
+            out.appendAssumeCapacity(neighbor);
         }
         return out.toOwnedSlice(allocator);
     }
@@ -236,16 +253,29 @@ fn sumPopCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comp
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (node.index >= graph.node_count) return error.InvalidNode;
+    const node_buffer = page_ops.nodeAtConst(graph, node);
+    const deg = node_buffer.degree_fwd;
+    if (deg < constants.DEGREE_OVERFLOW) {
+        // Degree cache is trusted only when it agrees with the existence
+        // of forward blocks.  Tests that build adjacencies by hand leave
+        // the cache at zero; we detect the mismatch and fall back.
+        if (deg > 0 or node_buffer.publishedAdj().block_count_fwd == 0) return deg;
+    }
+    // Overflow or cache mismatch: fall back to scanning blocks.
     const reader_token = rcu.readerEnter(@constCast(graph));
     defer rcu.readerExit(@constCast(graph), reader_token);
-    const adjacency = page_ops.nodeAtConst(graph, node).publishedAdj();
-    return sumPopCount(graph, adjacency, .fwd);
+    return sumPopCount(graph, node_buffer.publishedAdj(), .fwd);
 }
 
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (node.index >= graph.node_count) return error.InvalidNode;
+    const node_buffer = page_ops.nodeAtConst(graph, node);
+    const deg = node_buffer.degree_rev;
+    if (deg < constants.DEGREE_OVERFLOW) {
+        if (deg > 0 or node_buffer.publishedAdj().block_count_rev == 0) return deg;
+    }
+    // Overflow or cache mismatch: fall back to scanning blocks.
     const reader_token = rcu.readerEnter(@constCast(graph));
     defer rcu.readerExit(@constCast(graph), reader_token);
-    const adjacency = page_ops.nodeAtConst(graph, node).publishedAdj();
-    return sumPopCount(graph, adjacency, .rev);
+    return sumPopCount(graph, node_buffer.publishedAdj(), .rev);
 }

@@ -186,3 +186,47 @@ test "mutation grouped: RepairRequired in grouped reverse does not publish" {
     try testing.expectEqual(@as(u64, 98), graph.edgeCount());
     try graph.validate();
 }
+
+test "mutation grouped: addEdge clones forward group chain before tail mutation" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try buildGroupedForwardGraph(&graph);
+    const before_adj = try graph.publishedNodeAdj(source);
+    const first_group = before_adj.first_group_fwd;
+    const second_group = page_ops.groupAtConst(&graph.graph, first_group).next;
+    const tail_group = page_ops.groupAtConst(&graph.graph, second_group).next;
+    const tail_before = page_ops.groupAtConst(&graph.graph, tail_group).*;
+
+    const new_destination = try graph.addNode();
+    try graph.addEdge(source, new_destination, 0, 0);
+
+    const tail_after = page_ops.groupAtConst(&graph.graph, tail_group).*;
+    try testing.expectEqual(tail_before.start, tail_after.start);
+    try testing.expectEqual(tail_before.count, tail_after.count);
+    try testing.expectEqual(tail_before.next, tail_after.next);
+    try testing.expect((try graph.publishedNodeAdj(source)).first_group_fwd != first_group);
+    try graph.validate();
+}
+
+test "mutation grouped: addEdge clones reverse group chain before tail mutation" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const destination = try buildGroupedReverseGraph(&graph);
+    const before_adj = try graph.publishedNodeAdj(destination);
+    const first_group = before_adj.first_group_rev;
+    const second_group = page_ops.groupAtConst(&graph.graph, first_group).next;
+    const tail_group = page_ops.groupAtConst(&graph.graph, second_group).next;
+    const tail_before = page_ops.groupAtConst(&graph.graph, tail_group).*;
+
+    const new_source = try graph.addNode();
+    try graph.addEdge(new_source, destination, 0, 0);
+
+    const tail_after = page_ops.groupAtConst(&graph.graph, tail_group).*;
+    try testing.expectEqual(tail_before.start, tail_after.start);
+    try testing.expectEqual(tail_before.count, tail_after.count);
+    try testing.expectEqual(tail_before.next, tail_after.next);
+    try testing.expect((try graph.publishedNodeAdj(destination)).first_group_rev != first_group);
+    try graph.validate();
+}

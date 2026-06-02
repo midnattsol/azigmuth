@@ -7,6 +7,58 @@ const page_ops = @import("page_ops.zig");
 
 pub const AdjSide = enum { fwd, rev };
 
+fn groupCount(node_adj: *const types.NodeAdj, comptime dir: AdjSide) u16 {
+    return if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
+}
+
+fn firstGroup(node_adj: *const types.NodeAdj, comptime dir: AdjSide) u32 {
+    return if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
+}
+
+fn setFirstGroup(node_adj: *types.NodeAdj, comptime dir: AdjSide, group_index: u32) void {
+    if (dir == .fwd) {
+        node_adj.first_group_fwd = group_index;
+    } else {
+        node_adj.first_group_rev = group_index;
+    }
+}
+
+/// Copies the published group chain referenced by `node_adj` so subsequent
+/// staging mutations can update group metadata without racing lock-free readers
+/// that may still be walking the published chain.
+pub fn cloneGroupsForStaging(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: AdjSide) !void {
+    const expected_groups = groupCount(node_adj, dir);
+    if (expected_groups == 0) return;
+
+    var old_group_index = firstGroup(node_adj, dir);
+    var new_first_group: u32 = constants.END_OF_CHAIN;
+    var previous_new_group: ?u32 = null;
+    var copied_groups: u16 = 0;
+
+    while (copied_groups < expected_groups) : (copied_groups += 1) {
+        if (old_group_index == constants.END_OF_CHAIN or old_group_index >= graph.group_count) return error.CorruptGraph;
+
+        const old_group = page_ops.groupAtConst(graph, old_group_index).*;
+        const new_group_index = try page_ops.allocGroup(graph);
+        page_ops.groupAt(graph, new_group_index).* = types.EdgeBlockGroup{
+            .start = old_group.start,
+            .next = constants.END_OF_CHAIN,
+            .count = old_group.count,
+        };
+
+        if (previous_new_group) |previous| {
+            page_ops.groupAt(graph, previous).next = new_group_index;
+        } else {
+            new_first_group = new_group_index;
+        }
+        previous_new_group = new_group_index;
+        old_group_index = old_group.next;
+    }
+
+    if (old_group_index != constants.END_OF_CHAIN) return error.CorruptGraph;
+    setFirstGroup(node_adj, dir, new_first_group);
+}
+
 pub fn searchInBlock(comptime BlockType: type, block: *const BlockType, target: u32) ?u7 {
     const live: u7 = @intCast(@popCount(block.mask));
     if (live == 0) return null;
@@ -146,13 +198,33 @@ pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj,
 }
 
 pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, target: u32) bool {
-    if (node_adj.block_count_fwd == 0) return false;
+    const block_count = node_adj.block_count_fwd;
+    if (block_count == 0) return false;
 
     if (node_adj.group_count_fwd == 0) {
         const first_block = node_adj.first_block_fwd;
-        var block_offset: u32 = 0;
-        while (block_offset < node_adj.block_count_fwd) : (block_offset += 1) {
-            if (searchInBlock(types.EdgeBlockFwd, page_ops.edgeBlockAtConst(graph, first_block + block_offset, .fwd), target) != null) return true;
+        // Try binary search on block key ranges (fast path).
+        var low: u32 = 0;
+        var high: u32 = block_count;
+        while (low < high) {
+            const mid: u32 = low + (high - low) / 2;
+            const block = page_ops.edgeBlockAtConst(graph, first_block + mid, .fwd);
+            const live = @popCount(block.mask);
+            if (live == 0) break;
+            const first_edge = block.edges[0].destination;
+            const last_edge = block.edges[live - 1].destination;
+            if (target < first_edge) {
+                high = mid;
+            } else if (target > last_edge) {
+                low = mid + 1;
+            } else {
+                return searchInBlock(types.EdgeBlockFwd, block, target) != null;
+            }
+        }
+        // Fallback: blocks may not be globally sorted by key.
+        for (first_block..first_block + block_count) |block_idx| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
+            if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;
         }
         return false;
     }
@@ -160,9 +232,28 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
     var group_index = node_adj.first_group_fwd;
     while (true) {
         const group = page_ops.groupAtConst(graph, group_index);
-        var block_offset: u32 = 0;
-        while (block_offset < group.count) : (block_offset += 1) {
-            if (searchInBlock(types.EdgeBlockFwd, page_ops.edgeBlockAtConst(graph, group.start + block_offset, .fwd), target) != null) return true;
+        // Try binary search within the group's contiguous blocks.
+        var low: u32 = 0;
+        var high: u32 = group.count;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const block = page_ops.edgeBlockAtConst(graph, group.start + mid, .fwd);
+            const live = @popCount(block.mask);
+            if (live == 0) break;
+            const first = block.edges[0].destination;
+            const last = block.edges[live - 1].destination;
+            if (target < first) {
+                high = mid;
+            } else if (target > last) {
+                low = mid + 1;
+            } else {
+                return searchInBlock(types.EdgeBlockFwd, block, target) != null;
+            }
+        }
+        // Fallback: scan the group linearly.
+        for (group.start..group.start + group.count) |block_idx| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
+            if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;
         }
         if (group.next == constants.END_OF_CHAIN) return false;
         group_index = group.next;
