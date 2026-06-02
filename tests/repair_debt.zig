@@ -217,10 +217,12 @@ test "repair debt: validate requires run fragmentation debt to be marked" {
     const node = graph_mod.NodeId{ .index = 0 };
 
     const b0 = try graph.allocBlockFwd();
-    _ = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
     const b2 = try graph.allocBlockFwd();
-    _ = try graph.allocBlockFwd();
+    const b3 = try graph.allocBlockFwd();
     const b4 = try graph.allocBlockFwd();
+    page_ops.freeBlock(&graph.graph, b1, .fwd);
+    page_ops.freeBlock(&graph.graph, b3, .fwd);
     fillBlock(&graph, b0, 1, 64);
     fillBlock(&graph, b2, 65, 64);
     fillBlock(&graph, b4, 129, 1);

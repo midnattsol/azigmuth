@@ -271,4 +271,7 @@ pub const Violation = union(enum) {
     removed_node_marked_for_repair: struct { node: u32 },
     edge_count_mismatch: struct { expected: u64, actual: u64 },
     retired_block_reachable: struct { block: u32, node: u32 },
+    unreachable_forward_block: struct { block: u32 },
+    unreachable_reverse_block: struct { block: u32 },
+    unreachable_group: struct { group: u32 },
 };

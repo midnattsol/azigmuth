@@ -18,6 +18,57 @@ const PreparedAppendBlock = struct {
     tail_index: ?u32 = null,
 };
 
+const AddEdgeScratch = struct {
+    forward_block: ?u32 = null,
+    reverse_block: ?u32 = null,
+    groups: std.ArrayList(u32) = .empty,
+    active: bool = true,
+
+    fn allocBlock(self: *AddEdgeScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+        const block = try page_ops.allocBlock(graph, side);
+        switch (side) {
+            .fwd => self.forward_block = block,
+            .rev => self.reverse_block = block,
+        }
+        return block;
+    }
+
+    fn allocGroup(self: *AddEdgeScratch, graph: *graph_core.GraphCore) !u32 {
+        const group = try page_ops.allocGroup(graph);
+        self.groups.append(graph.allocator, group) catch |err| {
+            page_ops.freeGroup(graph, group);
+            return err;
+        };
+        return group;
+    }
+
+    fn freeTrackedGroup(self: *AddEdgeScratch, graph: *graph_core.GraphCore, group: u32) void {
+        for (self.groups.items, 0..) |g, i| {
+            if (g == group) {
+                _ = self.groups.swapRemove(i);
+                page_ops.freeGroup(graph, group);
+                return;
+            }
+        }
+        page_ops.freeGroup(graph, group);
+    }
+
+    fn disarm(self: *AddEdgeScratch) void {
+        self.active = false;
+    }
+
+    fn cleanup(self: *AddEdgeScratch, graph: *graph_core.GraphCore) void {
+        if (!self.active) return;
+        if (self.forward_block) |block| page_ops.freeBlock(graph, block, .fwd);
+        if (self.reverse_block) |block| page_ops.freeBlock(graph, block, .rev);
+        for (self.groups.items) |group| page_ops.freeGroup(graph, group);
+    }
+
+    fn deinit(self: *AddEdgeScratch, allocator: std.mem.Allocator) void {
+        self.groups.deinit(allocator);
+    }
+};
+
 const OldGroupChain = struct {
     first_group: ?u32 = null,
     group_count: u16 = 0,
@@ -51,13 +102,14 @@ fn prepareAppendBlockSide(
     graph: *graph_core.GraphCore,
     side_adj: *const types.SideAdj,
     comptime side: adjacency.AdjSide,
+    scratch: *AddEdgeScratch,
 ) !PreparedAppendBlock {
     if (side_adj.block_count == 0) {
-        return .{ .new_block = try page_ops.allocBlock(graph, side) };
+        return .{ .new_block = try scratch.allocBlock(graph, side) };
     }
 
     const tail_index = adjacency.tailBlockIndexSide(graph, side_adj).?;
-    const new_block = try page_ops.allocBlock(graph, side);
+    const new_block = try scratch.allocBlock(graph, side);
 
     switch (side) {
         .fwd => {
@@ -100,22 +152,123 @@ fn ensureTailCowGroupConstraintSide(
     }
 }
 
-fn cloneGroupsForStagingIfNeededSide(
+fn cloneGroupsForStagingSideTracked(
     graph: *graph_core.GraphCore,
     side_adj: *types.SideAdj,
+    scratch: *AddEdgeScratch,
+) !void {
+    const expected_groups = side_adj.group_count;
+    if (expected_groups == 0) return;
+
+    var old_group_index = side_adj.first_group;
+    var new_first_group: u32 = constants.END_OF_CHAIN;
+    var previous_new_group: ?u32 = null;
+    var copied_groups: u16 = 0;
+
+    while (copied_groups < expected_groups) : (copied_groups += 1) {
+        if (old_group_index == constants.END_OF_CHAIN or old_group_index >= graph.group_count) return error.CorruptGraph;
+        const old_group = page_ops.groupAtConst(graph, old_group_index).*;
+        const new_group_index = try scratch.allocGroup(graph);
+        page_ops.groupAt(graph, new_group_index).* = types.EdgeBlockGroup{
+            .start = old_group.start, .next = constants.END_OF_CHAIN, .count = old_group.count,
+        };
+        if (previous_new_group) |previous| {
+            page_ops.groupAt(graph, previous).next = new_group_index;
+        } else {
+            new_first_group = new_group_index;
+        }
+        previous_new_group = new_group_index;
+        old_group_index = old_group.next;
+    }
+    if (old_group_index != constants.END_OF_CHAIN) return error.CorruptGraph;
+    side_adj.first_group = new_first_group;
+}
+
+fn appendGroupToSideAdjTracked(
+    graph: *graph_core.GraphCore,
+    side_adj: *types.SideAdj,
+    new_block: u32,
+    scratch: *AddEdgeScratch,
+) !void {
+    if (side_adj.group_count == 0) {
+        const prefix_group_index = try scratch.allocGroup(graph);
+        const new_group_index = try scratch.allocGroup(graph);
+        page_ops.groupAt(graph, prefix_group_index).* = types.EdgeBlockGroup{
+            .start = side_adj.first_block, .count = side_adj.block_count, .next = new_group_index,
+        };
+        page_ops.groupAt(graph, new_group_index).* = types.EdgeBlockGroup{ .start = new_block, .count = 1, .next = constants.END_OF_CHAIN };
+        side_adj.first_group = prefix_group_index;
+        side_adj.group_count = 2;
+        return;
+    }
+
+    const new_group_index = try scratch.allocGroup(graph);
+    page_ops.groupAt(graph, new_group_index).* = types.EdgeBlockGroup{ .start = new_block, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var group_index = side_adj.first_group;
+    while (true) {
+        const group = page_ops.groupAt(graph, group_index);
+        if (group.next == constants.END_OF_CHAIN) {
+            page_ops.groupAt(graph, group_index).next = new_group_index;
+            break;
+        }
+        group_index = group.next;
+    }
+    side_adj.group_count += 1;
+}
+
+fn removeTailFromSideAdjTracked(
+    graph: *graph_core.GraphCore,
+    side_adj: *types.SideAdj,
+    scratch: *AddEdgeScratch,
+) void {
+    if (side_adj.group_count > 0) {
+        var group_index = side_adj.first_group;
+        var prev_group: ?u32 = null;
+        while (true) {
+            const group = page_ops.groupAt(graph, group_index);
+            if (group.next == constants.END_OF_CHAIN) {
+                std.debug.assert(group.count > 0);
+                page_ops.groupAt(graph, group_index).count -= 1;
+                if (page_ops.groupAt(graph, group_index).count == 0) {
+                    if (prev_group) |prev| {
+                        page_ops.groupAt(graph, prev).next = constants.END_OF_CHAIN;
+                        side_adj.group_count -= 1;
+                    } else {
+                        side_adj.group_count = 0;
+                        side_adj.first_group = 0;
+                    }
+                    scratch.freeTrackedGroup(graph, group_index);
+                }
+                break;
+            }
+            prev_group = group_index;
+            group_index = group.next;
+        }
+    } else {
+        std.debug.assert(side_adj.block_count > 0);
+        side_adj.block_count -= 1;
+    }
+}
+
+fn cloneGroupsForStagingIfNeededSideTracked(
+    graph: *graph_core.GraphCore,
+    side_adj: *types.SideAdj,
+    scratch: *AddEdgeScratch,
 ) !OldGroupChain {
     const old_groups = OldGroupChain.captureSide(side_adj);
     if (old_groups.first_group != null) {
-        try adjacency.cloneGroupsForStagingSide(graph, side_adj);
+        try cloneGroupsForStagingSideTracked(graph, side_adj, scratch);
     }
     return old_groups;
 }
 
-fn applyPreparedAppendSide(
+fn applyPreparedAppendSideTracked(
     graph: *graph_core.GraphCore,
     side_adj: *types.SideAdj,
     prepared: PreparedAppendBlock,
     comptime _: adjacency.AdjSide,
+    scratch: *AddEdgeScratch,
 ) !void {
     if (side_adj.block_count == 0) {
         side_adj.first_block = prepared.new_block;
@@ -128,8 +281,8 @@ fn applyPreparedAppendSide(
             side_adj.first_block = prepared.new_block;
         } else {
             const was_contiguous = side_adj.group_count == 0;
-            adjacency.removeTailFromSideAdj(graph, side_adj);
-            try adjacency.appendGroupToSideAdj(graph, side_adj, prepared.new_block);
+            removeTailFromSideAdjTracked(graph, side_adj, scratch);
+            try appendGroupToSideAdjTracked(graph, side_adj, prepared.new_block, scratch);
             if (was_contiguous) side_adj.block_count += 1;
         }
         return;
@@ -143,7 +296,7 @@ fn applyPreparedAppendSide(
     }
 
     if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
-    try adjacency.appendGroupToSideAdj(graph, side_adj, prepared.new_block);
+    try appendGroupToSideAdjTracked(graph, side_adj, prepared.new_block, scratch);
     side_adj.block_count += 1;
 }
 
@@ -216,10 +369,10 @@ fn applyRemovalPlanSide(
     published_side: *const types.SideAdj,
     plan: RemovalPlan,
     comptime side: adjacency.AdjSide,
+    allocs: *common.PrePublishAllocations,
 ) !RemovalBuild {
     const old_block = plan.found.block_idx;
-    const new_block = try page_ops.allocBlock(graph, side);
-    errdefer page_ops.freeBlock(graph, new_block, side);
+    const new_block = try allocs.allocBlock(graph, side);
     const new_live: u7 = plan.live_before - 1;
 
     switch (side) {
@@ -245,7 +398,7 @@ fn applyRemovalPlanSide(
         graph, staging_side,
         published_side.first_block, published_side.block_count,
         published_side.group_count, published_side.first_group,
-        old_block, new_block, side,
+        old_block, new_block, side, allocs,
     );
 
     return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
@@ -282,16 +435,20 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
         return error.EdgeAlreadyExists;
     }
 
-    const forward_prepared = try prepareAppendBlockSide(graph, sfwd, .fwd);
-    const reverse_prepared = try prepareAppendBlockSide(graph, srev, .rev);
+    var scratch = AddEdgeScratch{};
+    defer scratch.deinit(graph.allocator);
+    defer scratch.cleanup(graph);
+
+    const forward_prepared = try prepareAppendBlockSide(graph, sfwd, .fwd, &scratch);
+    const reverse_prepared = try prepareAppendBlockSide(graph, srev, .rev, &scratch);
 
     try ensureTailCowGroupConstraintSide(graph, sfwd, forward_prepared);
     try ensureTailCowGroupConstraintSide(graph, srev, reverse_prepared);
 
-    const old_forward_groups = try cloneGroupsForStagingIfNeededSide(graph, sfwd);
-    const old_reverse_groups = try cloneGroupsForStagingIfNeededSide(graph, srev);
+    const old_forward_groups = try cloneGroupsForStagingIfNeededSideTracked(graph, sfwd, &scratch);
+    const old_reverse_groups = try cloneGroupsForStagingIfNeededSideTracked(graph, srev, &scratch);
 
-    try applyPreparedAppendSide(graph, sfwd, forward_prepared, .fwd);
+    try applyPreparedAppendSideTracked(graph, sfwd, forward_prepared, .fwd, &scratch);
     try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags);
     var source_publish_adj = source_adj_before;
     source_publish_adj.first_block_fwd = sfwd.first_block;
@@ -300,7 +457,7 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     source_publish_adj.first_group_fwd = sfwd.first_group;
     repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
 
-    try applyPreparedAppendSide(graph, srev, reverse_prepared, .rev);
+    try applyPreparedAppendSideTracked(graph, srev, reverse_prepared, .rev, &scratch);
     insertReverseEdge(graph, reverse_prepared.new_block, source);
     var destination_publish_adj = destination_adj_before;
     destination_publish_adj.first_block_rev = srev.first_block;
@@ -308,6 +465,8 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     destination_publish_adj.group_count_rev = srev.group_count;
     destination_publish_adj.first_group_rev = srev.first_group;
     repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
+
+    scratch.disarm();
 
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
@@ -382,10 +541,12 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     const sfwd = source_node.stagingFwd(source_meta);
     const srev = destination_node.stagingRev(destination_meta);
 
-    const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd);
-    errdefer page_ops.freeBlock(graph, forward_build.new_block, .fwd);
-    const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev);
-    errdefer page_ops.freeBlock(graph, reverse_build.new_block, .rev);
+    var allocs = common.PrePublishAllocations{};
+    defer allocs.deinit(graph.allocator);
+    defer allocs.cleanup(graph);
+
+    const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd, &allocs);
+    const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev, &allocs);
     var source_publish_adj = source_adj;
     source_publish_adj.first_block_fwd = sfwd.first_block;
     source_publish_adj.block_count_fwd = sfwd.block_count;
@@ -399,6 +560,8 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     destination_publish_adj.group_count_rev = srev.group_count;
     destination_publish_adj.first_group_rev = srev.first_group;
     repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
+
+    allocs.disarm();
 
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));

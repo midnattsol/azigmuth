@@ -1,6 +1,7 @@
 //! Shared mutation primitives — claim ordering, writer lifecycle, adjacency search,
 //! and adjacency rebuild helpers reused by edge and node mutations.
 
+const std = @import("std");
 const constants = @import("../constants.zig");
 const graph_core = @import("../graph_core.zig");
 const types = @import("../types.zig");
@@ -79,6 +80,60 @@ pub const WriterGuard = struct {
         if (!self.active) return;
         _ = self.graph.active_writers.fetchSub(1, .acq_rel);
         self.active = false;
+    }
+};
+
+pub const PrePublishAllocations = struct {
+    forward_blocks: std.ArrayList(u32) = .empty,
+    reverse_blocks: std.ArrayList(u32) = .empty,
+    groups: std.ArrayList(u32) = .empty,
+    active: bool = true,
+
+    pub fn allocBlock(self: *PrePublishAllocations, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+        const block = try page_ops.allocBlock(graph, side);
+        const list = switch (side) {
+            .fwd => &self.forward_blocks,
+            .rev => &self.reverse_blocks,
+        };
+        list.append(graph.allocator, block) catch |err| {
+            page_ops.freeBlock(graph, block, side);
+            return err;
+        };
+        return block;
+    }
+
+    pub fn allocGroup(self: *PrePublishAllocations, graph: *graph_core.GraphCore) !u32 {
+        const group = try page_ops.allocGroup(graph);
+        self.groups.append(graph.allocator, group) catch |err| {
+            page_ops.freeGroup(graph, group);
+            return err;
+        };
+        return group;
+    }
+
+    pub fn adoptBlocks(self: *PrePublishAllocations, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide, blocks: []const u32) !void {
+        const list = switch (side) {
+            .fwd => &self.forward_blocks,
+            .rev => &self.reverse_blocks,
+        };
+        try list.appendSlice(allocator, blocks);
+    }
+
+    pub fn disarm(self: *PrePublishAllocations) void {
+        self.active = false;
+    }
+
+    pub fn cleanup(self: *PrePublishAllocations, graph: *graph_core.GraphCore) void {
+        if (!self.active) return;
+        for (self.forward_blocks.items) |block| page_ops.freeBlock(graph, block, .fwd);
+        for (self.reverse_blocks.items) |block| page_ops.freeBlock(graph, block, .rev);
+        for (self.groups.items) |group| page_ops.freeGroup(graph, group);
+    }
+
+    pub fn deinit(self: *PrePublishAllocations, allocator: std.mem.Allocator) void {
+        self.forward_blocks.deinit(allocator);
+        self.reverse_blocks.deinit(allocator);
+        self.groups.deinit(allocator);
     }
 };
 
@@ -410,6 +465,7 @@ pub fn rebuildAdjWithReplaceSide(
     old_block: u32,
     new_block: u32,
     comptime side: adjacency.AdjSide,
+    allocs: ?*PrePublishAllocations,
 ) !void {
     staging_side.first_block = 0;
     staging_side.block_count = 0;
@@ -432,6 +488,7 @@ pub fn rebuildAdjWithReplaceSide(
             total_blocks_ptr: *u16,
             first_block_set_ptr: *bool,
             tail_group_ptr: *?u32,
+            allocs_optional: ?*PrePublishAllocations,
         ) !void {
             if (run_count_ptr.* == 0) return;
             if (!first_block_set_ptr.*) {
@@ -439,15 +496,15 @@ pub fn rebuildAdjWithReplaceSide(
                 adj.block_count = run_count_ptr.*;
                 first_block_set_ptr.* = true;
             } else if (tail_group_ptr.* == null and adj.group_count == 0) {
-                const prefix_group = try page_ops.allocGroup(graph_ptr);
-                const group = try page_ops.allocGroup(graph_ptr);
+                const prefix_group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
+                const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
                 page_ops.groupAt(graph_ptr, prefix_group).* = .{ .start = adj.first_block, .count = adj.block_count, .next = group };
                 page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
                 adj.first_group = prefix_group;
                 adj.group_count = 2;
                 tail_group_ptr.* = group;
             } else {
-                const group = try page_ops.allocGroup(graph_ptr);
+                const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
                 page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
                 page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
                 tail_group_ptr.* = group;
@@ -467,12 +524,12 @@ pub fn rebuildAdjWithReplaceSide(
             if (run_count > 0 and idx == run_start + run_count) {
                 run_count += 1;
             } else {
-                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
                 run_start = idx;
                 run_count = 1;
             }
         }
-        try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+        try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
         staging_side.block_count = total_blocks;
         return;
     }
@@ -488,13 +545,13 @@ pub fn rebuildAdjWithReplaceSide(
             if (run_count > 0 and idx == run_start + run_count) {
                 run_count += 1;
             } else {
-                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
                 run_start = idx;
                 run_count = 1;
             }
         }
         group_idx = group.next;
     }
-    try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+    try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
     staging_side.block_count = total_blocks;
 }

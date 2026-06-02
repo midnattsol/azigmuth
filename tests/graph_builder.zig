@@ -255,3 +255,34 @@ test "graph_builder: freeze transfers ownership and builder becomes inert" {
     try graph.validate();
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 }
+
+test "graph_builder: 500+ edges freeze produces a valid graph with zero debug violations" {
+    var builder = try graph_mod.GraphBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    const node_count: u32 = 100;
+    var nodes: [node_count]graph_mod.NodeId = undefined;
+    for (0..node_count) |i| nodes[i] = try builder.addNode();
+
+    var edge_count: usize = 0;
+    for (0..node_count) |i| {
+        for (0..node_count) |j| {
+            if (i == j) continue;
+            if (edge_count >= 520) break;
+            try builder.addEdge(nodes[i], nodes[j], 0, 0);
+            edge_count += 1;
+        }
+        if (edge_count >= 520) break;
+    }
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+
+    try testing.expect(edge_count >= 500);
+    try graph.validate();
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expectEqual(@as(usize, 0), violations.len);
+    try testing.expect(graph.edgeCount() > 0);
+}

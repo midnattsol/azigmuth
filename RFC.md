@@ -96,11 +96,28 @@ pub const NodeAdj = extern struct {
 ### 2.5 NodeBuffer — per-node RCU double-buffer
 
 ```zig
+pub const PublishedMeta = packed struct(u64) {
+    fwd_index: u1 = 0,
+    rev_index: u1 = 0,
+    needs_repair_fwd: bool = false,
+    needs_repair_rev: bool = false,
+    removed: bool = false,
+    _reserved: u59 = 0,
+};
+
+pub const SideAdj = extern struct {
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+};
+
 pub const NodeBuffer = extern struct {
-    published_adj_index_raw: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    published_meta: std.atomic.Value(u64) = std.atomic.Value(u64).init(@bitCast(PublishedMeta{})),
     fwd_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
     rev_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
-    adj_buffers: [2]NodeAdj,
+    fwd_buffers: [2]SideAdj,
+    rev_buffers: [2]SideAdj,
     degree_fwd: u16 = 0,
     degree_rev: u16 = 0,
 };
@@ -113,9 +130,12 @@ under concurrent mutation; the cache remains maintained under the
 writer claim during `addEdge`, `removeEdge`, `removeNode`, and repair.
 It reuses what was previously a 4‑byte cache-line padding field,
 keeping `NodeBuffer` at exactly 64 bytes.
-Writers call `copyPublishedToStaging()`, mutate via `stagingAdj()`,
-then call `publishStagingAdj()` which flips the index with `.release`.
-Readers always see a complete `NodeAdj` — old or new, never a partial update.
+Writers stage side-local updates in the inactive `fwd_buffers[]` /
+`rev_buffers[]` entries, then publish a new coherent node snapshot by
+CAS/updating `published_meta` with `.release`.
+Readers load `published_meta` with `.acquire`, decode both published side
+indices plus `removed` / `needs_repair_*`, and therefore always observe a
+complete `NodeAdj` snapshot — old or new, never a partial node update.
 `fwd_claim` and `rev_claim` are per-node non-blocking writer exclusion bits.
 
 **Copy-on-write rule:** Active blocks MUST NOT be mutated in-place
@@ -127,9 +147,9 @@ readers, never written to again.
 
 A reader MUST copy the published `NodeAdj` by value into the iterator
 or read context before traversal begins. Iterators MUST NOT retain a
-pointer to `NodeBuffer.adj_buffers[]`. The RCU double-buffer has only two
-slots; holding a pointer allows a subsequent writer recycle to
-overwrite the reader's view.
+pointer to the published side buffers. The per-side RCU double-buffers
+have only two slots each; holding a pointer allows a subsequent writer
+recycle to overwrite the reader's view.
 
 ### 2.6 EdgeBlockFwd — forward edge block
 
@@ -360,7 +380,12 @@ only when their touched adjacency endpoints are disjoint (see §5.3).
 
 ### 5.1 Per-node RCU
 
-Each node has a `NodeBuffer` with two `NodeAdj` slots and an atomic active-slot flag. Readers load `active` with `.acquire` and read without locks. Writers copy `slots[active]` into `slots[1-active]`, mutate `slots[1-active]`, and flip `active` with `.release`.
+Each node has a `NodeBuffer` with per-side double-buffers (`fwd_buffers[]`,
+`rev_buffers[]`) and a single atomic `published_meta` word that selects the
+published side indices and carries the public node flags. Readers load
+`published_meta` with `.acquire` and read without locks. Writers stage updates
+in inactive side buffers, then publish a new coherent node snapshot by CAS / a
+single `.release` update of `published_meta`.
 
 The graph maintains a global `epoch` counter (`std.atomic.Value(u64)`),
 a diagnostic `active_readers` count (`std.atomic.Value(u32)`), and a bounded
@@ -407,8 +432,9 @@ observe a transient mixed version, which is allowed by the concurrency
 contract.
 
 For self-edges where `from == to`, the mutation claims both logical
-adjacencies on the node, prepares both forward and reverse changes in the same
-inactive `NodeAdj` slot, and publishes with a single RCU flip.
+adjacencies on the node, prepares both forward and reverse changes in the
+inactive side buffers, and publishes them with a single atomic
+`published_meta` update.
 
 No partial publish is allowed from the perspective of a completed public
 API call. During a concurrent two-node mutation, readers may observe a
@@ -595,6 +621,8 @@ pub const Violation = union(enum) {
     unsorted_block:               struct { node: u32, block: u32, slot: u32 },
     blockgroup_chain_cycle:       struct { node: u32, group: u32 },
     blockgroup_overlap:           struct { node: u32, group_a: u32, group_b: u32 },
+    run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u16 },
+    grouped_layout_needs_canonicalization: struct { node: u32, first_group: u32 },
     block_double_owned:           struct { block: u32 },
     block_orphaned_in_free_list:  struct { block: u32 },
     repair_debt_invalid_node:     struct { entry: u32 },
@@ -606,8 +634,8 @@ pub const Violation = union(enum) {
 ### 7.2 Checks
 
 **Per-node:**
-- `outDegree` equals sum of popcounts across forward blocks
-- `inDegree` equals sum of popcounts across reverse blocks
+- `outDegree` equals the public logical forward degree (visible non-tombstoned outgoing refs)
+- `inDegree` equals the public logical reverse degree (visible non-tombstoned incoming refs)
 - Forward/reverse edges are consistent (bijection)
 - Edges within each block are sorted
 - `group_count == 0` iff blocks are truly contiguous

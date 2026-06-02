@@ -86,7 +86,7 @@ test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency re
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    for (0..130) |_| _ = try graph.addNode();
+    for (0..131) |_| _ = try graph.addNode();
 
     const hub = @as(graph_mod.NodeId, .{ .index = 0 });
 

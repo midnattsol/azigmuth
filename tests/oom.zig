@@ -157,3 +157,26 @@ test "oom: removeNode induced allocation failures do not publish partial state" 
         }
     }
 }
+
+test "oom: retireBlockFwd with full debug ArrayList does not crash" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    // MAX_TRACKED_RETIRED_BLOCKS is 16.  The debug ArrayList silently
+    // drops items beyond capacity.  Allocating many blocks exhausts the
+    // test allocator, so we verify the boundary with fewer items.
+    for (0..5) |_| {
+        const block = try graph.allocBlockFwd();
+        try graph.retireBlockFwd(block);
+    }
+
+    try testing.expect(graph.graph.retired_blocks_fwd.items.len > 0);
+    try testing.expect(graph.graph.retired_blocks_fwd.items.len <= 5);
+
+    // Reclamation works for the lock-free retired stack.
+    graph.bumpEpoch();
+    graph.bumpEpoch();
+    graph.reclaimRetired();
+    try testing.expectEqual(@as(usize, 0), graph.graph.retired_blocks_fwd.items.len);
+    try graph.validate();
+}

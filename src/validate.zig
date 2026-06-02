@@ -20,6 +20,9 @@ const StackKindFast = enum { free, retired };
 const MAX_TRACKED_BLOCKS: usize = constants.MAX_EDGE_BLOCK_PAGES * constants.EDGE_BLOCKS_PER_PAGE;
 const TRACKED_BLOCK_BITMAP_WORDS: usize = (MAX_TRACKED_BLOCKS + 63) / 64;
 
+const MAX_TRACKED_GROUPS: usize = constants.MAX_EDGE_GROUP_PAGES * constants.EDGE_GROUPS_PER_PAGE;
+const TRACKED_GROUP_BITMAP_WORDS: usize = (MAX_TRACKED_GROUPS + 63) / 64;
+
 const TraversedBlock = struct {
     block_index: u32,
 };
@@ -401,6 +404,40 @@ fn populateStackBitmapFast(
     }
 }
 
+fn groupStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime kind: StackKindFast) u32 {
+    const head = switch (kind) {
+        .free => graph.free_groups_head.load(.acquire),
+        .retired => graph.retired_groups_head.load(.acquire),
+    };
+    return @truncate(head);
+}
+
+fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_index: u32) !u32 {
+    if (group_index >= graph.group_count) return error.CorruptGraph;
+    const page_index = page_ops.pageOf(group_index, constants.EDGE_GROUPS_PER_PAGE);
+    const raw = graph.edge_block_group_meta_pages[@intCast(page_index)].load(.acquire);
+    if (raw == 0) return error.CorruptGraph;
+    const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
+    const page = page_ptr[0..constants.EDGE_GROUPS_PER_PAGE];
+    return page[page_ops.slotOf(group_index, constants.EDGE_GROUPS_PER_PAGE)].next.load(.acquire);
+}
+
+fn populateGroupStackBitmapFast(
+    graph: *const graph_core.GraphCore,
+    bitmap: []u64,
+    comptime kind: StackKindFast,
+) !void {
+    const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    var current = groupStackHeadIndexFast(graph, kind);
+    var visited: u32 = 0;
+    while (current != constants.END_OF_CHAIN) {
+        if (visited >= limit) return error.CorruptGraph;
+        visited += 1;
+        if (!bitmapSet(bitmap, current)) return error.CorruptGraph;
+        current = try groupMetaNextFast(graph, current);
+    }
+}
+
 fn validateOwnedBlockFast(
     graph: *const graph_core.GraphCore,
     owned_blocks: []u64,
@@ -421,6 +458,9 @@ fn validateAdjacencyOwnershipAndLayoutFast(
     owned_blocks: []u64,
     free_blocks: []const u64,
     retired_blocks: []const u64,
+    owned_groups: []u64,
+    free_groups: []const u64,
+    retired_groups: []const u64,
     comptime side: Side,
 ) !void {
     const count = blockCount(adjacency, side);
@@ -453,6 +493,11 @@ fn validateAdjacencyOwnershipAndLayoutFast(
 
         const group = page_ops.groupAtConst(graph, group_index);
         if (group.count == 0) return error.CorruptGraph;
+
+        if (!bitmapSet(owned_groups, group_index)) return error.CorruptGraph;
+        if (bitmapIsSet(free_groups, group_index)) return error.CorruptGraph;
+        if (bitmapIsSet(retired_groups, group_index)) return error.CorruptGraph;
+
         const is_last_group = group.next == constants.END_OF_CHAIN;
         if (!is_last_group and group.count < 4 and !needsRepairFlag(adjacency, side)) {
             if (!adjacency.flags.removed) return error.CorruptGraph;
@@ -590,13 +635,14 @@ fn buildFreeBlockSet(
     allocator: std.mem.Allocator,
     comptime side: Side,
 ) !std.DynamicBitSetUnmanaged {
-    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, allocatedBlockCount(graph, side));
-    const free_blocks = switch (side) {
-        .fwd => graph.free_blocks_fwd.items,
-        .rev => graph.free_blocks_rev.items,
-    };
-    for (free_blocks) |free_block| {
-        if (free_block < allocatedBlockCount(graph, side)) set.set(@intCast(free_block));
+    const limit = allocatedBlockCount(graph, side);
+    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
+    var current = blockStackHeadIndex(graph, .free, side);
+    var visited: u32 = 0;
+    while (current != constants.END_OF_CHAIN) : (visited += 1) {
+        if (visited >= limit) break;
+        if (current < limit) set.set(current);
+        current = blockMetaNextFast(graph, current, side) catch break;
     }
     return set;
 }
@@ -606,13 +652,46 @@ fn buildRetiredBlockSet(
     allocator: std.mem.Allocator,
     comptime side: Side,
 ) !std.DynamicBitSetUnmanaged {
-    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, allocatedBlockCount(graph, side));
-    const retired_blocks = switch (side) {
-        .fwd => graph.retired_blocks_fwd.items,
-        .rev => graph.retired_blocks_rev.items,
-    };
-    for (retired_blocks) |retired_block| {
-        if (retired_block.block < allocatedBlockCount(graph, side)) set.set(@intCast(retired_block.block));
+    const limit = allocatedBlockCount(graph, side);
+    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
+    var current = blockStackHeadIndex(graph, .retired, side);
+    var visited: u32 = 0;
+    while (current != constants.END_OF_CHAIN) : (visited += 1) {
+        if (visited >= limit) break;
+        if (current < limit) set.set(current);
+        current = blockMetaNextFast(graph, current, side) catch break;
+    }
+    return set;
+}
+
+fn buildFreeGroupSet(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+) !std.DynamicBitSetUnmanaged {
+    const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
+    var current = groupStackHeadIndexFast(graph, .free);
+    var visited: u32 = 0;
+    while (current != constants.END_OF_CHAIN) : (visited += 1) {
+        if (visited >= limit) break;
+        if (current < limit) set.set(current);
+        current = groupMetaNextFast(graph, current) catch break;
+    }
+    return set;
+}
+
+fn buildRetiredGroupSet(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+) !std.DynamicBitSetUnmanaged {
+    const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
+    var current = groupStackHeadIndexFast(graph, .retired);
+    var visited: u32 = 0;
+    while (current != constants.END_OF_CHAIN) : (visited += 1) {
+        if (visited >= limit) break;
+        if (current < limit) set.set(current);
+        current = groupMetaNextFast(graph, current) catch break;
     }
     return set;
 }
@@ -954,10 +1033,16 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     var retired_forward_blocks: [TRACKED_BLOCK_BITMAP_WORDS]u64 = [_]u64{0} ** TRACKED_BLOCK_BITMAP_WORDS;
     var retired_reverse_blocks: [TRACKED_BLOCK_BITMAP_WORDS]u64 = [_]u64{0} ** TRACKED_BLOCK_BITMAP_WORDS;
 
+    var owned_groups: [TRACKED_GROUP_BITMAP_WORDS]u64 = [_]u64{0} ** TRACKED_GROUP_BITMAP_WORDS;
+    var free_groups: [TRACKED_GROUP_BITMAP_WORDS]u64 = [_]u64{0} ** TRACKED_GROUP_BITMAP_WORDS;
+    var retired_groups: [TRACKED_GROUP_BITMAP_WORDS]u64 = [_]u64{0} ** TRACKED_GROUP_BITMAP_WORDS;
+
     try populateStackBitmapFast(graph, free_forward_blocks[0..], .free, .fwd);
     try populateStackBitmapFast(graph, free_reverse_blocks[0..], .free, .rev);
     try populateStackBitmapFast(graph, retired_forward_blocks[0..], .retired, .fwd);
     try populateStackBitmapFast(graph, retired_reverse_blocks[0..], .retired, .rev);
+    try populateGroupStackBitmapFast(graph, free_groups[0..], .free);
+    try populateGroupStackBitmapFast(graph, retired_groups[0..], .retired);
 
     for (0..node_count) |node_index| {
         const node_id: u32 = @intCast(node_index);
@@ -970,8 +1055,8 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         total_reverse += rev_live;
         total_visible_forward += sumVisibleAdjacency(graph, adjacency, .fwd);
         total_visible_reverse += sumVisibleAdjacency(graph, adjacency, .rev);
-        try validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_forward_blocks[0..], free_forward_blocks[0..], retired_forward_blocks[0..], .fwd);
-        try validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], .rev);
+        try validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_forward_blocks[0..], free_forward_blocks[0..], retired_forward_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .fwd);
+        try validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .rev);
         try validateOccupancyFast(graph, adjacency, .fwd);
         try validateOccupancyFast(graph, adjacency, .rev);
         try validateForwardConsistencyFast(graph, node_id, adjacency);
@@ -1000,6 +1085,40 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
 
     try validateRepairDebtFast(graph, node_count);
 
+    {
+        const fwd_limit = allocatedBlockCount(graph, .fwd);
+        for (0..fwd_limit) |block_index| {
+            if (!bitmapIsSet(owned_forward_blocks[0..], @intCast(block_index)) and
+                !bitmapIsSet(free_forward_blocks[0..], @intCast(block_index)) and
+                !bitmapIsSet(retired_forward_blocks[0..], @intCast(block_index)))
+            {
+                return error.CorruptGraph;
+            }
+        }
+    }
+    {
+        const rev_limit = allocatedBlockCount(graph, .rev);
+        for (0..rev_limit) |block_index| {
+            if (!bitmapIsSet(owned_reverse_blocks[0..], @intCast(block_index)) and
+                !bitmapIsSet(free_reverse_blocks[0..], @intCast(block_index)) and
+                !bitmapIsSet(retired_reverse_blocks[0..], @intCast(block_index)))
+            {
+                return error.CorruptGraph;
+            }
+        }
+    }
+    {
+        const group_limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+        for (0..group_limit) |group_index| {
+            if (!bitmapIsSet(owned_groups[0..], @intCast(group_index)) and
+                !bitmapIsSet(free_groups[0..], @intCast(group_index)) and
+                !bitmapIsSet(retired_groups[0..], @intCast(group_index)))
+            {
+                return error.CorruptGraph;
+            }
+        }
+    }
+
     if (total_forward != total_reverse) return error.CorruptGraph;
     if (total_visible_forward != total_visible_reverse) return error.CorruptGraph;
     if (total_visible_forward != graph.edge_count.load(.acquire)) return error.CorruptGraph;
@@ -1017,6 +1136,7 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
     defer owned_forward_blocks.deinit(allocator);
     var owned_reverse_blocks = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire));
     defer owned_reverse_blocks.deinit(allocator);
+
     var free_forward_blocks = try buildFreeBlockSet(graph, allocator, .fwd);
     defer free_forward_blocks.deinit(allocator);
     var free_reverse_blocks = try buildFreeBlockSet(graph, allocator, .rev);
@@ -1025,6 +1145,14 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
     defer retired_forward_blocks.deinit(allocator);
     var retired_reverse_blocks = try buildRetiredBlockSet(graph, allocator, .rev);
     defer retired_reverse_blocks.deinit(allocator);
+
+    const group_limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    var owned_groups_debug = try std.DynamicBitSetUnmanaged.initEmpty(allocator, group_limit);
+    defer owned_groups_debug.deinit(allocator);
+    var free_groups_debug = try buildFreeGroupSet(graph, allocator);
+    defer free_groups_debug.deinit(allocator);
+    var retired_groups_debug = try buildRetiredGroupSet(graph, allocator);
+    defer retired_groups_debug.deinit(allocator);
 
     const node_count = graph.publishedNodeCount();
 
@@ -1040,6 +1168,45 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &forward_blocks, .fwd);
         try collectAdjacencyBlocks(graph, allocator, &violations, node_id, adjacency, &reverse_blocks, .rev);
 
+        if (adjacency.group_count_fwd > 0) {
+            var group_idx = adjacency.first_group_fwd;
+            var visited_groups: u32 = 0;
+            while (group_idx != constants.END_OF_CHAIN and visited_groups < adjacency.group_count_fwd) : (visited_groups += 1) {
+                if (group_idx < group_limit) {
+                    if (owned_groups_debug.isSet(group_idx)) {
+                        try violations.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
+                    }
+                    owned_groups_debug.set(group_idx);
+                    if (free_groups_debug.isSet(group_idx)) {
+                        try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = group_idx } });
+                    }
+                    if (retired_groups_debug.isSet(group_idx)) {
+                        try violations.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
+                    }
+                }
+                group_idx = page_ops.groupAtConst(graph, group_idx).next;
+            }
+        }
+        if (adjacency.group_count_rev > 0) {
+            var group_idx = adjacency.first_group_rev;
+            var visited_groups: u32 = 0;
+            while (group_idx != constants.END_OF_CHAIN and visited_groups < adjacency.group_count_rev) : (visited_groups += 1) {
+                if (group_idx < group_limit) {
+                    if (owned_groups_debug.isSet(group_idx)) {
+                        try violations.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
+                    }
+                    owned_groups_debug.set(group_idx);
+                    if (free_groups_debug.isSet(group_idx)) {
+                        try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = group_idx } });
+                    }
+                    if (retired_groups_debug.isSet(group_idx)) {
+                        try violations.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
+                    }
+                }
+                group_idx = page_ops.groupAtConst(graph, group_idx).next;
+            }
+        }
+
         try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_forward_blocks, &free_forward_blocks, &retired_forward_blocks, node_id, forward_blocks.items, .fwd);
         try appendOwnershipAndShapeViolations(graph, allocator, &violations, &owned_reverse_blocks, &free_reverse_blocks, &retired_reverse_blocks, node_id, reverse_blocks.items, .rev);
         try appendForwardConsistencyViolations(graph, allocator, &violations, node_id, forward_blocks.items);
@@ -1051,20 +1218,24 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             }
         }
 
-        // RFC §2.5: degree cache consistency.
+        // RFC §2.5: degree cache consistency. Removed nodes are exempt:
+        // their reverse side may retain residual tomstoned structure that
+        // does not contribute to the public logical degree.
         const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
-        const cached_fwd: usize = node_buffer.degree_fwd;
-        const cached_rev: usize = node_buffer.degree_rev;
-        const live_fwd: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .fwd));
-        if (cached_fwd < constants.DEGREE_OVERFLOW and live_fwd < constants.DEGREE_OVERFLOW and cached_fwd != live_fwd) {
-            try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_fwd), .actual = @intCast(cached_fwd) } });
-        }
-        const live_rev: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .rev));
-        if (cached_rev < constants.DEGREE_OVERFLOW and live_rev < constants.DEGREE_OVERFLOW and cached_rev != live_rev) {
-            try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_rev), .actual = @intCast(cached_rev) } });
+        if (!adjacency.flags.removed) {
+            const cached_fwd: usize = node_buffer.degree_fwd;
+            const cached_rev: usize = node_buffer.degree_rev;
+            const live_fwd: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .fwd));
+            if (cached_fwd < constants.DEGREE_OVERFLOW and live_fwd < constants.DEGREE_OVERFLOW and cached_fwd != live_fwd) {
+                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_fwd), .actual = @intCast(cached_fwd) } });
+            }
+            const live_rev: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .rev));
+            if (cached_rev < constants.DEGREE_OVERFLOW and live_rev < constants.DEGREE_OVERFLOW and cached_rev != live_rev) {
+                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_rev), .actual = @intCast(cached_rev) } });
+            }
         }
 
-        if (adjacency.flags.removed and (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or cached_fwd != 0)) {
+        if (adjacency.flags.removed and (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or node_buffer.degree_fwd != 0)) {
             try violations.append(allocator, .{ .removed_node_has_outgoing = .{ .node = node_id } });
         }
         if (adjacency.flags.removed and (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev)) {
@@ -1072,17 +1243,54 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         }
 
         // RFC §3.2: at most MAX_GROUPS_PER_NODE runs without repair.
-        if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) {
-            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
+        // Removed nodes are exempt from layout debt checks: their reverse side
+        // may retain grouped tombstones until compaction (RFC §6.3).
+        if (!adjacency.flags.removed) {
+            if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) {
+                try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
+            }
+            if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) {
+                try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
+            }
+            try appendLayoutDebtViolations(graph, allocator, &violations, node_id, adjacency, .fwd);
+            try appendLayoutDebtViolations(graph, allocator, &violations, node_id, adjacency, .rev);
         }
-        if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) {
-            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
-        }
-        try appendLayoutDebtViolations(graph, allocator, &violations, node_id, adjacency, .fwd);
-        try appendLayoutDebtViolations(graph, allocator, &violations, node_id, adjacency, .rev);
     }
 
     try appendRepairDebtViolations(graph, allocator, &violations);
+
+    {
+        const fwd_limit = @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire);
+        for (0..fwd_limit) |block_index| {
+            if (!owned_forward_blocks.isSet(block_index) and
+                !free_forward_blocks.isSet(block_index) and
+                !retired_forward_blocks.isSet(block_index))
+            {
+                try violations.append(allocator, .{ .unreachable_forward_block = .{ .block = @intCast(block_index) } });
+            }
+        }
+    }
+    {
+        const rev_limit = @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire);
+        for (0..rev_limit) |block_index| {
+            if (!owned_reverse_blocks.isSet(block_index) and
+                !free_reverse_blocks.isSet(block_index) and
+                !retired_reverse_blocks.isSet(block_index))
+            {
+                try violations.append(allocator, .{ .unreachable_reverse_block = .{ .block = @intCast(block_index) } });
+            }
+        }
+    }
+    {
+        for (0..group_limit) |group_index| {
+            if (!owned_groups_debug.isSet(group_index) and
+                !free_groups_debug.isSet(group_index) and
+                !retired_groups_debug.isSet(group_index))
+            {
+                try violations.append(allocator, .{ .unreachable_group = .{ .group = @intCast(group_index) } });
+            }
+        }
+    }
 
     if (total_visible != graph.edge_count.load(.acquire)) {
         try violations.append(allocator, .{ .edge_count_mismatch = .{ .expected = total_visible, .actual = graph.edge_count.load(.acquire) } });

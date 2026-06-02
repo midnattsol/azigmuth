@@ -49,3 +49,26 @@ test "addEdge with NodeId from a different graph succeeds when index happens to 
     try testing.expectEqual(@as(u64, 1), graph_b.edgeCount());
     try testing.expectEqual(@as(usize, 1), try graph_b.outDegree(node2_in_b));
 }
+
+test "addEdge with NodeId beyond node count returns InvalidNode even if graph has nodes" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    _ = try graph.addNode();
+    _ = try graph.addNode();
+
+    try testing.expectError(error.InvalidNode, graph.addEdge(.{ .index = 99 }, .{ .index = 0 }, 0, 0));
+    try testing.expectError(error.InvalidNode, graph.addEdge(.{ .index = 0 }, .{ .index = 99 }, 0, 0));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}
+
+test "NodeId with zero index is valid after addNode called at least once" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    _ = try graph.addNode();
+    var neighbors = try graph.neighbors(.{ .index = 0 });
+    neighbors.deinit();
+    // Node 0 is valid - no error.
+    try testing.expect(graph.hasNode(.{ .index = 0 }));
+}

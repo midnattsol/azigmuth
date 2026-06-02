@@ -56,6 +56,10 @@ const ScratchAllocations = struct {
         self.active = false;
     }
 
+    fn adoptReverseBlocks(self: *ScratchAllocations, allocator: std.mem.Allocator, blocks: []const u32) !void {
+        try self.reverse_blocks.appendSlice(allocator, blocks);
+    }
+
     fn cleanup(self: *ScratchAllocations, graph: *graph_core.GraphCore) void {
         if (!self.active) return;
 
@@ -82,7 +86,7 @@ fn toCachedDegree(count: usize) u16 {
     return if (count < constants.DEGREE_OVERFLOW) @intCast(count) else constants.DEGREE_OVERFLOW;
 }
 
-fn publishComposedAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
     const meta = node.loadPublishedMeta();
     node.stagingFwd(meta).* = .{
         .first_block = adj.first_block_fwd,
@@ -97,6 +101,17 @@ fn publishComposedAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
         .first_group = adj.first_group_rev,
     };
     _ = common.publishStagedBoth(node, meta, adj.flags);
+}
+
+fn publishRevAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+    const meta = node.loadPublishedMeta();
+    node.stagingRev(meta).* = .{
+        .first_block = adj.first_block_rev,
+        .block_count = adj.block_count_rev,
+        .group_count = adj.group_count_rev,
+        .first_group = adj.first_group_rev,
+    };
+    _ = common.publishStagedRev(node, meta, adj.flags);
 }
 
 fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.NodeId, destinations: *std.ArrayList(u32)) !void {
@@ -416,7 +431,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     for (related_nodes.items) |*related| {
         if (related.needs_reverse_cleanup) {
             const destination_adj_before = related.node_buffer.publishedAdj();
-            var rb = try repair.sortedRebuildReverse(
+            var rb = try repair.prepareReverseWithoutSource(
                 graph,
                 destination_adj_before.first_block_rev,
                 destination_adj_before.block_count_rev,
@@ -426,6 +441,12 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
                 graph.allocator,
             );
             defer rb.new_blocks.deinit(graph.allocator);
+
+            scratch.adoptReverseBlocks(graph.allocator, rb.new_blocks.items) catch |err| {
+                for (rb.new_blocks.items) |bid| page_ops.freeBlock(graph, bid, .rev);
+                return err;
+            };
+
             var destination_staging_adj = destination_adj_before;
             try buildReverseAdjacencyFromBlocksTracked(&destination_staging_adj, graph, rb.new_blocks.items, &scratch);
             const live_after: usize = rb.live_after;
@@ -454,7 +475,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
 
     var source_staging_adj = source_adj_before;
     if (had_self_edge) {
-        var rb = try repair.sortedRebuildReverse(
+        var rb = try repair.prepareReverseWithoutSource(
             graph,
             source_adj_before.first_block_rev,
             source_adj_before.block_count_rev,
@@ -464,6 +485,11 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
             graph.allocator,
         );
         defer rb.new_blocks.deinit(graph.allocator);
+
+        scratch.adoptReverseBlocks(graph.allocator, rb.new_blocks.items) catch |err| {
+            for (rb.new_blocks.items) |bid| page_ops.freeBlock(graph, bid, .rev);
+            return err;
+        };
         try buildReverseAdjacencyFromBlocksTracked(&source_staging_adj, graph, rb.new_blocks.items, &scratch);
     }
 
@@ -481,13 +507,13 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         if (update.decrement_visible_fwd) {
             common.decrementDegree(&update.node_buffer.degree_fwd);
         }
-        if (!std.meta.eql(update.staging_adj_after, update.published_adj_before)) {
+        if (update.needs_reverse_retire) {
             update.node_buffer.degree_rev = update.new_degree_rev;
-            publishComposedAdj(update.node_buffer, update.staging_adj_after);
+            publishRevAdj(update.node_buffer, update.staging_adj_after);
         }
     }
 
-    publishComposedAdj(source_node, source_staging_adj);
+    publishBothAdj(source_node, source_staging_adj);
 
     for (destination_updates.items) |update| {
         if (update.needs_reverse_retire) {

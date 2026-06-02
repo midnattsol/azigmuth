@@ -63,3 +63,18 @@ test "node pages: a node that lives in the second page still answers neighbors c
     try testing.expectEqual(@as(usize, 1), incoming_list.len);
     try testing.expectEqual(source.index, incoming_list[0].index);
 }
+
+test "node pages: nodePageCount formula is consistent with nodeCount" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const nodes_per_page = constants.NODES_PER_PAGE;
+    // Test the formula: pageCount = pageOf(nodeCount - 1) + 1
+    for (0..nodes_per_page * 4 + 7) |_| {
+        _ = try graph.addNode();
+    }
+    const count = graph.nodeCount();
+    const page_count = graph.nodePageCount();
+    const expected = if (count == 0) @as(usize, 1) else @as(usize, (count - 1) / nodes_per_page + 1);
+    try testing.expectEqual(expected, page_count);
+}

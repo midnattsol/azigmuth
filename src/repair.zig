@@ -15,7 +15,7 @@ const rcu = @import("rcu.zig");
 const node_validity = @import("node_validity.zig");
 const mutation_common = @import("mutation/common.zig");
 
-fn publishComposedAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
     const meta = node.loadPublishedMeta();
     node.stagingFwd(meta).* = .{
         .first_block = adj.first_block_fwd,
@@ -437,6 +437,7 @@ const Emit = struct {
         total_blocks_ptr: *u16,
         first_block_set_ptr: *bool,
         tail_group_ptr: *?u32,
+        allocs_optional: ?*mutation_common.PrePublishAllocations,
     ) !void {
         if (run_count_ptr.* == 0) return;
         if (!first_block_set_ptr.*) {
@@ -455,8 +456,8 @@ const Emit = struct {
             .fwd => adj.group_count_fwd,
             .rev => adj.group_count_rev,
         }) == 0) {
-            const prefix_group = try page_ops.allocGroup(graph_ptr);
-            const group = try page_ops.allocGroup(graph_ptr);
+            const prefix_group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
+            const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
             const first_start: u32 = switch (dir) {
                 .fwd => adj.first_block_fwd,
                 .rev => adj.first_block_rev,
@@ -479,7 +480,7 @@ const Emit = struct {
             }
             tail_group_ptr.* = group;
         } else {
-            const group = try page_ops.allocGroup(graph_ptr);
+            const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
             page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
             page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
             tail_group_ptr.* = group;
@@ -539,12 +540,12 @@ fn rebuildStagingAdjAfterMerge(
             Emit.one(new_idx, &run_start, &run_count);
             if (block_idx == left_idx) {
                 if (new_right) |nr| {
-                    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
                     Emit.one(nr, &run_start, &run_count);
                 }
             }
         }
-        try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+        try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
         switch (side) {
             .fwd => staging_adj.block_count_fwd = total_blocks,
             .rev => staging_adj.block_count_rev = total_blocks,
@@ -561,7 +562,7 @@ fn rebuildStagingAdjAfterMerge(
             Emit.one(idx, &run_start, &run_count);
             if (block_idx == left_idx) {
                 if (new_right) |nr| {
-                    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
                     Emit.one(nr, &run_start, &run_count);
                 }
             }
@@ -569,7 +570,7 @@ fn rebuildStagingAdjAfterMerge(
         if (group.next == constants.END_OF_CHAIN) break;
         group_idx = group.next;
     }
-    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
     switch (side) {
         .fwd => staging_adj.block_count_fwd = total_blocks,
         .rev => staging_adj.block_count_rev = total_blocks,
@@ -619,6 +620,7 @@ fn buildAdjacencyFromBlocks(
     graph: *graph_core.GraphCore,
     comptime side: adjacency.AdjSide,
     blocks: []const u32,
+    allocs: ?*mutation_common.PrePublishAllocations,
 ) !void {
     switch (side) {
         .fwd => {
@@ -648,14 +650,14 @@ fn buildAdjacencyFromBlocks(
         } else {
             // flush previous run using Emit.flush
             if (run_count > 0) {
-                try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+                try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
             }
             run_start = block_idx;
             run_count = 1;
         }
     }
     if (run_count > 0) {
-        try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
+        try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
     }
     switch (side) {
         .fwd => staging_adj.block_count_fwd = total_blocks,
@@ -783,7 +785,10 @@ pub fn sortedRebuildForward(
 
     const out_blocks = (live_after + 63) / 64;
     var new_blocks = try std.ArrayList(u32).initCapacity(allocator, out_blocks);
-    errdefer new_blocks.deinit(allocator);
+    errdefer {
+        for (new_blocks.items) |block| page_ops.freeBlock(graph, block, .fwd);
+        new_blocks.deinit(allocator);
+    }
 
     var iters = try std.ArrayList(BlockIter).initCapacity(allocator, @max(1, max_iters));
     defer iters.deinit(allocator);
@@ -839,7 +844,7 @@ pub fn sortedRebuildForward(
 
         if (out_block == null or out_slot == 64) {
             out_block = try page_ops.allocBlock(graph, .fwd);
-            try new_blocks.append(allocator, out_block.?);
+            new_blocks.appendAssumeCapacity(out_block.?);
             out_slot = 0;
         }
 
@@ -915,7 +920,10 @@ pub fn sortedRebuildReverse(
 
     const out_blocks = (live_after + 63) / 64;
     var new_blocks = try std.ArrayList(u32).initCapacity(allocator, out_blocks);
-    errdefer new_blocks.deinit(allocator);
+    errdefer {
+        for (new_blocks.items) |block| page_ops.freeBlock(graph, block, .rev);
+        new_blocks.deinit(allocator);
+    }
 
     var iters = try std.ArrayList(BlockIter).initCapacity(allocator, @max(1, max_iters));
     defer iters.deinit(allocator);
@@ -973,7 +981,7 @@ pub fn sortedRebuildReverse(
 
         if (out_block == null or out_slot == 64) {
             out_block = try page_ops.allocBlock(graph, .rev);
-            try new_blocks.append(allocator, out_block.?);
+            new_blocks.appendAssumeCapacity(out_block.?);
             out_slot = 0;
         }
 
@@ -1099,6 +1107,7 @@ fn rebuildForwardWithoutRemovedDestinations(
     graph: *graph_core.GraphCore,
     node_index: u32,
     published_adj: types.NodeAdj,
+    allocs: *mutation_common.PrePublishAllocations,
 ) !ForwardTombstoneCompaction {
     var result = try sortedRebuildForward(
         graph,
@@ -1110,11 +1119,61 @@ fn rebuildForwardWithoutRemovedDestinations(
     );
     defer result.new_blocks.deinit(graph.allocator);
 
+    try allocs.adoptBlocks(graph.allocator, .fwd, result.new_blocks.items);
+
     var staging_adj = published_adj;
-    try buildAdjacencyFromBlocks(&staging_adj, graph, .fwd, result.new_blocks.items);
+    try buildAdjacencyFromBlocks(&staging_adj, graph, .fwd, result.new_blocks.items, allocs);
     updateRepairDebt(graph, &staging_adj, node_index, .fwd);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0 };
+}
+
+pub fn countReverseSourceMatches(
+    graph: *const graph_core.GraphCore,
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+    source_index: u32,
+) usize {
+    var matches: usize = 0;
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |block_idx| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
+            const live = @popCount(block.mask);
+            for (0..live) |slot| {
+                if (block.sources[slot] == source_index) matches += 1;
+            }
+        }
+    } else {
+        var group_idx = first_group;
+        while (group_idx != constants.END_OF_CHAIN) {
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
+                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
+                const live = @popCount(block.mask);
+                for (0..live) |slot| {
+                    if (block.sources[slot] == source_index) matches += 1;
+                }
+            }
+            group_idx = group.next;
+        }
+    }
+    return matches;
+}
+
+pub fn prepareReverseWithoutSource(
+    graph: *graph_core.GraphCore,
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+    source_index: u32,
+    allocator: std.mem.Allocator,
+) !SortedRebuildResult {
+    const matches = countReverseSourceMatches(graph, first_block, block_count, group_count, first_group, source_index);
+    if (matches != 1) return error.CorruptGraph;
+    return sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, source_index, allocator);
 }
 
 fn rebuildReverseWithoutSource(
@@ -1122,34 +1181,9 @@ fn rebuildReverseWithoutSource(
     destination_index: u32,
     published_adj: types.NodeAdj,
     source_index: u32,
+    allocs: *mutation_common.PrePublishAllocations,
 ) !ReverseTombstoneCompaction {
-    var removed_matches: usize = 0;
-    if (published_adj.group_count_rev == 0) {
-        for (published_adj.first_block_rev..published_adj.first_block_rev + published_adj.block_count_rev) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (block.sources[slot] == source_index) removed_matches += 1;
-            }
-        }
-    } else {
-        var gidx = published_adj.first_group_rev;
-        while (gidx != constants.END_OF_CHAIN) {
-            const grp = page_ops.groupAtConst(graph, gidx);
-            for (grp.start..grp.start + grp.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (block.sources[slot] == source_index) removed_matches += 1;
-                }
-            }
-            gidx = grp.next;
-        }
-    }
-
-    if (removed_matches != 1) return error.CorruptGraph;
-
-    var result = try sortedRebuildReverse(
+    var result = try prepareReverseWithoutSource(
         graph,
         published_adj.first_block_rev,
         published_adj.block_count_rev,
@@ -1160,8 +1194,10 @@ fn rebuildReverseWithoutSource(
     );
     defer result.new_blocks.deinit(graph.allocator);
 
+    try allocs.adoptBlocks(graph.allocator, .rev, result.new_blocks.items);
+
     var staging_adj = published_adj;
-    try buildAdjacencyFromBlocks(&staging_adj, graph, .rev, result.new_blocks.items);
+    try buildAdjacencyFromBlocks(&staging_adj, graph, .rev, result.new_blocks.items, allocs);
     updateRepairDebt(graph, &staging_adj, destination_index, .rev);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after };
@@ -1209,12 +1245,16 @@ fn repairForwardTombstonesWithReverseCleanup(
     var writer_guard = beginWriter(graph);
     defer writer_guard.end();
 
+    var allocs = mutation_common.PrePublishAllocations{};
+    defer allocs.deinit(graph.allocator);
+    defer allocs.cleanup(graph);
+
     const source_adj_before = node_mut.publishedAdj();
-    const source_result = try rebuildForwardWithoutRemovedDestinations(graph, node.index, source_adj_before);
+    const source_result = try rebuildForwardWithoutRemovedDestinations(graph, node.index, source_adj_before, &allocs);
 
     for (tombstone_destinations.items, claimed_dest_nodes.items) |destination_index, destination_node| {
         const destination_adj_before = destination_node.publishedAdj();
-        const reverse_result = try rebuildReverseWithoutSource(graph, destination_index, destination_adj_before, node.index);
+        const reverse_result = try rebuildReverseWithoutSource(graph, destination_index, destination_adj_before, node.index, &allocs);
         try reverse_updates.append(graph.allocator, .{
             .node_buffer = destination_node,
             .published_adj_before = destination_adj_before,
@@ -1223,14 +1263,16 @@ fn repairForwardTombstonesWithReverseCleanup(
         });
     }
 
+    allocs.disarm();
+
     for (reverse_updates.items) |update| {
         update.node_buffer.degree_rev = update.new_degree_rev;
-        publishComposedAdj(update.node_buffer, update.staging_adj_after);
+        publishBothAdj(update.node_buffer, update.staging_adj_after);
         try retireAdjacencySide(graph, update.published_adj_before, .rev);
     }
 
     node_mut.degree_fwd = if (source_result.live_after < constants.DEGREE_OVERFLOW) @intCast(source_result.live_after) else constants.DEGREE_OVERFLOW;
-    publishComposedAdj(node_mut, source_result.staging_adj);
+    publishBothAdj(node_mut, source_result.staging_adj);
     try retireAdjacencySide(graph, source_adj_before, .fwd);
 
     return 1;
@@ -1317,7 +1359,13 @@ fn repairNodeSideLimited(
     defer sorted.new_blocks.deinit(graph.allocator);
     const live_total: usize = sorted.live_after;
 
-    try buildAdjacencyFromBlocks(&staging_adj, graph, side, sorted.new_blocks.items);
+    var allocs = mutation_common.PrePublishAllocations{};
+    defer allocs.deinit(graph.allocator);
+    defer allocs.cleanup(graph);
+
+    try allocs.adoptBlocks(graph.allocator, side, sorted.new_blocks.items);
+
+    try buildAdjacencyFromBlocks(&staging_adj, graph, side, sorted.new_blocks.items, &allocs);
 
     updateRepairDebt(graph, &staging_adj, node.index, side);
     if (side == .fwd) {
@@ -1325,7 +1373,8 @@ fn repairNodeSideLimited(
     } else {
         node_mut.degree_rev = if (live_total < constants.DEGREE_OVERFLOW) @intCast(live_total) else constants.DEGREE_OVERFLOW;
     }
-    publishComposedAdj(node_mut, staging_adj);
+    allocs.disarm();
+    publishBothAdj(node_mut, staging_adj);
 
     // Retire old blocks after publishing the replacement
     if (group_count == 0) {

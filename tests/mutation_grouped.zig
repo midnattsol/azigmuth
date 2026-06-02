@@ -185,7 +185,11 @@ test "mutation grouped: RepairRequired in grouped forward does not publish" {
     page_ops.edgeBlockAt(&graph.graph, first_block_index, .fwd).mask = constants.denseMask(48);
     (try graph.nodeAt(source)).degree_fwd = 98;
     const reverse_node = try graph.nodeAt(.{ .index = 49 });
+    // Retire reverse block before clearing it to avoid orphan detection.
+    const rev_block = helpers.publishedRevSide(reverse_node).first_block;
+    page_ops.freeBlock(&graph.graph, rev_block, .rev);
     helpers.publishedRevSide(reverse_node).block_count = 0;
+    helpers.publishedRevSide(reverse_node).first_block = 0;
     reverse_node.degree_rev = 0;
     graph.graph.edge_count.store(98, .release);
 
@@ -203,7 +207,11 @@ test "mutation grouped: RepairRequired in grouped reverse does not publish" {
     page_ops.edgeBlockAt(&graph.graph, first_block_index, .rev).mask = constants.denseMask(48);
     (try graph.nodeAt(destination)).degree_rev = 98;
     const forward_node = try graph.nodeAt(.{ .index = 49 });
+    // Retire forward block before clearing it to avoid orphan detection.
+    const fwd_block = helpers.publishedFwdSide(forward_node).first_block;
+    page_ops.freeBlock(&graph.graph, fwd_block, .fwd);
     helpers.publishedFwdSide(forward_node).block_count = 0;
+    helpers.publishedFwdSide(forward_node).first_block = 0;
     forward_node.degree_fwd = 0;
     graph.graph.edge_count.store(98, .release);
 
