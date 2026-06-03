@@ -35,9 +35,10 @@ fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.Node
     }
 
     var group_idx = first_group;
-    var visited: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) : (visited += 1) {
-        if (visited >= group_count or group_idx >= graph.group_count) break;
+    var visited: u32 = 0;
+    while (group_idx != constants.END_OF_CHAIN) {
+        if (visited >= graph.group_count or group_idx >= graph.group_count) break;
+        visited += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);

@@ -91,25 +91,3 @@ test "oom repair: repairNode induced allocation failures do not publish partial 
         }
     }
 }
-
-test "oom repair: appendGroupToAdj failure while creating prefix group leaves adjacency unchanged" {
-    var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
-    var graph = try graph_mod.Graph.init(failing_allocator.allocator());
-    defer graph.deinit();
-
-    const first_block = try graph.allocBlockFwd();
-    const new_block = try graph.allocBlockFwd();
-    for (0..constants.EDGE_GROUPS_PER_PAGE - 1) |_| {
-        _ = try graph.allocGroup();
-    }
-
-    var adjacency = std.mem.zeroes(types.NodeAdj);
-    adjacency.first_block_fwd = first_block;
-    adjacency.block_count_fwd = 1;
-
-    failing_allocator.fail_index = failing_allocator.alloc_index;
-    try testing.expectError(error.OutOfMemory, adjacency_mod.appendGroupToAdj(&graph.graph, &adjacency, new_block, .fwd));
-    try testing.expectEqual(@as(u16, 0), adjacency.group_count_fwd);
-    try testing.expectEqual(@as(u32, 0), adjacency.first_group_fwd);
-    try testing.expectEqual(@as(u16, 1), adjacency.block_count_fwd);
-}

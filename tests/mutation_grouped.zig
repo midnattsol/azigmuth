@@ -313,7 +313,7 @@ test "mutation grouped: addEdge COW on single-block grouped forward updates grou
     const old_dest = graph_mod.NodeId{ .index = 1 };
     const new_dest = graph_mod.NodeId{ .index = 2 };
 
-    const old_fwd = try publishSingleBlockGroupedForward(&graph, source, old_dest.index);
+    _ = try publishSingleBlockGroupedForward(&graph, source, old_dest.index);
 
     // Reverse backlink for old_dest (ungrouped, contiguous)
     try publishSingleReverseSource(&graph, old_dest, source.index);
@@ -328,10 +328,8 @@ test "mutation grouped: addEdge COW on single-block grouped forward updates grou
     try testing.expectEqual(@as(usize, 2), try graph.outDegree(source));
 
     const after = (try graph.nodeAtConst(source)).publishedAdj();
-    try testing.expectEqual(@as(u16, 1), after.group_count_fwd);
+    try testing.expectEqual(@as(u16, 0), after.group_count_fwd);
     try testing.expectEqual(@as(u16, 1), after.block_count_fwd);
-    const after_group = page_ops.groupAtConst(&graph.graph, after.first_group_fwd);
-    try testing.expect(after_group.start != old_fwd.block);
     try helpers.expectOutNeighbors(&graph, testing.allocator, source, &[_]u32{ old_dest.index, new_dest.index });
 }
 
@@ -408,7 +406,7 @@ test "mutation grouped: addEdge COW on single-block grouped reverse updates grou
     try publishSingleForwardEdge(&graph, old_source, dest.index);
 
     // Reverse on dest: single-block grouped
-    const old_rev = try publishSingleBlockGroupedReverse(&graph, dest, old_source.index);
+    _ = try publishSingleBlockGroupedReverse(&graph, dest, old_source.index);
 
     graph.graph.edge_count.store(1, .release);
     try graph.validate();
@@ -420,9 +418,7 @@ test "mutation grouped: addEdge COW on single-block grouped reverse updates grou
     try testing.expectEqual(@as(usize, 2), try graph.inDegree(dest));
 
     const after = (try graph.nodeAtConst(dest)).publishedAdj();
-    try testing.expectEqual(@as(u16, 1), after.group_count_rev);
+    try testing.expectEqual(@as(u16, 0), after.group_count_rev);
     try testing.expectEqual(@as(u16, 1), after.block_count_rev);
-    const after_group = page_ops.groupAtConst(&graph.graph, after.first_group_rev);
-    try testing.expect(after_group.start != old_rev.block);
     try helpers.expectInNeighbors(&graph, testing.allocator, dest, &[_]u32{ old_source.index, new_source.index });
 }

@@ -225,3 +225,99 @@ test "group chain: removeEdge on cyclic grouped forward adjacency returns Corrup
     // (applyRemovalPlanSide → rebuildAdjWithReplaceSide) is unbounded.
     try testing.expectError(error.CorruptGraph, graph.removeEdge(src, dst));
 }
+
+test "group chain: validate does not hang on cyclic chain with forward tombstone" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const dst = try graph.addNode();
+    const removed = try graph.addNode();
+    try graph.addEdge(src, dst, 0, 0);
+
+    try makeAdjacencyGroupedWithCycle(&graph, src);
+
+    // Insert a tombstone entry pointing to the removed node into src's forward.
+    const src_buf = try graph.nodeAt(src);
+    const published_fwd = src_buf.publishedFwd();
+    if (published_fwd.block_count > 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, published_fwd.first_block, .fwd);
+        const live: u7 = @intCast(@popCount(block.mask));
+        // Overwrite the first entry to point to the removed node.
+        if (live > 0) {
+            block.edges[0].destination = removed.index;
+        }
+    }
+
+    // Mark the target node as removed so the edge becomes a tombstone.
+    {
+        const removed_buf = try graph.nodeAt(removed);
+        var meta = removed_buf.loadPublishedMeta();
+        meta.removed = true;
+        removed_buf.storePublishedMeta(meta);
+    }
+
+    // Set needs_repair_fwd = false to force forwardHasTombstone path.
+    {
+        var flags = src_buf.loadPublishedMeta().flags();
+        flags.needs_repair_fwd = false;
+        helpers.setPublishedFlags(src_buf, flags);
+    }
+
+    // validate() must not hang — must either return CorruptGraph or succeed.
+    _ = graph.validate() catch {};
+
+    // debugValidate must also terminate.
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    // Must emit either forward_tombstone_missing_repair_flag or a cyclic chain violation.
+    var found = false;
+    for (violations) |v| {
+        if (v == .forward_tombstone_missing_repair_flag or
+            v == .blockgroup_chain_cycle)
+        {
+            found = true;
+        }
+    }
+    try testing.expect(found);
+}
+
+test "group chain: debugValidate terminates on cyclic chain with tombstone" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const dst = try graph.addNode();
+    const removed = try graph.addNode();
+    try graph.addEdge(src, dst, 0, 0);
+
+    try makeAdjacencyGroupedWithCycle(&graph, src);
+
+    const src_buf = try graph.nodeAt(src);
+    const published_fwd = src_buf.publishedFwd();
+    if (published_fwd.block_count > 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, published_fwd.first_block, .fwd);
+        const live: u7 = @intCast(@popCount(block.mask));
+        if (live > 0) {
+            block.edges[0].destination = removed.index;
+        }
+    }
+
+    {
+        const removed_buf = try graph.nodeAt(removed);
+        var meta = removed_buf.loadPublishedMeta();
+        meta.removed = true;
+        removed_buf.storePublishedMeta(meta);
+    }
+
+    {
+        var flags = src_buf.loadPublishedMeta().flags();
+        flags.needs_repair_fwd = false;
+        helpers.setPublishedFlags(src_buf, flags);
+    }
+
+    // debugValidate must terminate quickly.
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(violations.len > 0);
+}

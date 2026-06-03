@@ -5,6 +5,7 @@ const graph_mod = test_internals.graph;
 const page_ops = test_internals.page_ops;
 const constants = test_internals.constants;
 const types = test_internals.types;
+const helpers = @import("helpers.zig");
 const testing = std.testing;
 
 test "regression: removeNode reverse-only publish does not flip forward index of related nodes" {
@@ -180,4 +181,214 @@ test "regression: removeNode returns CorruptGraph when outgoing forward destinat
     // without a full-graph scan.  A duplicated outgoing destination breaks that
     // bijection and must be rejected.
     try testing.expectError(error.CorruptGraph, graph.removeNode(a));
+}
+
+test "regression: removeNode returns CorruptGraph when grouped forward chain is shorter than declared group count" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const dest_a = try graph.addNode();
+    const dest_b = try graph.addNode();
+
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).edges[0] = .{ .destination = dest_a.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).edges[0] = .{ .destination = dest_b.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = constants.END_OF_CHAIN };
+
+    const source_node = try graph.nodeAt(source);
+    helpers.clearPublishedSides(source_node);
+    helpers.publishedFwdSide(source_node).block_count = 2;
+    helpers.publishedFwdSide(source_node).group_count = 2;
+    helpers.publishedFwdSide(source_node).first_group = g0;
+    helpers.setPublishedFwdDegree(source_node, 2);
+
+    // Truncate the chain: g0.next = END while group_count still says 2.
+    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
+
+    // Reverse backlinks: each destination has source in its reverse.
+    {
+        const b = try graph.allocBlockRev();
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).sources[0] = source.index;
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).mask = constants.denseMask(1);
+        const dn = try graph.nodeAt(dest_a);
+        helpers.clearPublishedSides(dn);
+        helpers.publishedRevSide(dn).first_block = b;
+        helpers.publishedRevSide(dn).block_count = 1;
+        helpers.setPublishedRevDegree(dn, 1);
+    }
+    {
+        const b = try graph.allocBlockRev();
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).sources[0] = source.index;
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).mask = constants.denseMask(1);
+        const dn = try graph.nodeAt(dest_b);
+        helpers.clearPublishedSides(dn);
+        helpers.publishedRevSide(dn).first_block = b;
+        helpers.publishedRevSide(dn).block_count = 1;
+        helpers.setPublishedRevDegree(dn, 1);
+    }
+
+    graph.graph.edge_count.store(2, .release);
+
+    // Broken forward chain: removeNode must not publish a partial delete.
+    try testing.expectError(error.CorruptGraph, graph.removeNode(source));
+
+    // Verify dest_b's reverse was not touched (removeNode must abort before publish).
+    try testing.expectEqual(@as(u22, 1), helpers.publishedDegrees(try graph.nodeAt(dest_b)).rev);
+}
+
+test "regression: removeNode returns CorruptGraph when grouped forward chain is shorter with live destination skipped" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const dest_a = try graph.addNode();
+    const dest_b = try graph.addNode();
+
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).edges[0] = .{ .destination = dest_a.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).edges[0] = .{ .destination = dest_b.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = constants.END_OF_CHAIN };
+
+    const source_node = try graph.nodeAt(source);
+    helpers.clearPublishedSides(source_node);
+    helpers.publishedFwdSide(source_node).block_count = 2;
+    helpers.publishedFwdSide(source_node).group_count = 2;
+    helpers.publishedFwdSide(source_node).first_group = g0;
+    helpers.setPublishedFwdDegree(source_node, 2);
+
+    // Truncate chain: dest_b's block data exists but is unreachable.
+    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
+
+    {
+        const b = try graph.allocBlockRev();
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).sources[0] = source.index;
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).mask = constants.denseMask(1);
+        const dn = try graph.nodeAt(dest_a);
+        helpers.clearPublishedSides(dn);
+        helpers.publishedRevSide(dn).first_block = b;
+        helpers.publishedRevSide(dn).block_count = 1;
+        helpers.setPublishedRevDegree(dn, 1);
+    }
+    {
+        const b = try graph.allocBlockRev();
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).sources[0] = source.index;
+        page_ops.edgeBlockAt(&graph.graph, b, .rev).mask = constants.denseMask(1);
+        const dn = try graph.nodeAt(dest_b);
+        helpers.clearPublishedSides(dn);
+        helpers.publishedRevSide(dn).first_block = b;
+        helpers.publishedRevSide(dn).block_count = 1;
+        helpers.setPublishedRevDegree(dn, 1);
+    }
+
+    graph.graph.edge_count.store(2, .release);
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(source));
+
+    // dest_b's reverse must NOT have been cleaned (removeNode aborted before publish).
+    try testing.expectEqual(@as(u22, 1), helpers.publishedDegrees(try graph.nodeAt(dest_b)).rev);
+    try testing.expectEqual(@as(u22, 1), helpers.publishedDegrees(try graph.nodeAt(dest_a)).rev);
+}
+
+test "regression: removeNode returns CorruptGraph when grouped reverse chain is shorter than declared group count" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const src_a = try graph.addNode();
+    const src_b = try graph.addNode();
+
+    // Forward edges from sources to target
+    {
+        const b = try graph.allocBlockFwd();
+        page_ops.edgeBlockAt(&graph.graph, b, .fwd).edges[0] = .{ .destination = target.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        page_ops.edgeBlockAt(&graph.graph, b, .fwd).mask = constants.denseMask(1);
+        const sn = try graph.nodeAt(src_a);
+        helpers.clearPublishedSides(sn);
+        helpers.publishedFwdSide(sn).first_block = b;
+        helpers.publishedFwdSide(sn).block_count = 1;
+        helpers.setPublishedFwdDegree(sn, 1);
+    }
+    {
+        const b = try graph.allocBlockFwd();
+        page_ops.edgeBlockAt(&graph.graph, b, .fwd).edges[0] = .{ .destination = target.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        page_ops.edgeBlockAt(&graph.graph, b, .fwd).mask = constants.denseMask(1);
+        const sn = try graph.nodeAt(src_b);
+        helpers.clearPublishedSides(sn);
+        helpers.publishedFwdSide(sn).first_block = b;
+        helpers.publishedFwdSide(sn).block_count = 1;
+        helpers.setPublishedFwdDegree(sn, 1);
+    }
+
+    // Grouped reverse on target with broken chain
+    const r0 = try graph.allocBlockRev();
+    const r1 = try graph.allocBlockRev();
+    page_ops.edgeBlockAt(&graph.graph, r0, .rev).sources[0] = src_a.index;
+    page_ops.edgeBlockAt(&graph.graph, r0, .rev).mask = constants.denseMask(1);
+    page_ops.edgeBlockAt(&graph.graph, r1, .rev).sources[0] = src_b.index;
+    page_ops.edgeBlockAt(&graph.graph, r1, .rev).mask = constants.denseMask(1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = r1, .count = 1, .next = constants.END_OF_CHAIN };
+
+    const target_node = try graph.nodeAt(target);
+    helpers.clearPublishedSides(target_node);
+    helpers.publishedRevSide(target_node).block_count = 2;
+    helpers.publishedRevSide(target_node).group_count = 2;
+    helpers.publishedRevSide(target_node).first_group = g0;
+    helpers.setPublishedRevDegree(target_node, 2);
+
+    // Truncate reverse chain.
+    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
+
+    graph.graph.edge_count.store(2, .release);
+
+    // Broken reverse chain: src_b is a live predecessor whose reverse entry
+    // cannot be reached. removeNode must detect the bijection gap.
+    try testing.expectError(error.CorruptGraph, graph.removeNode(target));
+
+    // src_a's forward degree should be untouched.
+    try testing.expectEqual(@as(u22, 1), helpers.publishedDegrees(try graph.nodeAt(src_a)).fwd);
+    try testing.expectEqual(@as(u22, 1), helpers.publishedDegrees(try graph.nodeAt(src_b)).fwd);
+}
+
+test "regression: validate and debugValidate agree on grouped chain shorter than declared group count" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const node = try graph.addNode();
+
+    const b0 = try graph.allocBlockFwd();
+    const g0 = try graph.allocGroup();
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
+
+    const node_buffer = try graph.nodeAt(node);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = 2;
+    helpers.publishedFwdSide(node_buffer).group_count = 2;
+    helpers.publishedFwdSide(node_buffer).first_group = g0;
+    helpers.setPublishedFwdDegree(node_buffer, 2);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(violations.len > 0);
 }

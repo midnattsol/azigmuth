@@ -29,89 +29,8 @@ const RelatedNode = struct {
     needs_visible_fwd_decrement: bool = false,
 };
 
-const ScratchAllocations = struct {
-    reverse_blocks: std.ArrayList(u32) = .empty,
-    groups: std.ArrayList(u32) = .empty,
-    active: bool = true,
-
-    fn allocReverseBlock(self: *ScratchAllocations, graph: *graph_core.GraphCore) !u32 {
-        const block_index = try page_ops.allocBlock(graph, .rev);
-        self.reverse_blocks.append(graph.allocator, block_index) catch |err| {
-            page_ops.freeBlock(graph, block_index, .rev);
-            return err;
-        };
-        return block_index;
-    }
-
-    fn allocGroup(self: *ScratchAllocations, graph: *graph_core.GraphCore) !u32 {
-        const group_index = try page_ops.allocGroup(graph);
-        self.groups.append(graph.allocator, group_index) catch |err| {
-            page_ops.freeGroup(graph, group_index);
-            return err;
-        };
-        return group_index;
-    }
-
-    fn disarm(self: *ScratchAllocations) void {
-        self.active = false;
-    }
-
-    fn adoptReverseBlocks(self: *ScratchAllocations, allocator: std.mem.Allocator, blocks: []const u32) !void {
-        try self.reverse_blocks.appendSlice(allocator, blocks);
-    }
-
-    fn cleanup(self: *ScratchAllocations, graph: *graph_core.GraphCore) void {
-        if (!self.active) return;
-
-        var block_count = self.reverse_blocks.items.len;
-        while (block_count > 0) {
-            block_count -= 1;
-            page_ops.freeBlock(graph, self.reverse_blocks.items[block_count], .rev);
-        }
-
-        var group_count = self.groups.items.len;
-        while (group_count > 0) {
-            group_count -= 1;
-            page_ops.freeGroup(graph, self.groups.items[group_count]);
-        }
-    }
-
-    fn deinit(self: *ScratchAllocations, allocator: std.mem.Allocator) void {
-        self.reverse_blocks.deinit(allocator);
-        self.groups.deinit(allocator);
-    }
-};
-
 fn toU22Degree(count: usize) u22 {
     return @as(u22, @intCast(count));
-}
-
-fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj, fwd_degree: u22, rev_degree: u22) void {
-    const meta = node.loadPublishedMeta();
-    node.stagingFwd(meta).* = .{
-        .first_block = adj.first_block_fwd,
-        .block_count = adj.block_count_fwd,
-        .group_count = adj.group_count_fwd,
-        .first_group = adj.first_group_fwd,
-    };
-    node.stagingRev(meta).* = .{
-        .first_block = adj.first_block_rev,
-        .block_count = adj.block_count_rev,
-        .group_count = adj.group_count_rev,
-        .first_group = adj.first_group_rev,
-    };
-    _ = common.publishStagedBoth(node, meta, adj.flags, fwd_degree, rev_degree);
-}
-
-fn publishRevAdj(node: *types.NodeBuffer, adj: types.NodeAdj, new_rev_degree: u22) void {
-    const meta = node.loadPublishedMeta();
-    node.stagingRev(meta).* = .{
-        .first_block = adj.first_block_rev,
-        .block_count = adj.block_count_rev,
-        .group_count = adj.group_count_rev,
-        .first_group = adj.first_group_rev,
-    };
-    _ = common.publishStagedRev(node, meta, adj.flags.needs_repair_rev, new_rev_degree);
 }
 
 fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.NodeId, destinations: *std.ArrayList(u32)) !void {
@@ -145,130 +64,6 @@ fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.No
         }
         group_index = group.next;
     }
-}
-
-fn retireAdjacencySide(
-    graph: *graph_core.GraphCore,
-    published_adj: types.NodeAdj,
-    comptime side: adjacency.AdjSide,
-) !void {
-    const first_block: u32 = if (side == .fwd) published_adj.first_block_fwd else published_adj.first_block_rev;
-    const block_count: u16 = if (side == .fwd) published_adj.block_count_fwd else published_adj.block_count_rev;
-    const group_count: u16 = if (side == .fwd) published_adj.group_count_fwd else published_adj.group_count_rev;
-    const first_group: u32 = if (side == .fwd) published_adj.first_group_fwd else published_adj.first_group_rev;
-
-    if (block_count == 0) return;
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            switch (side) {
-                .fwd => try rcu.retireBlockFwd(graph, @intCast(block_idx)),
-                .rev => try rcu.retireBlockRev(graph, @intCast(block_idx)),
-            }
-        }
-        return;
-    }
-
-    var group_idx = first_group;
-    var visited: u16 = 0;
-    while (visited < group_count) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) break;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            switch (side) {
-                .fwd => try rcu.retireBlockFwd(graph, @intCast(block_idx)),
-                .rev => try rcu.retireBlockRev(graph, @intCast(block_idx)),
-            }
-        }
-        const old_group = group_idx;
-        group_idx = group.next;
-        rcu.retireGroup(graph, old_group);
-    }
-}
-
-fn flushReverseRun(
-    graph: *graph_core.GraphCore,
-    scratch: *ScratchAllocations,
-    staging_adj: *types.NodeAdj,
-    run_start: *u32,
-    run_count: *u16,
-    total_blocks: *u16,
-    first_block_set: *bool,
-    tail_group: *?u32,
-) !void {
-    if (run_count.* == 0) return;
-
-    if (!first_block_set.*) {
-        staging_adj.first_block_rev = run_start.*;
-        staging_adj.block_count_rev = run_count.*;
-        first_block_set.* = true;
-    } else if (tail_group.* == null and staging_adj.group_count_rev == 0) {
-        const prefix_group = try scratch.allocGroup(graph);
-        const group = try scratch.allocGroup(graph);
-        page_ops.groupAt(graph, prefix_group).* = .{
-            .start = staging_adj.first_block_rev,
-            .count = staging_adj.block_count_rev,
-            .next = group,
-        };
-        page_ops.groupAt(graph, group).* = .{
-            .start = run_start.*,
-            .count = run_count.*,
-            .next = constants.END_OF_CHAIN,
-        };
-        staging_adj.first_group_rev = prefix_group;
-        staging_adj.group_count_rev = 2;
-        tail_group.* = group;
-    } else {
-        const group = try scratch.allocGroup(graph);
-        page_ops.groupAt(graph, group).* = .{
-            .start = run_start.*,
-            .count = run_count.*,
-            .next = constants.END_OF_CHAIN,
-        };
-        page_ops.groupAt(graph, tail_group.*.?).next = group;
-        tail_group.* = group;
-        staging_adj.group_count_rev += 1;
-    }
-
-    total_blocks.* += run_count.*;
-    run_count.* = 0;
-}
-
-fn buildReverseAdjacencyFromBlocksTracked(
-    staging_adj: *types.NodeAdj,
-    graph: *graph_core.GraphCore,
-    blocks: []const u32,
-    scratch: *ScratchAllocations,
-) !void {
-    staging_adj.first_block_rev = 0;
-    staging_adj.block_count_rev = 0;
-    staging_adj.group_count_rev = 0;
-    staging_adj.first_group_rev = 0;
-    if (blocks.len == 0) return;
-
-    var run_start: u32 = 0;
-    var run_count: u16 = 0;
-    var total_blocks: u16 = 0;
-    var first_block_set = false;
-    var tail_group: ?u32 = null;
-
-    for (blocks) |block_index| {
-        if (run_count > 0 and block_index == run_start + run_count) {
-            run_count += 1;
-        } else {
-            if (run_count > 0) {
-                try flushReverseRun(graph, scratch, staging_adj, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
-            }
-            run_start = block_index;
-            run_count = 1;
-        }
-    }
-
-    if (run_count > 0) {
-        try flushReverseRun(graph, scratch, staging_adj, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
-    }
-
-    staging_adj.block_count_rev = total_blocks;
 }
 
 fn collectReverseSources(graph: *const graph_core.GraphCore, node: types.NodeId, sources: *std.ArrayList(u32)) !void {
@@ -395,6 +190,24 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     defer forward_destinations.deinit(graph.allocator);
     try collectForwardDestinations(graph, node, &forward_destinations);
 
+    // RFC §A.25: validate grouped forward chain is not truncated.
+    // A chain that ends before visiting all declared groups can hide
+    // outgoing destinations that would otherwise need reverse cleanup.
+    if (source_adj_before.group_count_fwd > 0) {
+        var chain_group_count: u16 = 0;
+        var chain_block_count: u16 = 0;
+        var chain_idx = source_adj_before.first_group_fwd;
+        while (chain_idx != constants.END_OF_CHAIN) : (chain_group_count += 1) {
+            if (chain_idx >= graph.group_count) return error.CorruptGraph;
+            if (chain_group_count >= source_adj_before.group_count_fwd) return error.CorruptGraph;
+            const ch_group = page_ops.groupAtConst(graph, chain_idx);
+            chain_block_count += ch_group.count;
+            chain_idx = ch_group.next;
+        }
+        if (chain_group_count != source_adj_before.group_count_fwd) return error.CorruptGraph;
+        if (chain_block_count != source_adj_before.block_count_fwd) return error.CorruptGraph;
+    }
+
     // RFC §A.25: reject duplicate outgoing destinations before any publish.
     {
         var seen: std.ArrayList(u32) = .empty;
@@ -470,7 +283,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         try markRelatedNode(graph, &related_nodes, source_index, false, true);
     }
 
-    var scratch = ScratchAllocations{};
+    var scratch = common.MutationScratch{};
     defer {
         scratch.cleanup(graph);
         scratch.deinit(graph.allocator);
@@ -496,13 +309,20 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
             );
             defer rb.new_blocks.deinit(graph.allocator);
 
-            scratch.adoptReverseBlocks(graph.allocator, rb.new_blocks.items) catch |err| {
+            scratch.adoptBlocks(graph.allocator, .rev, rb.new_blocks.items) catch |err| {
                 for (rb.new_blocks.items) |bid| page_ops.freeBlock(graph, bid, .rev);
                 return err;
             };
 
             var destination_staging_adj = destination_adj_before;
-            try buildReverseAdjacencyFromBlocksTracked(&destination_staging_adj, graph, rb.new_blocks.items, &scratch);
+            {
+                var tmp: types.SideAdj = undefined;
+                try common.buildSideFromBlocks(&tmp, graph, rb.new_blocks.items, &scratch);
+                destination_staging_adj.first_block_rev = tmp.first_block;
+                destination_staging_adj.block_count_rev = tmp.block_count;
+                destination_staging_adj.group_count_rev = tmp.group_count;
+                destination_staging_adj.first_group_rev = tmp.first_group;
+            }
             const live_after: usize = rb.live_after;
             // Removed nodes always have logical degree 0 regardless of
             // residual reverse structure after tombstone cleanup.
@@ -543,11 +363,18 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         );
         defer rb.new_blocks.deinit(graph.allocator);
 
-        scratch.adoptReverseBlocks(graph.allocator, rb.new_blocks.items) catch |err| {
+        scratch.adoptBlocks(graph.allocator, .rev, rb.new_blocks.items) catch |err| {
             for (rb.new_blocks.items) |bid| page_ops.freeBlock(graph, bid, .rev);
             return err;
         };
-        try buildReverseAdjacencyFromBlocksTracked(&source_staging_adj, graph, rb.new_blocks.items, &scratch);
+        {
+            var tmp: types.SideAdj = undefined;
+            try common.buildSideFromBlocks(&tmp, graph, rb.new_blocks.items, &scratch);
+            source_staging_adj.first_block_rev = tmp.first_block;
+            source_staging_adj.block_count_rev = tmp.block_count;
+            source_staging_adj.group_count_rev = tmp.group_count;
+            source_staging_adj.first_group_rev = tmp.first_group;
+        }
     }
 
     source_staging_adj.first_block_fwd = 0;
@@ -566,11 +393,11 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
             _ = common.publishStagedFwd(update.node_buffer, meta, meta.needs_repair_fwd, new_fwd);
         }
         if (update.needs_reverse_retire) {
-            publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);
+            common.publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);
         }
     }
 
-    publishBothAdj(source_node, source_staging_adj, 0, 0);
+    common.publishBothAdj(source_node, source_staging_adj, 0, 0);
 
     // With the target node now marked removed, recompute forward repair debt
     // on each live predecessor.  Their forward adjacency still contains a
@@ -584,12 +411,12 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
 
     for (destination_updates.items) |update| {
         if (update.needs_reverse_retire) {
-            try retireAdjacencySide(graph, update.published_adj_before, .rev);
+            try common.retireSide(graph, update.published_adj_before, .rev);
         }
     }
-    try retireAdjacencySide(graph, source_adj_before, .fwd);
+    try common.retireSide(graph, source_adj_before, .fwd);
     if (had_self_edge) {
-        try retireAdjacencySide(graph, source_adj_before, .rev);
+        try common.retireSide(graph, source_adj_before, .rev);
     }
 
     scratch.disarm();

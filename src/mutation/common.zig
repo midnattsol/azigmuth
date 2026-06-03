@@ -72,17 +72,24 @@ pub const WriterGuard = struct {
     }
 };
 
-pub const PrePublishAllocations = struct {
-    forward_blocks: std.ArrayList(u32) = .empty,
-    reverse_blocks: std.ArrayList(u32) = .empty,
+pub const AdjSlot = struct {
+    block_idx: u32,
+    slot: u7,
+};
+
+/// Temporary allocation tracker shared by all mutations.  Tracks
+/// forward blocks, reverse blocks and groups, with automatic cleanup.
+pub const MutationScratch = struct {
+    fwd_blocks: std.ArrayList(u32) = .empty,
+    rev_blocks: std.ArrayList(u32) = .empty,
     groups: std.ArrayList(u32) = .empty,
     active: bool = true,
 
-    pub fn allocBlock(self: *PrePublishAllocations, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+    pub fn allocBlock(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
         const block = try page_ops.allocBlock(graph, side);
         const list = switch (side) {
-            .fwd => &self.forward_blocks,
-            .rev => &self.reverse_blocks,
+            .fwd => &self.fwd_blocks,
+            .rev => &self.rev_blocks,
         };
         list.append(graph.allocator, block) catch |err| {
             page_ops.freeBlock(graph, block, side);
@@ -91,7 +98,7 @@ pub const PrePublishAllocations = struct {
         return block;
     }
 
-    pub fn allocGroup(self: *PrePublishAllocations, graph: *graph_core.GraphCore) !u32 {
+    pub fn allocGroup(self: *MutationScratch, graph: *graph_core.GraphCore) !u32 {
         const group = try page_ops.allocGroup(graph);
         self.groups.append(graph.allocator, group) catch |err| {
             page_ops.freeGroup(graph, group);
@@ -100,36 +107,305 @@ pub const PrePublishAllocations = struct {
         return group;
     }
 
-    pub fn adoptBlocks(self: *PrePublishAllocations, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide, blocks: []const u32) !void {
+    pub fn adoptBlocks(self: *MutationScratch, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide, blocks: []const u32) !void {
         const list = switch (side) {
-            .fwd => &self.forward_blocks,
-            .rev => &self.reverse_blocks,
+            .fwd => &self.fwd_blocks,
+            .rev => &self.rev_blocks,
         };
         try list.appendSlice(allocator, blocks);
     }
 
-    pub fn disarm(self: *PrePublishAllocations) void {
+    pub fn disarm(self: *MutationScratch) void {
         self.active = false;
     }
 
-    pub fn cleanup(self: *PrePublishAllocations, graph: *graph_core.GraphCore) void {
+    pub fn cleanup(self: *MutationScratch, graph: *graph_core.GraphCore) void {
         if (!self.active) return;
-        for (self.forward_blocks.items) |block| page_ops.freeBlock(graph, block, .fwd);
-        for (self.reverse_blocks.items) |block| page_ops.freeBlock(graph, block, .rev);
-        for (self.groups.items) |group| page_ops.freeGroup(graph, group);
+        for (self.fwd_blocks.items) |b| page_ops.freeBlock(graph, b, .fwd);
+        for (self.rev_blocks.items) |b| page_ops.freeBlock(graph, b, .rev);
+        for (self.groups.items) |g| page_ops.freeGroup(graph, g);
     }
 
-    pub fn deinit(self: *PrePublishAllocations, allocator: std.mem.Allocator) void {
-        self.forward_blocks.deinit(allocator);
-        self.reverse_blocks.deinit(allocator);
+    pub fn deinit(self: *MutationScratch, allocator: std.mem.Allocator) void {
+        self.fwd_blocks.deinit(allocator);
+        self.rev_blocks.deinit(allocator);
         self.groups.deinit(allocator);
     }
+
+    pub fn freeGroup(self: *MutationScratch, graph: *graph_core.GraphCore, group: u32) void {
+        for (self.groups.items, 0..) |g, i| {
+            if (g == group) {
+                _ = self.groups.swapRemove(i);
+                page_ops.freeGroup(graph, group);
+                return;
+            }
+        }
+        page_ops.freeGroup(graph, group);
+    }
 };
 
-pub const AdjSlot = struct {
-    block_idx: u32,
-    slot: u7,
+/// Iterates over runs of contiguous blocks described by a `SideAdj`.
+/// Abstracts away the `group_count == 0` vs `group_count > 0` shape
+/// so consumers only see `(start, count)` windows.
+pub const Run = struct { start: u32, count: u16 };
+
+pub const RunCursor = struct {
+    side: types.SideAdj,
+    group_index: u32,
+    groups_remaining: u16,
+    done: bool,
+
+    pub fn init(side: types.SideAdj) RunCursor {
+        if (side.block_count == 0) {
+            return .{
+                .side = side,
+                .group_index = 0,
+                .groups_remaining = 0,
+                .done = true,
+            };
+        }
+        if (side.group_count == 0) {
+            return .{
+                .side = side,
+                .group_index = side.first_block,
+                .groups_remaining = 1,
+                .done = false,
+            };
+        }
+        return .{
+            .side = side,
+            .group_index = side.first_group,
+            .groups_remaining = side.group_count,
+            .done = false,
+        };
+    }
+
+    pub fn next(self: *RunCursor, graph: *const graph_core.GraphCore) ?Run {
+        if (self.done) return null;
+        if (self.groups_remaining == 0) {
+            self.done = true;
+            return null;
+        }
+        if (self.side.group_count == 0) {
+            self.done = true;
+            return Run{ .start = self.side.first_block, .count = self.side.block_count };
+        }
+        self.groups_remaining -= 1;
+        if (self.group_index >= graph.group_count or self.group_index == constants.END_OF_CHAIN) {
+            self.done = true;
+            return null;
+        }
+        const group = page_ops.groupAtConst(graph, self.group_index);
+        const result = Run{ .start = group.start, .count = group.count };
+        self.group_index = group.next;
+        return result;
+    }
 };
+
+/// Iterates over individual block indices described by a `SideAdj`.
+/// Abstracts away `group_count == 0` vs grouped traversal.
+pub const BlockCursor = struct {
+    side: types.SideAdj,
+    run_cursor: RunCursor,
+    current_run: ?Run = null,
+    offset: u32 = 0,
+
+    pub fn init(side: types.SideAdj) BlockCursor {
+        return .{ .side = side, .run_cursor = RunCursor.init(side) };
+    }
+
+    pub fn next(self: *BlockCursor, graph: *const graph_core.GraphCore) ?u32 {
+        while (true) {
+            if (self.current_run != null and self.offset < self.current_run.?.count) {
+                const block_idx = self.current_run.?.start + self.offset;
+                self.offset += 1;
+                return block_idx;
+            }
+            self.current_run = self.run_cursor.next(graph) orelse return null;
+            self.offset = 0;
+        }
+    }
+};
+
+/// Builds a `SideAdj` from a slice of block indices, coalescing
+/// contiguous blocks into runs and creating `EdgeBlockGroup` records
+/// when the layout is not physically contiguous.
+pub const SideBuilder = struct {
+    side: types.SideAdj,
+    run_start: u32 = 0,
+    run_count: u16 = 0,
+    total_blocks: u16 = 0,
+    first_block_set: bool = false,
+    tail_group: ?u32 = null,
+
+    pub fn begin(side: *types.SideAdj) SideBuilder {
+        side.first_block = 0;
+        side.block_count = 0;
+        side.group_count = 0;
+        side.first_group = 0;
+        return .{ .side = undefined };
+    }
+
+    pub fn appendBlock(
+        self: *SideBuilder,
+        side: *types.SideAdj,
+        graph: *graph_core.GraphCore,
+        block_idx: u32,
+        scratch: *MutationScratch,
+    ) !void {
+        if (self.run_count > 0 and block_idx == self.run_start + self.run_count) {
+            self.run_count += 1;
+        } else {
+            if (self.run_count > 0) try self.flush(side, graph, scratch);
+            self.run_start = block_idx;
+            self.run_count = 1;
+        }
+    }
+
+    fn flush(
+        self: *SideBuilder,
+        side: *types.SideAdj,
+        graph: *graph_core.GraphCore,
+        scratch: *MutationScratch,
+    ) !void {
+        if (self.run_count == 0) return;
+        if (!self.first_block_set) {
+            side.first_block = self.run_start;
+            side.block_count = self.run_count;
+            self.first_block_set = true;
+        } else if (self.tail_group == null and side.group_count == 0) {
+            const prefix_group = try scratch.allocGroup(graph);
+            const group = try scratch.allocGroup(graph);
+            page_ops.groupAt(graph, prefix_group).* = .{
+                .start = side.first_block, .count = side.block_count, .next = group,
+            };
+            page_ops.groupAt(graph, group).* = .{
+                .start = self.run_start, .count = self.run_count, .next = constants.END_OF_CHAIN,
+            };
+            side.first_group = prefix_group;
+            side.group_count = 2;
+            self.tail_group = group;
+        } else {
+            if (side.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
+            const group = try scratch.allocGroup(graph);
+            page_ops.groupAt(graph, group).* = .{
+                .start = self.run_start, .count = self.run_count, .next = constants.END_OF_CHAIN,
+            };
+            page_ops.groupAt(graph, self.tail_group.?).next = group;
+            self.tail_group = group;
+            side.group_count += 1;
+        }
+        self.total_blocks += self.run_count;
+        self.run_count = 0;
+    }
+
+    pub fn finish(self: *SideBuilder, side: *types.SideAdj, graph: *graph_core.GraphCore, scratch: *MutationScratch) !void {
+        if (self.run_count > 0) try self.flush(side, graph, scratch);
+        side.block_count = self.total_blocks;
+    }
+};
+
+/// Builds a `SideAdj` from a slice of block indices using `SideBuilder`.
+pub fn buildSideFromBlocks(
+    side: *types.SideAdj,
+    graph: *graph_core.GraphCore,
+    blocks: []const u32,
+    scratch: *MutationScratch,
+) !void {
+    side.first_block = 0;
+    side.block_count = 0;
+    side.group_count = 0;
+    side.first_group = 0;
+    if (blocks.len == 0) return;
+
+    var builder = SideBuilder{ .side = undefined };
+    for (blocks) |block_idx| {
+        try builder.appendBlock(side, graph, block_idx, scratch);
+    }
+    try builder.finish(side, graph, scratch);
+}
+
+/// Retires every block and group in one side of a `NodeAdj`,
+/// using the side-uniform retirement helpers.
+pub fn retireSide(
+    graph: *graph_core.GraphCore,
+    adj_before: types.NodeAdj,
+    comptime side: adjacency.AdjSide,
+) !void {
+    const first_block: u32 = if (side == .fwd) adj_before.first_block_fwd else adj_before.first_block_rev;
+    const block_count: u16 = if (side == .fwd) adj_before.block_count_fwd else adj_before.block_count_rev;
+    const group_count: u16 = if (side == .fwd) adj_before.group_count_fwd else adj_before.group_count_rev;
+    const first_group: u32 = if (side == .fwd) adj_before.first_group_fwd else adj_before.first_group_rev;
+
+    if (block_count == 0) return;
+
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |block_idx| {
+            switch (side) {
+                .fwd => try rcu.retireBlockFwd(graph, @intCast(block_idx)),
+                .rev => try rcu.retireBlockRev(graph, @intCast(block_idx)),
+            }
+        }
+        return;
+    }
+
+    var group_idx = first_group;
+    var visited: u16 = 0;
+    while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return error.CorruptGraph;
+        if (visited >= group_count or visited >= graph.group_count) return error.CorruptGraph;
+        visited += 1;
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
+            switch (side) {
+                .fwd => try rcu.retireBlockFwd(graph, @intCast(block_idx)),
+                .rev => try rcu.retireBlockRev(graph, @intCast(block_idx)),
+            }
+        }
+        const old_group = group_idx;
+        group_idx = group.next;
+        rcu.retireGroup(graph, old_group);
+    }
+}
+
+/// Publishes both forward and reverse sides from a composed `NodeAdj`.
+pub fn publishBothAdj(
+    node: *types.NodeBuffer,
+    adj: types.NodeAdj,
+    fwd_degree: u22,
+    rev_degree: u22,
+) void {
+    const meta = node.loadPublishedMeta();
+    node.stagingFwd(meta).* = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
+    node.stagingRev(meta).* = .{
+        .first_block = adj.first_block_rev,
+        .block_count = adj.block_count_rev,
+        .group_count = adj.group_count_rev,
+        .first_group = adj.first_group_rev,
+    };
+    _ = publishStagedBoth(node, meta, adj.flags, fwd_degree, rev_degree);
+}
+
+/// Publishes only the reverse side from a composed `NodeAdj`.
+pub fn publishRevAdj(
+    node: *types.NodeBuffer,
+    adj: types.NodeAdj,
+    new_rev_degree: u22,
+) void {
+    const meta = node.loadPublishedMeta();
+    node.stagingRev(meta).* = .{
+        .first_block = adj.first_block_rev,
+        .block_count = adj.block_count_rev,
+        .group_count = adj.group_count_rev,
+        .first_group = adj.first_group_rev,
+    };
+    _ = publishStagedRev(node, meta, adj.flags.needs_repair_rev, new_rev_degree);
+}
 
 pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
     const previous_writers = graph.active_writers.fetchAdd(1, .acq_rel);
@@ -288,268 +564,4 @@ fn findSlotInBlockRun(
         }
     }
     return findSlotInBlockRunLinear(graph, start, count, target, side);
-}
-
-/// Rebuilds `staging_adj` by walking the published adjacency and replacing
-/// `old_block` with `new_block`. Detects contiguous runs to minimise group
-/// allocations and chain links — O(N) instead of O(N²).
-pub fn rebuildAdjWithReplace(
-    graph: *graph_core.GraphCore,
-    staging_adj: *types.NodeAdj,
-    first_block: u32,
-    block_count: u16,
-    group_count: u16,
-    first_group: u32,
-    old_block: u32,
-    new_block: u32,
-    comptime side: adjacency.AdjSide,
-) !void {
-    switch (side) {
-        .fwd => {
-            staging_adj.first_block_fwd = 0;
-            staging_adj.block_count_fwd = 0;
-            staging_adj.group_count_fwd = 0;
-            staging_adj.first_group_fwd = 0;
-        },
-        .rev => {
-            staging_adj.first_block_rev = 0;
-            staging_adj.block_count_rev = 0;
-            staging_adj.group_count_rev = 0;
-            staging_adj.first_group_rev = 0;
-        },
-    }
-    if (block_count == 0) return;
-
-    var run_start: u32 = 0;
-    var run_count: u16 = 0;
-    var total_blocks: u16 = 0;
-    var first_block_set: bool = false;
-    var tail_group: ?u32 = null;
-
-    const EmitCtx = struct {
-        fn flush(
-            adj: *types.NodeAdj,
-            graph_ptr: *graph_core.GraphCore,
-            comptime dir: adjacency.AdjSide,
-            run_start_ptr: *u32,
-            run_count_ptr: *u16,
-            total_blocks_ptr: *u16,
-            first_block_set_ptr: *bool,
-            tail_group_ptr: *?u32,
-        ) !void {
-            if (run_count_ptr.* == 0) return;
-            if (!first_block_set_ptr.*) {
-                switch (dir) {
-                    .fwd => {
-                        adj.first_block_fwd = run_start_ptr.*;
-                        adj.block_count_fwd = run_count_ptr.*;
-                    },
-                    .rev => {
-                        adj.first_block_rev = run_start_ptr.*;
-                        adj.block_count_rev = run_count_ptr.*;
-                    },
-                }
-                first_block_set_ptr.* = true;
-            } else if (tail_group_ptr.* == null and (switch (dir) {
-                .fwd => adj.group_count_fwd,
-                .rev => adj.group_count_rev,
-            }) == 0) {
-                const prefix_group = try page_ops.allocGroup(graph_ptr);
-                const group = try page_ops.allocGroup(graph_ptr);
-                const first_start: u32 = switch (dir) {
-                    .fwd => adj.first_block_fwd,
-                    .rev => adj.first_block_rev,
-                };
-                const first_cnt: u16 = switch (dir) {
-                    .fwd => adj.block_count_fwd,
-                    .rev => adj.block_count_rev,
-                };
-                page_ops.groupAt(graph_ptr, prefix_group).* = .{ .start = first_start, .count = first_cnt, .next = group };
-                page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
-                switch (dir) {
-                    .fwd => {
-                        adj.first_group_fwd = prefix_group;
-                        adj.group_count_fwd = 2;
-                    },
-                    .rev => {
-                        adj.first_group_rev = prefix_group;
-                        adj.group_count_rev = 2;
-                    },
-                }
-                tail_group_ptr.* = group;
-            } else {
-                if (switch (dir) {
-                    .fwd => adj.group_count_fwd,
-                    .rev => adj.group_count_rev,
-                } >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
-                const group = try page_ops.allocGroup(graph_ptr);
-                page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
-                page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
-                tail_group_ptr.* = group;
-                switch (dir) {
-                    .fwd => adj.group_count_fwd += 1,
-                    .rev => adj.group_count_rev += 1,
-                }
-            }
-            total_blocks_ptr.* += run_count_ptr.*;
-            run_count_ptr.* = 0;
-        }
-    };
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            if (block_idx == old_block) {
-                if (@popCount(page_ops.edgeBlockAtConst(graph, new_block, side).mask) == 0) continue;
-            }
-            const idx: u32 = if (block_idx == old_block) new_block else @intCast(block_idx);
-            if (run_count > 0 and idx == run_start + run_count) {
-                run_count += 1;
-            } else {
-                try EmitCtx.flush(staging_adj, graph, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
-                run_start = idx;
-                run_count = 1;
-            }
-        }
-        try EmitCtx.flush(staging_adj, graph, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
-        switch (side) {
-            .fwd => staging_adj.block_count_fwd = total_blocks,
-            .rev => staging_adj.block_count_rev = total_blocks,
-        }
-        return;
-    }
-
-    var group_idx = first_group;
-    var visited_rebuild: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (visited_rebuild >= group_count or visited_rebuild >= graph.group_count) return error.CorruptGraph;
-        visited_rebuild += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            if (block_idx == old_block) {
-                if (@popCount(page_ops.edgeBlockAtConst(graph, new_block, side).mask) == 0) continue;
-            }
-            const idx: u32 = if (block_idx == old_block) new_block else @intCast(block_idx);
-            if (run_count > 0 and idx == run_start + run_count) {
-                run_count += 1;
-            } else {
-                try EmitCtx.flush(staging_adj, graph, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
-                run_start = idx;
-                run_count = 1;
-            }
-        }
-        group_idx = group.next;
-    }
-    try EmitCtx.flush(staging_adj, graph, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group);
-    switch (side) {
-        .fwd => staging_adj.block_count_fwd = total_blocks,
-        .rev => staging_adj.block_count_rev = total_blocks,
-    }
-}
-
-/// SideAdj version of rebuildAdjWithReplace for per-side publication model.
-pub fn rebuildAdjWithReplaceSide(
-    graph: *graph_core.GraphCore,
-    staging_side: *types.SideAdj,
-    first_block: u32,
-    block_count: u16,
-    group_count: u16,
-    first_group: u32,
-    old_block: u32,
-    new_block: u32,
-    comptime side: adjacency.AdjSide,
-    allocs: ?*PrePublishAllocations,
-) !void {
-    staging_side.first_block = 0;
-    staging_side.block_count = 0;
-    staging_side.group_count = 0;
-    staging_side.first_group = 0;
-    if (block_count == 0) return;
-
-    var run_start: u32 = 0;
-    var run_count: u16 = 0;
-    var total_blocks: u16 = 0;
-    var first_block_set: bool = false;
-    var tail_group: ?u32 = null;
-
-    const EmitCtx = struct {
-        fn flush(
-            adj: *types.SideAdj,
-            graph_ptr: *graph_core.GraphCore,
-            run_start_ptr: *u32,
-            run_count_ptr: *u16,
-            total_blocks_ptr: *u16,
-            first_block_set_ptr: *bool,
-            tail_group_ptr: *?u32,
-            allocs_optional: ?*PrePublishAllocations,
-        ) !void {
-            if (run_count_ptr.* == 0) return;
-            if (!first_block_set_ptr.*) {
-                adj.first_block = run_start_ptr.*;
-                adj.block_count = run_count_ptr.*;
-                first_block_set_ptr.* = true;
-            } else if (tail_group_ptr.* == null and adj.group_count == 0) {
-                const prefix_group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
-                const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
-                page_ops.groupAt(graph_ptr, prefix_group).* = .{ .start = adj.first_block, .count = adj.block_count, .next = group };
-                page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
-                adj.first_group = prefix_group;
-                adj.group_count = 2;
-                tail_group_ptr.* = group;
-            } else {
-                if (adj.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
-                const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
-                page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
-                page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
-                tail_group_ptr.* = group;
-                adj.group_count += 1;
-            }
-            total_blocks_ptr.* += run_count_ptr.*;
-            run_count_ptr.* = 0;
-        }
-    };
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            if (block_idx == old_block) {
-                if (@popCount(page_ops.edgeBlockAtConst(graph, new_block, side).mask) == 0) continue;
-            }
-            const idx: u32 = if (block_idx == old_block) new_block else @intCast(block_idx);
-            if (run_count > 0 and idx == run_start + run_count) {
-                run_count += 1;
-            } else {
-                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
-                run_start = idx;
-                run_count = 1;
-            }
-        }
-        try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
-        staging_side.block_count = total_blocks;
-        return;
-    }
-
-    var group_idx = first_group;
-    var visited_common: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (visited_common >= group_count or visited_common >= graph.group_count) return error.CorruptGraph;
-        visited_common += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            if (block_idx == old_block) {
-                if (@popCount(page_ops.edgeBlockAtConst(graph, new_block, side).mask) == 0) continue;
-            }
-            const idx: u32 = if (block_idx == old_block) new_block else @intCast(block_idx);
-            if (run_count > 0 and idx == run_start + run_count) {
-                run_count += 1;
-            } else {
-                try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
-                run_start = idx;
-                run_count = 1;
-            }
-        }
-        group_idx = group.next;
-    }
-    try EmitCtx.flush(staging_side, graph, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
-    staging_side.block_count = total_blocks;
 }

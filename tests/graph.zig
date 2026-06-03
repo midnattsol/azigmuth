@@ -127,33 +127,6 @@ test "graph: removed node is absent from public node API" {
     try testing.expectError(error.InvalidNode, graph.publishedNodeAdj(node));
 }
 
-test "graph: tailBlockIndex returns null for empty adjacency" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    var adjacency = std.mem.zeroes(types.NodeAdj);
-    try testing.expectEqual(@as(?u32, null), graph.tailBlockIndex(&adjacency, .fwd));
-    try testing.expectEqual(@as(?u32, null), graph.tailBlockIndex(&adjacency, .rev));
-}
-
-test "graph: removeTailFromAdj clears a single-group adjacency without underflow" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const block = try graph.allocBlockFwd();
-    const group = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
-
-    var adjacency = std.mem.zeroes(types.NodeAdj);
-    adjacency.block_count_fwd = 1;
-    adjacency.group_count_fwd = 1;
-    adjacency.first_group_fwd = group;
-
-    graph.removeTailFromAdj(&adjacency, .fwd);
-    try testing.expectEqual(@as(u16, 0), adjacency.group_count_fwd);
-    try testing.expectEqual(@as(u32, 0), adjacency.first_group_fwd);
-}
-
 test "graph: self-edge appears in both neighbors and inNeighbors" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();

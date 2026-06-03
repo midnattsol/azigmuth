@@ -15,232 +15,14 @@ const rcu = @import("rcu.zig");
 const node_validity = @import("node_validity.zig");
 const mutation_common = @import("mutation/common.zig");
 
-fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj, fwd_degree: u22, rev_degree: u22) void {
-    const meta = node.loadPublishedMeta();
-    node.stagingFwd(meta).* = .{
-        .first_block = adj.first_block_fwd,
-        .block_count = adj.block_count_fwd,
-        .group_count = adj.group_count_fwd,
-        .first_group = adj.first_group_fwd,
-    };
-    node.stagingRev(meta).* = .{
-        .first_block = adj.first_block_rev,
-        .block_count = adj.block_count_rev,
-        .group_count = adj.group_count_rev,
-        .first_group = adj.first_group_rev,
-    };
-    _ = mutation_common.publishStagedBoth(node, meta, adj.flags, fwd_degree, rev_degree);
-}
-
-fn findMergeCandidate(
-    graph: *const graph_core.GraphCore,
-    first_block: u32,
-    block_count: u16,
-    group_count: u16,
-    first_group: u32,
-    comptime side: adjacency.AdjSide,
-) ?struct { left_idx: u32, right_idx: u32 } {
-    if (block_count <= 1) return null;
-
-    if (group_count == 0) {
-        const start = first_block;
-        const end = start + block_count;
-        for (start..end - 1) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-            if (@popCount(block.mask) < constants.MIN_OCCUPANCY) {
-                return .{ .left_idx = @as(u32, @intCast(block_idx)), .right_idx = @as(u32, @intCast(block_idx)) + 1 };
-            }
-        }
-        return null;
-    }
-
-    var prev_idx: ?u32 = null;
-    var group_idx = first_group;
-    var visited: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return null;
-        if (visited >= group_count or visited >= graph.group_count) return null;
-        visited += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        const group_start = group.start;
-        const group_end = group_start + group.count;
-        for (group_start..group_end) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-            if (@popCount(block.mask) < constants.MIN_OCCUPANCY) {
-                if (@as(u32, @intCast(block_idx)) + 1 < group_end) {
-                    return .{ .left_idx = @as(u32, @intCast(block_idx)), .right_idx = @as(u32, @intCast(block_idx)) + 1 };
-                }
-            }
-            prev_idx = @intCast(block_idx);
-        }
-        if (group.next != constants.END_OF_CHAIN) {
-            const next_group = page_ops.groupAtConst(graph, group.next);
-            if (prev_idx) |previous_block_idx| {
-                const left_block = page_ops.edgeBlockAtConst(graph, previous_block_idx, side);
-                if (@popCount(left_block.mask) < constants.MIN_OCCUPANCY) {
-                    return .{ .left_idx = previous_block_idx, .right_idx = next_group.start };
-                }
-            }
-        }
-        group_idx = group.next;
-    }
-    return null;
-}
-
-/// Copies one entry from `source_block[source_slot]` to `destination_block[destination_slot]`.
-fn copyEdge(
-    destination_block: anytype,
-    destination_slot: u7,
-    source_block: anytype,
-    source_slot: u7,
-    comptime side: adjacency.AdjSide,
-) void {
-    switch (side) {
-        .fwd => destination_block.edges[destination_slot] = source_block.edges[source_slot],
-        .rev => destination_block.sources[destination_slot] = source_block.sources[source_slot],
-    }
-}
-
-/// Reads the sort key at `block[slot]` — `destination` for forward, the `u32` value itself for reverse.
-fn readKey(
-    block: anytype,
-    slot: u7,
-    comptime side: adjacency.AdjSide,
-) u32 {
-    return switch (side) {
-        .fwd => block.edges[slot].destination,
-        .rev => block.sources[slot],
-    };
-}
-
-/// Retires one block in the given direction.
-fn retireBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) !void {
-    switch (side) {
-        .fwd => try rcu.retireBlockFwd(graph, block_idx),
-        .rev => try rcu.retireBlockRev(graph, block_idx),
-    }
-}
-
-/// Merges two adjacent blocks (left_idx and right_idx) into one or two blocks.
-/// Updates `staging_adj` to replace the old blocks with the new ones.
-/// Retires the old blocks via RCU.
-fn mergeBlocks(
-    graph: *graph_core.GraphCore,
-    staging_adj: *types.NodeAdj,
-    first_block: u32,
-    block_count: u16,
-    group_count: u16,
-    first_group: u32,
-    left_idx: u32,
-    right_idx: u32,
-    comptime side: adjacency.AdjSide,
-) !void {
-    const left_block = page_ops.edgeBlockAtConst(graph, left_idx, side);
-    const right_block = page_ops.edgeBlockAtConst(graph, right_idx, side);
-    const left_edge_count: u7 = @intCast(@popCount(left_block.mask));
-    const right_edge_count: u7 = @intCast(@popCount(right_block.mask));
-    const total: u8 = @as(u8, left_edge_count) + @as(u8, right_edge_count);
-
-    if (total <= 64) {
-        // ── Single-block merge ──
-        const merged = try page_ops.allocBlock(graph, side);
-        errdefer switch (side) {
-            .fwd => graph.free_blocks_fwd.append(graph.allocator, merged) catch {},
-            .rev => graph.free_blocks_rev.append(graph.allocator, merged) catch {},
-        };
-        const merged_block = page_ops.edgeBlockAt(graph, merged, side);
-
-        // Merge sorted arrays into merged_block
-        var left_pos: u7 = 0;
-        var right_pos: u7 = 0;
-        var destination_pos: u7 = 0;
-        while (left_pos < left_edge_count and right_pos < right_edge_count) : (destination_pos += 1) {
-            const left_key: u32 = readKey(left_block, left_pos, side);
-            const right_key: u32 = readKey(right_block, right_pos, side);
-            if (left_key < right_key) {
-                copyEdge(merged_block, destination_pos, left_block, left_pos, side);
-                left_pos += 1;
-            } else {
-                copyEdge(merged_block, destination_pos, right_block, right_pos, side);
-                right_pos += 1;
-            }
-        }
-        while (left_pos < left_edge_count) : ({
-            left_pos += 1;
-            destination_pos += 1;
-        }) {
-            copyEdge(merged_block, destination_pos, left_block, left_pos, side);
-        }
-        while (right_pos < right_edge_count) : ({
-            right_pos += 1;
-            destination_pos += 1;
-        }) {
-            copyEdge(merged_block, destination_pos, right_block, right_pos, side);
-        }
-        if (total == 64) {
-            merged_block.mask = constants.FULL_BLOCK_MASK;
-        } else {
-            merged_block.mask = constants.denseMask(@intCast(total));
-        }
-
-        // Rebuild staging adjacency with merged block replacing the pair
-        try rebuildStagingAdjAfterMerge(graph, staging_adj, first_block, block_count, group_count, first_group, left_idx, right_idx, merged, null, side);
-        try retireBlock(graph, left_idx, side);
-        try retireBlock(graph, right_idx, side);
-    } else {
-        // ── Fill-and-shift merge ──
-        const new_left = try page_ops.allocBlock(graph, side);
-        errdefer switch (side) {
-            .fwd => graph.free_blocks_fwd.append(graph.allocator, new_left) catch {},
-            .rev => graph.free_blocks_rev.append(graph.allocator, new_left) catch {},
-        };
-        const new_right = try page_ops.allocBlock(graph, side);
-        errdefer switch (side) {
-            .fwd => graph.free_blocks_fwd.append(graph.allocator, new_right) catch {},
-            .rev => graph.free_blocks_rev.append(graph.allocator, new_right) catch {},
-        };
-        const new_left_block = page_ops.edgeBlockAt(graph, new_left, side);
-        const new_right_block = page_ops.edgeBlockAt(graph, new_right, side);
-
-        // Copy left completely
-        for (0..left_edge_count) |edge_index| {
-            copyEdge(new_left_block, @intCast(edge_index), left_block, @intCast(edge_index), side);
-        }
-        // Fill left to 64 from right
-        const fill_count: u7 = @intCast(64 - left_edge_count);
-        for (0..fill_count) |edge_index| {
-            copyEdge(new_left_block, @as(u7, @intCast(left_edge_count + edge_index)), right_block, @intCast(edge_index), side);
-        }
-        new_left_block.mask = constants.FULL_BLOCK_MASK;
-
-        // Remaining right edges go to new_right
-        const remaining: u7 = right_edge_count - fill_count;
-        for (0..remaining) |edge_index| {
-            copyEdge(new_right_block, @intCast(edge_index), right_block, @as(u7, @intCast(fill_count + edge_index)), side);
-        }
-        if (remaining == 64) {
-            new_right_block.mask = constants.FULL_BLOCK_MASK;
-        } else {
-            new_right_block.mask = constants.denseMask(@intCast(remaining));
-        }
-
-        // Rebuild staging adjacency with two new blocks replacing the pair
-        try rebuildStagingAdjAfterMerge(graph, staging_adj, first_block, block_count, group_count, first_group, left_idx, right_idx, new_left, new_right, side);
-        try retireBlock(graph, left_idx, side);
-        try retireBlock(graph, right_idx, side);
-    }
-}
-
 fn repairQueue(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) *std.ArrayList(u32) {
     return if (side == .fwd) &graph.repair_fwd else &graph.repair_rev;
 }
 
 fn enqueueRepairDebtBestEffort(graph: *graph_core.GraphCore, node_index: u32, comptime side: adjacency.AdjSide) void {
-    // No locks here: per RFC direction, concurrent writers must not serialize
-    // on a global repair queue. The published needs_repair flag is the source
-    // of truth under concurrency; this ArrayList is only a single-writer fast
-    // path and debug view.
-    if (graph.active_writers.load(.monotonic) > 1) return;
+    const active_w = graph.active_writers.load(.monotonic);
+    const active_r = graph.active_repairers.load(.monotonic);
+    if (active_w > 1 or (active_w > 0 and active_r > 0)) return;
     const queue = repairQueue(graph, side);
     for (queue.items) |existing| {
         if (existing == node_index) return;
@@ -249,7 +31,9 @@ fn enqueueRepairDebtBestEffort(graph: *graph_core.GraphCore, node_index: u32, co
 }
 
 fn popRepairDebtBestEffort(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) ?u32 {
-    if (graph.active_writers.load(.monotonic) > 1) return null;
+    const active_w = graph.active_writers.load(.monotonic);
+    const active_r = graph.active_repairers.load(.monotonic);
+    if (active_w > 1 or (active_w > 0 and active_r > 0)) return null;
     return repairQueue(graph, side).pop();
 }
 
@@ -399,202 +183,6 @@ pub fn updateRepairDebtSide(
     }
 }
 
-/// Appends one block to the staging adjacency, handling the
-/// first-block-special-case vs appending-to-group boundary.
-fn appendOneBlock(
-    graph: *graph_core.GraphCore,
-    staging_adj: *types.NodeAdj,
-    block_index: u32,
-    comptime side: adjacency.AdjSide,
-) !void {
-    switch (side) {
-        .fwd => {
-            if (staging_adj.block_count_fwd == 0) {
-                staging_adj.first_block_fwd = block_index;
-                staging_adj.block_count_fwd = 1;
-            } else {
-                try adjacency.appendGroupToAdj(graph, staging_adj, block_index, .fwd);
-                staging_adj.block_count_fwd += 1;
-            }
-        },
-        .rev => {
-            if (staging_adj.block_count_rev == 0) {
-                staging_adj.first_block_rev = block_index;
-                staging_adj.block_count_rev = 1;
-            } else {
-                try adjacency.appendGroupToAdj(graph, staging_adj, block_index, .rev);
-                staging_adj.block_count_rev += 1;
-            }
-        },
-    }
-}
-
-const Emit = struct {
-    fn one(
-        idx: u32,
-        run_start_ptr: *u32,
-        run_count_ptr: *u16,
-    ) void {
-        if (run_count_ptr.* > 0 and idx == run_start_ptr.* + run_count_ptr.*) {
-            run_count_ptr.* += 1;
-        } else {
-            run_start_ptr.* = idx;
-            run_count_ptr.* = 1;
-        }
-    }
-    fn flush(
-        graph_ptr: *graph_core.GraphCore,
-        adj: *types.NodeAdj,
-        comptime dir: adjacency.AdjSide,
-        run_start_ptr: *u32,
-        run_count_ptr: *u16,
-        total_blocks_ptr: *u16,
-        first_block_set_ptr: *bool,
-        tail_group_ptr: *?u32,
-        allocs_optional: ?*mutation_common.PrePublishAllocations,
-    ) !void {
-        if (run_count_ptr.* == 0) return;
-        if (!first_block_set_ptr.*) {
-            switch (dir) {
-                .fwd => {
-                    adj.first_block_fwd = run_start_ptr.*;
-                    adj.block_count_fwd = run_count_ptr.*;
-                },
-                .rev => {
-                    adj.first_block_rev = run_start_ptr.*;
-                    adj.block_count_rev = run_count_ptr.*;
-                },
-            }
-            first_block_set_ptr.* = true;
-        } else if (tail_group_ptr.* == null and (switch (dir) {
-            .fwd => adj.group_count_fwd,
-            .rev => adj.group_count_rev,
-        }) == 0) {
-            const prefix_group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
-            const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
-            const first_start: u32 = switch (dir) {
-                .fwd => adj.first_block_fwd,
-                .rev => adj.first_block_rev,
-            };
-            const first_cnt: u16 = switch (dir) {
-                .fwd => adj.block_count_fwd,
-                .rev => adj.block_count_rev,
-            };
-            page_ops.groupAt(graph_ptr, prefix_group).* = .{ .start = first_start, .count = first_cnt, .next = group };
-            page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
-            switch (dir) {
-                .fwd => {
-                    adj.first_group_fwd = prefix_group;
-                    adj.group_count_fwd = 2;
-                },
-                .rev => {
-                    adj.first_group_rev = prefix_group;
-                    adj.group_count_rev = 2;
-                },
-            }
-            tail_group_ptr.* = group;
-        } else {
-            const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
-            page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
-            page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
-            tail_group_ptr.* = group;
-            switch (dir) {
-                .fwd => adj.group_count_fwd += 1,
-                .rev => adj.group_count_rev += 1,
-            }
-        }
-        total_blocks_ptr.* += run_count_ptr.*;
-        run_count_ptr.* = 0;
-    }
-};
-
-/// Rebuilds `staging_adj` from the published adjacency, replacing the two
-/// old blocks (`left_idx` and `right_idx`) with `new_left`.  If `new_right`
-/// is non-null (fill-and-shift case), both new blocks are inserted.
-/// Detects contiguous runs — O(N) instead of O(N²).
-fn rebuildStagingAdjAfterMerge(
-    graph: *graph_core.GraphCore,
-    staging_adj: *types.NodeAdj,
-    first_block: u32,
-    block_count: u16,
-    group_count: u16,
-    first_group: u32,
-    left_idx: u32,
-    right_idx: u32,
-    new_left: u32,
-    new_right: ?u32,
-    comptime side: adjacency.AdjSide,
-) !void {
-    switch (side) {
-        .fwd => {
-            staging_adj.first_block_fwd = 0;
-            staging_adj.block_count_fwd = 0;
-            staging_adj.group_count_fwd = 0;
-            staging_adj.first_group_fwd = 0;
-        },
-        .rev => {
-            staging_adj.first_block_rev = 0;
-            staging_adj.block_count_rev = 0;
-            staging_adj.group_count_rev = 0;
-            staging_adj.first_group_rev = 0;
-        },
-    }
-    if (block_count == 0) return;
-
-    var run_start: u32 = 0;
-    var run_count: u16 = 0;
-    var total_blocks: u16 = 0;
-    var first_block_set: bool = false;
-    var tail_group: ?u32 = null;
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            if (block_idx == right_idx) continue;
-            const new_idx: u32 = if (block_idx == left_idx) new_left else @intCast(block_idx);
-            Emit.one(new_idx, &run_start, &run_count);
-            if (block_idx == left_idx) {
-                if (new_right) |nr| {
-                    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
-                    Emit.one(nr, &run_start, &run_count);
-                }
-            }
-        }
-        try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
-        switch (side) {
-            .fwd => staging_adj.block_count_fwd = total_blocks,
-            .rev => staging_adj.block_count_rev = total_blocks,
-        }
-        return;
-    }
-
-    var group_idx = first_group;
-    var visited_groups_build: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (visited_groups_build >= group_count or visited_groups_build >= graph.group_count) return error.CorruptGraph;
-        visited_groups_build += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            if (block_idx == right_idx) continue;
-            const idx: u32 = if (block_idx == left_idx) new_left else @intCast(block_idx);
-            Emit.one(idx, &run_start, &run_count);
-            if (block_idx == left_idx) {
-                if (new_right) |nr| {
-                    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
-                    Emit.one(nr, &run_start, &run_count);
-                }
-            }
-        }
-        if (group.next == constants.END_OF_CHAIN) break;
-        group_idx = group.next;
-    }
-    try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, null);
-    switch (side) {
-        .fwd => staging_adj.block_count_fwd = total_blocks,
-        .rev => staging_adj.block_count_rev = total_blocks,
-    }
-}
-
 const WriterGuard = struct {
     graph: *graph_core.GraphCore,
     active: bool = true,
@@ -631,73 +219,6 @@ fn claimNodeForPublish(node_buffer: *types.NodeBuffer) !void {
 fn releaseNodeForPublish(node_buffer: *types.NodeBuffer) void {
     releaseNodeAdjacency(node_buffer, .rev);
     releaseNodeAdjacency(node_buffer, .fwd);
-}
-
-fn buildAdjacencyFromBlocks(
-    staging_adj: *types.NodeAdj,
-    graph: *graph_core.GraphCore,
-    comptime side: adjacency.AdjSide,
-    blocks: []const u32,
-    allocs: ?*mutation_common.PrePublishAllocations,
-) !void {
-    switch (side) {
-        .fwd => {
-            staging_adj.first_block_fwd = 0;
-            staging_adj.block_count_fwd = 0;
-            staging_adj.group_count_fwd = 0;
-            staging_adj.first_group_fwd = 0;
-        },
-        .rev => {
-            staging_adj.first_block_rev = 0;
-            staging_adj.block_count_rev = 0;
-            staging_adj.group_count_rev = 0;
-            staging_adj.first_group_rev = 0;
-        },
-    }
-    if (blocks.len == 0) return;
-
-    var run_start: u32 = 0;
-    var run_count: u16 = 0;
-    var total_blocks: u16 = 0;
-    var first_block_set: bool = false;
-    var tail_group: ?u32 = null;
-
-    for (blocks) |block_idx| {
-        if (run_count > 0 and block_idx == run_start + run_count) {
-            run_count += 1;
-        } else {
-            // flush previous run using Emit.flush
-            if (run_count > 0) {
-                try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
-            }
-            run_start = block_idx;
-            run_count = 1;
-        }
-    }
-    if (run_count > 0) {
-        try Emit.flush(graph, staging_adj, side, &run_start, &run_count, &total_blocks, &first_block_set, &tail_group, allocs);
-    }
-    switch (side) {
-        .fwd => staging_adj.block_count_fwd = total_blocks,
-        .rev => staging_adj.block_count_rev = total_blocks,
-    }
-}
-
-fn copyEdgeSingle(
-    graph: *graph_core.GraphCore,
-    source_block: anytype,
-    source_slot: u7,
-    destination_block_index: u32,
-    destination_slot: u7,
-    comptime side: adjacency.AdjSide,
-) void {
-    const destination_block = page_ops.edgeBlockAt(graph, destination_block_index, side);
-    switch (side) {
-        .fwd => destination_block.edges[destination_slot] = source_block.edges[source_slot],
-        .rev => destination_block.sources[destination_slot] = source_block.sources[source_slot],
-    }
-    // Set mask incrementally — caller sets final mask
-    destination_block.mask = constants.denseMask(destination_slot + 1);
 }
 
 fn edgePointsToRemoved(
@@ -1049,41 +570,6 @@ pub fn sortedRebuildReverse(
     return .{ .new_blocks = new_blocks, .live_after = live_after };
 }
 
-fn retireAdjacencySide(
-    graph: *graph_core.GraphCore,
-    published_adj: types.NodeAdj,
-    comptime side: adjacency.AdjSide,
-) !void {
-    const first_block: u32 = if (side == .fwd) published_adj.first_block_fwd else published_adj.first_block_rev;
-    const block_count: u16 = if (side == .fwd) published_adj.block_count_fwd else published_adj.block_count_rev;
-    const group_count: u16 = if (side == .fwd) published_adj.group_count_fwd else published_adj.group_count_rev;
-    const first_group: u32 = if (side == .fwd) published_adj.first_group_fwd else published_adj.first_group_rev;
-
-    if (block_count == 0) return;
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            try retireBlock(graph, @intCast(block_idx), side);
-        }
-        return;
-    }
-
-    var group_idx = first_group;
-    var retired_visited: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (retired_visited >= group_count or retired_visited >= graph.group_count) return error.CorruptGraph;
-        retired_visited += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            try retireBlock(graph, @intCast(block_idx), side);
-        }
-        const old_grouproup = group_idx;
-        group_idx = group.next;
-        rcu.retireGroup(graph, old_grouproup);
-    }
-}
-
 fn collectForwardTombstoneDestinations(
     graph: *const graph_core.GraphCore,
     published_adj: types.NodeAdj,
@@ -1153,7 +639,7 @@ fn rebuildForwardWithoutRemovedDestinations(
     graph: *graph_core.GraphCore,
     node_index: u32,
     published_adj: types.NodeAdj,
-    allocs: *mutation_common.PrePublishAllocations,
+    allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
     var result = try sortedRebuildForward(
         graph,
@@ -1168,7 +654,14 @@ fn rebuildForwardWithoutRemovedDestinations(
     try allocs.adoptBlocks(graph.allocator, .fwd, result.new_blocks.items);
 
     var staging_adj = published_adj;
-    try buildAdjacencyFromBlocks(&staging_adj, graph, .fwd, result.new_blocks.items, allocs);
+    {
+        var tmp: types.SideAdj = undefined;
+        try mutation_common.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
+        staging_adj.first_block_fwd = tmp.first_block;
+        staging_adj.block_count_fwd = tmp.block_count;
+        staging_adj.group_count_fwd = tmp.group_count;
+        staging_adj.first_group_fwd = tmp.first_group;
+    }
     updateRepairDebt(graph, &staging_adj, node_index, .fwd);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0 };
@@ -1231,7 +724,7 @@ fn rebuildReverseWithoutSource(
     destination_index: u32,
     published_adj: types.NodeAdj,
     source_index: u32,
-    allocs: *mutation_common.PrePublishAllocations,
+    allocs: *mutation_common.MutationScratch,
 ) !ReverseTombstoneCompaction {
     var result = try prepareReverseWithoutSource(
         graph,
@@ -1247,7 +740,14 @@ fn rebuildReverseWithoutSource(
     try allocs.adoptBlocks(graph.allocator, .rev, result.new_blocks.items);
 
     var staging_adj = published_adj;
-    try buildAdjacencyFromBlocks(&staging_adj, graph, .rev, result.new_blocks.items, allocs);
+    {
+        var tmp: types.SideAdj = undefined;
+        try mutation_common.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
+        staging_adj.first_block_rev = tmp.first_block;
+        staging_adj.block_count_rev = tmp.block_count;
+        staging_adj.group_count_rev = tmp.group_count;
+        staging_adj.first_group_rev = tmp.first_group;
+    }
     updateRepairDebt(graph, &staging_adj, destination_index, .rev);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after };
@@ -1295,7 +795,7 @@ fn repairForwardTombstonesWithReverseCleanup(
     var writer_guard = beginWriter(graph);
     defer writer_guard.end();
 
-    var allocs = mutation_common.PrePublishAllocations{};
+    var allocs = mutation_common.MutationScratch{};
     defer allocs.deinit(graph.allocator);
     defer allocs.cleanup(graph);
 
@@ -1317,14 +817,14 @@ fn repairForwardTombstonesWithReverseCleanup(
 
     for (reverse_updates.items) |update| {
         const preserved_fwd = update.node_buffer.loadPublishedMeta().degree_fwd;
-        publishBothAdj(update.node_buffer, update.staging_adj_after, preserved_fwd, update.new_degree_rev);
-        try retireAdjacencySide(graph, update.published_adj_before, .rev);
+        mutation_common.publishBothAdj(update.node_buffer, update.staging_adj_after, preserved_fwd, update.new_degree_rev);
+        try mutation_common.retireSide(graph, update.published_adj_before, .rev);
     }
 
     const preserved_rev = node_mut.loadPublishedMeta().degree_rev;
     const new_fwd: u22 = @as(u22, @intCast(source_result.live_after));
-    publishBothAdj(node_mut, source_result.staging_adj, new_fwd, preserved_rev);
-    try retireAdjacencySide(graph, source_adj_before, .fwd);
+    mutation_common.publishBothAdj(node_mut, source_result.staging_adj, new_fwd, preserved_rev);
+    try mutation_common.retireSide(graph, source_adj_before, .fwd);
 
     return 1;
 }
@@ -1405,43 +905,41 @@ fn repairNodeSideLimited(
     defer sorted.new_blocks.deinit(graph.allocator);
     const live_total: usize = sorted.live_after;
 
-    var allocs = mutation_common.PrePublishAllocations{};
-    defer allocs.deinit(graph.allocator);
-    defer allocs.cleanup(graph);
+    var scratch = mutation_common.MutationScratch{};
+    defer scratch.deinit(graph.allocator);
+    defer scratch.cleanup(graph);
 
-    try allocs.adoptBlocks(graph.allocator, side, sorted.new_blocks.items);
+    try scratch.adoptBlocks(graph.allocator, side, sorted.new_blocks.items);
 
-    try buildAdjacencyFromBlocks(&staging_adj, graph, side, sorted.new_blocks.items, &allocs);
+    {
+        var tmp: types.SideAdj = undefined;
+        try mutation_common.buildSideFromBlocks(&tmp, graph, sorted.new_blocks.items, &scratch);
+        switch (side) {
+            .fwd => {
+                staging_adj.first_block_fwd = tmp.first_block;
+                staging_adj.block_count_fwd = tmp.block_count;
+                staging_adj.group_count_fwd = tmp.group_count;
+                staging_adj.first_group_fwd = tmp.first_group;
+            },
+            .rev => {
+                staging_adj.first_block_rev = tmp.first_block;
+                staging_adj.block_count_rev = tmp.block_count;
+                staging_adj.group_count_rev = tmp.group_count;
+                staging_adj.first_group_rev = tmp.first_group;
+            },
+        }
+    }
 
     updateRepairDebt(graph, &staging_adj, node.index, side);
     const meta = node_mut.loadPublishedMeta();
     const new_live: u22 = @as(u22, @intCast(live_total));
-    allocs.disarm();
-    publishBothAdj(node_mut, staging_adj,
+    scratch.disarm();
+    mutation_common.publishBothAdj(node_mut, staging_adj,
         if (side == .fwd) new_live else meta.degree_fwd,
         if (side == .rev) new_live else meta.degree_rev);
 
-    // Retire old blocks after publishing the replacement
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            try retireBlock(graph, @intCast(block_idx), side);
-        }
-    } else {
-        var group_idx = first_group;
-        var retire_visit: u16 = 0;
-        while (group_idx != constants.END_OF_CHAIN) {
-            if (group_idx >= graph.group_count) return error.CorruptGraph;
-            if (retire_visit >= group_count or retire_visit >= graph.group_count) return error.CorruptGraph;
-            retire_visit += 1;
-            const group = page_ops.groupAtConst(graph, group_idx);
-            for (group.start..group.start + group.count) |block_idx| {
-                try retireBlock(graph, @intCast(block_idx), side);
-            }
-            const old_group = group_idx;
-            group_idx = group.next;
-            rcu.retireGroup(graph, old_group);
-        }
-    }
+    // Retire old side using the shared primitive.
+    try mutation_common.retireSide(graph, published_adj, side);
     return 1;
 }
 
@@ -1536,6 +1034,9 @@ fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: []const u32
 /// Each operation repairs at most one distinct node (both sides if needed).
 /// Returns the number of nodes repaired.
 pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
+    _ = graph.active_repairers.fetchAdd(1, .acq_rel);
+    defer _ = graph.active_repairers.fetchSub(1, .acq_rel);
+
     var total_compacted: usize = 0;
     var processed_nodes: std.ArrayList(u32) = .empty;
     defer processed_nodes.deinit(graph.allocator);

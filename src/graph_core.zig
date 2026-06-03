@@ -85,6 +85,10 @@ pub const GraphCore = struct {
     /// Number of writer mutations currently executing.
     active_writers: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
+    /// Repair-budgeted caller count — guards the best-effort debt queue
+    /// against concurrent access by repairBudgeted + a mutation.
+    active_repairers: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
     /// Debug ArrayLists are disabled permanently once overlapping writers are
     /// observed; lock-free stacks remain authoritative in concurrent mode.
     debug_retired_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),

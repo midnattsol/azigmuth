@@ -182,18 +182,6 @@ pub const Graph = struct {
 
     // ── Adjacency methods ─────────────────────────────────────────────
 
-    pub fn appendGroupToAdj(self: *Graph, adj: *types.NodeAdj, new_block: u32, comptime dir: adjacency.AdjSide) !void {
-        return adjacency.appendGroupToAdj(&self.graph, adj, new_block, dir);
-    }
-
-    pub fn tailBlockIndex(self: *Graph, adj: *const types.NodeAdj, comptime dir: adjacency.AdjSide) ?u32 {
-        return adjacency.tailBlockIndex(&self.graph, adj, dir);
-    }
-
-    pub fn removeTailFromAdj(self: *Graph, adj: *types.NodeAdj, comptime dir: adjacency.AdjSide) void {
-        adjacency.removeTailFromAdj(&self.graph, adj, dir);
-    }
-
     pub fn hasEdgeInAdj(self: *const Graph, adj: types.NodeAdj, target: u32) bool {
         return adjacency.hasEdgeInAdj(&self.graph, adj, target);
     }
