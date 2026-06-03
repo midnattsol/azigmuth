@@ -1,4 +1,6 @@
-//! Root module for the Zigraph graph library.
+//! Root module for the Zigraph graph library.  Graph, GraphBuilder and
+//! NeighborIterator form the single public API surface; everything else in the
+//! source tree is implementation detail not covered by the stability contract.
 //!
 //! Usage:
 //!   const graphz = @import("graphz");
@@ -11,6 +13,12 @@
 //!   var it = try g.neighbors(n);
 //!   defer it.deinit();
 //!   while (it.next()) |neighbor| { ... }
+//!
+//!   // materialize drains without consuming the iterator — deinit() still required:
+//!   var it2 = try g.neighbors(n);
+//!   defer it2.deinit();
+//!   const all = try it2.materialize(allocator);
+//!   defer allocator.free(all);
 //!
 //!   const order = try g.bfs(n, allocator);
 //!   defer allocator.free(order);

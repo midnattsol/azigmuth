@@ -5,6 +5,8 @@ const bfs_internal = @import("../algorithms/bfs.zig");
 const dfs_internal = @import("../algorithms/dfs.zig");
 const cycle_internal = @import("../algorithms/cycle.zig");
 
+// ── Convenience helpers ──────────────────────────────────────────────
+
 pub const Graph = opaque {
     pub fn init(allocator: std.mem.Allocator) !*Graph {
         const g = try allocator.create(internal.Graph);
@@ -22,7 +24,9 @@ pub const Graph = opaque {
 
     pub fn deinitChecked(self: *Graph) internal.DeinitError!void {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.deinitChecked();
+        const alloc = g.graph.allocator;
+        g.deinitChecked() catch |err| return err;
+        alloc.destroy(g);
     }
 
     pub fn addNode(self: *Graph) !internal.NodeId {
@@ -55,32 +59,30 @@ pub const Graph = opaque {
         return g.debugValidate(allocator);
     }
 
-    pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!*public_iterator.NeighborIterator {
+    pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!public_iterator.NeighborIterator {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        const internal_iter = try g.neighbors(node);
-        return public_iterator.newNeighborIterator(g.graph.allocator, internal_iter);
+        return .{ .inner = try g.neighbors(node) };
     }
 
-    pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!*public_iterator.NeighborIterator {
+    pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!public_iterator.NeighborIterator {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        const internal_iter = try g.inNeighbors(node);
-        return public_iterator.newNeighborIterator(g.graph.allocator, internal_iter);
+        return .{ .inner = try g.inNeighbors(node) };
     }
 
     /// Convenience: materializes all outgoing neighbors into a slice.
     /// The caller owns the returned slice.
     pub fn neighborsMaterialized(self: *const Graph, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        var internal_iter = try g.neighbors(node);
-        return internal_iter.materialize(allocator);
+        var it = try self.neighbors(node);
+        defer it.deinit();
+        return it.materialize(allocator);
     }
 
     /// Convenience: materializes all incoming neighbors into a slice.
     /// The caller owns the returned slice.
     pub fn inNeighborsMaterialized(self: *const Graph, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        var internal_iter = try g.inNeighbors(node);
-        return internal_iter.materialize(allocator);
+        var it = try self.inNeighbors(node);
+        defer it.deinit();
+        return it.materialize(allocator);
     }
 
     pub fn outDegree(self: *const Graph, node: internal.NodeId) internal.GraphError!usize {

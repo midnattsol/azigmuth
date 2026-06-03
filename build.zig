@@ -26,7 +26,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-
     // ---- test helper modules ----
     const publish_mod = b.createModule(.{
         .root_source_file = b.path("tests/helpers/publishing.zig"),
@@ -50,10 +49,10 @@ pub fn build(b: *std.Build) void {
     neighbors_mod.addImport("graph_mod", graph_mod);
 
     const test_step = b.step("test", "Run all non-stress tests");
-    addTestFiles(b, test_step, target, optimize, graph_mod, publish_mod, graph_helpers_mod, neighbors_mod);
+    addTestFiles(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
 
     const stress_step = b.step("stress", "Run long-running stress tests");
-    addTestFile(b, stress_step, target, optimize, graph_mod, publish_mod, graph_helpers_mod, neighbors_mod, "rcu/stress.zig");
+    addTestFile(b, stress_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, "rcu/stress.zig");
 }
 
 fn addTestFile(
@@ -62,6 +61,7 @@ fn addTestFile(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_mod: *std.Build.Module,
+    graphz_mod: *std.Build.Module,
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
@@ -73,6 +73,7 @@ fn addTestFile(
         .optimize = optimize,
     });
     test_mod.addImport("graph_mod", graph_mod);
+    test_mod.addImport("graphz", graphz_mod);
     test_mod.addImport("publish", publish_mod);
     test_mod.addImport("graph_helpers", graph_helpers_mod);
     test_mod.addImport("neighbors", neighbors_mod);
@@ -88,6 +89,7 @@ fn addTestFiles(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_mod: *std.Build.Module,
+    graphz_mod: *std.Build.Module,
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
@@ -109,6 +111,6 @@ fn addTestFiles(
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.Io.Dir.path.extension(entry.basename), ".zig")) continue;
 
-        addTestFile(b, test_step, target, optimize, graph_mod, publish_mod, graph_helpers_mod, neighbors_mod, entry.path);
+        addTestFile(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, entry.path);
     }
 }

@@ -24,7 +24,7 @@ pub fn main() !void {
     const a = try g.addNode();
     const b = try g.addNode();
 
-    try g.addEdge(a, b, 0, 0);
+    try g.addEdge(a, b, 0, .{});
 
     var it = try g.neighbors(a);
     defer it.deinit();
@@ -46,17 +46,37 @@ defer builder.deinit();
 
 const a = try builder.addNode();
 const b = try builder.addNode();
-try builder.addEdge(a, b, 0, 0);
+try builder.addEdge(a, b, 0, .{});
 
 var graph = try builder.freeze();
 defer graph.deinit();
 ```
 
+`addEdge` rejects out-of-range node IDs and duplicate edges.  `freeze()` on
+an empty builder succeeds and returns a valid zero-node `Graph`.  After
+`freeze()` the builder is inert — only `deinit()` is valid.
+
+## Materialize
+
+```zig
+var it = try g.neighbors(node);
+defer it.deinit();
+const all = try it.materialize(allocator);
+defer allocator.free(all);
+// it.next() returns null after materialize()
+```
+
 ## Algorithms
 
-- BFS
-- DFS
-- cycle detection
+```zig
+const order = try g.bfs(start, allocator);
+defer allocator.free(order);  // may be empty (len == 0)
+
+const order = try g.dfs(start, allocator);
+defer allocator.free(order);  // may be empty (len == 0)
+
+const has_cycle = try g.hasCycle(allocator);
+```
 
 ## Commands
 

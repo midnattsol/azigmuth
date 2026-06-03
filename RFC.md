@@ -274,7 +274,7 @@ pub const NodeFlags = packed struct(u32) {
     needs_repair_fwd: bool, needs_repair_rev: bool,
     removed: bool, _reserved: u29 = 0;
 };
-pub const Edge = packed struct { dst: u32, relation: u16, flags: EdgeFlags };
+pub const Edge = packed struct { destination: u32, relation: u16, flags: EdgeFlags };
 pub const Violation = union(enum) { ... };  // see §7
 ```
 
@@ -290,29 +290,70 @@ pub const GraphError = error{
     UnsupportedOperation,  // feature not yet in current phase
     RepairRequired,        // hard read bound would be violated
 };
+
+pub const DeinitError = error{GraphBusy};
 ```
 
 | Error | May be returned by | Meaning |
 |-------|-------------------|---------|
-| `OutOfMemory` | `init`, `addNode`, `addEdge`, `repairNode`, `repairBudgeted`, `debugValidate` | Allocator exhausted. Graph unchanged. |
-| `InvalidNode` | All queries taking `NodeId`, `addEdge`, `removeEdge`, `removeNode` | `id.index >= node_count`, or node is removed/tombstoned. |
+| `OutOfMemory` | `init`, `addNode`, `addEdge`, `repairNode`, `repairBudgeted`, `debugValidate`, `neighborsMaterialized`, `inNeighborsMaterialized`, `bfs`, `dfs`, `NeighborIterator.materialize` | Allocator exhausted. Graph unchanged. |
+| `InvalidNode` | All queries taking `NodeId` (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`, `hasNode`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`) | `id.index >= node_count`, or node is removed/tombstoned. |
 | `EdgeAlreadyExists` | `addEdge` | Duplicate edge in non-multigraph mode. |
 | `CorruptGraph` | `validate` | Structural invariant violated. |
 | `ConcurrentMutation` | `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Contended writer/repair operation detected; caller should retry later. |
 | `UnsupportedOperation` | multigraph ops (Phase 3) | Feature not yet in current phase. |
 | `RepairRequired` | `addEdge`, `removeEdge` (if sync repair disabled) | Hard amplification bound would be violated. Call `repairNode` or `repairBudgeted`. |
+| `GraphBusy` | `deinitChecked` | Active readers, writers, or repairers still reference the graph. |
 
 `removeEdge` returns `bool`: `true` if the edge was found and removed, `false` if it did not exist. It does NOT return `error.EdgeNotFound`.
 
-### 4.3 Core Functions
+### 4.3 Public handle model
+
+`Graph` and `GraphBuilder` are heap-allocated opaque handles returned by
+their respective `init` functions.  Callers never see the internal layout
+and must go through public methods for every operation.  The implementation
+file `src/graph.zig` and all modules under `src/core/`, `src/mutation/`,
+`src/query/`, `src/maintenance/`, `src/storage/` and `src/rcu.zig` are
+**not** part of the stability contract.
+
+`NeighborIterator` is returned **by value** — creating an iterator does not
+heap-allocate.  The iterator still holds an RCU reader token that must be
+released via `deinit()`.
+
+### 4.4 Ownership and lifecycle
+
+| Type              | Acquired via     | Released via      | Allocates on creation? |
+|-------------------|------------------|-------------------|:---------------------:|
+| `*Graph`          | `Graph.init`     | `deinit` / `deinitChecked` | Yes |
+| `*GraphBuilder`   | `GraphBuilder.init` | `deinit`       | Yes |
+| `NeighborIterator`| `neighbors()` etc. | `deinit`       | **No** |
+| `[]NodeId`        | `materialize()`, `bfs()`, etc. | caller `free` | Yes |
+
+**`deinitChecked` semantics:** On success the handle is consumed (just like
+`deinit`).  On `error.GraphBusy` the handle remains valid and the caller may
+retry later.
+
+**`materialize` semantics:** `NeighborIterator.materialize(allocator)`
+drains the remaining items into a caller-owned slice.  It **does not**
+destroy the iterator — `deinit()` is still required.  The iterator is
+exhausted after the call (`next()` returns `null`).
+
+> The internal `query.NeighborIterator` (used by tests via `graph_mod`) has
+> a *consuming* `materialize` that calls `defer self.deinit()`.  The public
+> wrapper removes this behaviour deliberately so that callers control RCU
+> guard lifetime explicitly.  New code should use the public iterator when
+> non‑consuming semantics are desired.
+
+### 4.5 Core Functions
 
 ```zig
-pub fn init(allocator: Allocator) GraphError!Graph;
+pub fn init(allocator: Allocator) GraphError!*Graph;
 pub fn deinit(self: *Graph) void;
+pub fn deinitChecked(self: *Graph) DeinitError!void;
 
 pub fn addNode(self: *Graph) GraphError!NodeId;
 pub fn removeNode(self: *Graph, node: NodeId) GraphError!void;          // Phase 2
-pub fn addEdge(self: *Graph, from: NodeId, to: NodeId, relation: u16, flags: u16) GraphError!void;
+pub fn addEdge(self: *Graph, from: NodeId, to: NodeId, relation: u16, flags: EdgeFlags) GraphError!void;
 pub fn removeEdge(self: *Graph, from: NodeId, to: NodeId) GraphError!bool;
 
 pub fn neighbors(self: *const Graph, node: NodeId) GraphError!NeighborIterator;
@@ -327,37 +368,53 @@ pub fn repairNode(self: *Graph, node: NodeId) GraphError!void;
 pub fn repairBudgeted(self: *Graph, max_nodes: usize) GraphError!usize;
 pub fn validate(self: *const Graph) GraphError!void;
 pub fn debugValidate(self: *const Graph, allocator: Allocator) GraphError![]Violation;
+
+pub fn bfs(self: *const Graph, start: NodeId, allocator: Allocator) GraphError![]NodeId;
+pub fn dfs(self: *const Graph, start: NodeId, allocator: Allocator) GraphError![]NodeId;
+pub fn hasCycle(self: *const Graph, allocator: Allocator) GraphError!bool;
+
+/// Convenience: `neighbors()` + `materialize()`.  Caller owns the slice.
+pub fn neighborsMaterialized(self: *const Graph, node: NodeId, allocator: Allocator) GraphError![]NodeId;
+/// Convenience: `inNeighbors()` + `materialize()`.  Caller owns the slice.
+pub fn inNeighborsMaterialized(self: *const Graph, node: NodeId, allocator: Allocator) GraphError![]NodeId;
 ```
 
-### 4.4 NeighborIterator
+### 4.6 NeighborIterator
 
 ```zig
 pub const NeighborIterator = struct {
     pub fn next(self: *NeighborIterator) ?NodeId;
-    /// MUST be called to signal reader completion. Decrements
-    /// `active_readers`, enabling retired block reclamation.
+    /// MUST be called to signal reader completion. Releases the RCU reader
+    /// token, enabling retired block reclamation.
     pub fn deinit(self: *NeighborIterator) void;
-    pub fn materialize(self: *NeighborIterator, allocator: Allocator) ![]NodeId;
+    /// Drains remaining items into a caller-owned slice. Allocates the
+    /// result; does NOT destroy the iterator — `deinit()` is still required.
+    pub fn materialize(self: *NeighborIterator, allocator: Allocator) GraphError![]NodeId;
 };
 ```
 
-Streaming, zero-allocation iteration via `@ctz(mask)` + `mask &= mask - 1`. `materialize` allocates a contiguous slice for algorithms that need random access (cycle detection).
+Iteration is zero-allocation: creating a `NeighborIterator` does not touch
+the heap (the state lives in the returned struct).  `materialize` allocates
+the output slice only.
 
-### 4.5 GraphBuilder
+### 4.7 GraphBuilder
 
 ```zig
-pub const GraphBuilder = struct {
-    pub fn init(allocator: Allocator) GraphError!GraphBuilder;
+pub const GraphBuilder = opaque {
+    pub fn init(allocator: Allocator) GraphError!*GraphBuilder;
     pub fn deinit(self: *GraphBuilder) void;
     pub fn addNode(self: *GraphBuilder) GraphError!NodeId;
-    pub fn addEdge(self: *GraphBuilder, from: NodeId, to: NodeId, relation: u16, flags: u16) GraphError!void;
-    pub fn freeze(self: *GraphBuilder) GraphError!Graph;
+    pub fn addEdge(self: *GraphBuilder, from: NodeId, to: NodeId, relation: u16, flags: EdgeFlags) GraphError!void;
+    pub fn freeze(self: *GraphBuilder) GraphError!*Graph;
 };
 ```
 
-`freeze()` produces a `Graph` with compact initial layout, zero repair debt, and edges pre-sorted within each block. The resulting graph is a normal mutable `Graph`.
+`freeze()` transfers ownership: the builder becomes inert and the caller
+owns the returned `*Graph`.  The resulting graph is a normal mutable `Graph`
+with compact initial layout, zero repair debt, and edges pre-sorted within
+each block.
 
-### 4.6 API Guarantees
+### 4.8 API Guarantees
 
 | Function | Mutates | May repair | Blocks readers |
 |----------|:-------:|:----------:|:--------------:|
@@ -365,6 +422,8 @@ pub const GraphBuilder = struct {
 | `outDegree`, `inDegree` | No | No | **No** |
 | `nodeCount`, `edgeCount`, `hasNode` | No | No | **No** |
 | `validate`, `debugValidate` | No | No | **No** |
+| `bfs`, `dfs`, `hasCycle` | No | No | **No** |
+| `neighborsMaterialized`, `inNeighborsMaterialized` | No | No | **No** |
 | `addNode` | Yes | No | **No** |
 | `addEdge` | Yes | Maybe | **No** |
 | `removeEdge` | Yes | No | **No** |
@@ -904,7 +963,7 @@ disabled. Mutations either preserve the hard non-tail bound or return
 
 12. **GraphConfig eliminated.** `init(allocator)` — no capacity parameters. Bounded memory via `FixedBufferAllocator`.
 
-13. **Degree not stored.** Computed from `@popCount(mask)`. Eliminates desynchronization bug surface.
+13. **Exact degree published atomically.** `degree_fwd` / `degree_rev` are `u22` fields in `PublishedMeta` and are published alongside the public node snapshot.  `outDegree` / `inDegree` read the published value in O(1); the fields are authoritative (mask-based scanning exists only as a validation back-up).
 
 14. **EdgeMeta eliminated.** `relation` and `flags` are direct fields of `Edge`. Zig-style flat struct, no nested metadata wrapper.
 

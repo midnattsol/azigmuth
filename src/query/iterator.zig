@@ -125,6 +125,12 @@ pub const NeighborIterator = struct {
         };
     }
 
+    /// Drains all remaining items into a caller-owned slice.
+    /// NOTE: this consumes the iterator (calls `defer self.deinit()`).
+    /// The public `NeighborIterator.materialize` (src/api/public_iterator.zig)
+    /// does NOT consume — callers must call `deinit()` afterwards.
+    /// Internal callers should prefer the public wrapper when non-consuming
+    /// semantics are needed.
     pub fn materialize(self: *NeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
         defer self.deinit();
         var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.snapshotDegree());
