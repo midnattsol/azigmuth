@@ -104,3 +104,55 @@ test "regression: validate and debugValidate agree on removed node with residual
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
+
+test "regression: removeNode returns CorruptGraph when incoming reverse backlink is missing" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(b, a, 0, 0); // b -> a
+
+    // Corrupt a's incoming reverse adjacency: overwrite b's entry so
+    // reverse(a) no longer references b, but forward(b) still
+    // references a — a forward/reverse mismatch.
+    const a_adj = page_ops.nodeAt(&graph.graph, a).publishedAdj();
+    if (a_adj.block_count_rev > 0 and a_adj.group_count_rev == 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, a_adj.first_block_rev, .rev);
+        const live = @popCount(block.mask);
+        var found = false;
+        for (0..live) |slot| {
+            if (block.sources[slot] == b.index) {
+                block.sources[slot] = graph.graph.publishedNodeCount() + 10;
+                found = true;
+                break;
+            }
+        }
+        try testing.expect(found);
+    }
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(a));
+}
+
+test "regression: removeNode returns CorruptGraph when incoming reverse backlink is duplicated" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(b, a, 0, 0); // b -> a
+
+    // Duplicate b in a's incoming reverse adjacency so reverse(a)
+    // contains b twice while forward(b) only references a once.
+    const a_adj = page_ops.nodeAt(&graph.graph, a).publishedAdj();
+    if (a_adj.block_count_rev > 0 and a_adj.group_count_rev == 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, a_adj.first_block_rev, .rev);
+        const live = @popCount(block.mask);
+        if (live < 64) {
+            block.sources[live] = b.index;
+            block.mask = constants.denseMask(@intCast(live + 1));
+        }
+    }
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(a));
+}

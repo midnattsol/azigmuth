@@ -29,6 +29,11 @@ pub const NeighborIterator = struct {
     reader_active: bool,
     reader_token: rcu.ReaderToken,
 
+    /// Safeguard against corrupt cyclic group chains: stop advancing
+    /// after visiting more groups than the adjacency snapshot declares.
+    groups_visited: u16 = 0,
+    group_count_bound: u16 = 0,
+
     fn advanceToNextGroup(self: *NeighborIterator) bool {
         if (self.contiguous_mode) return false;
         if (self.current_group_index == constants.END_OF_CHAIN) return false;
@@ -40,6 +45,12 @@ pub const NeighborIterator = struct {
         }
 
         self.current_group_index = current.next;
+        self.groups_visited += 1;
+        if (self.groups_visited >= self.group_count_bound) {
+            self.current_group_index = constants.END_OF_CHAIN;
+            return false;
+        }
+
         const next_group = page_ops.groupAtConst(self.core, self.current_group_index);
         self.current_block_index = next_group.start;
         self.blocks_remaining = next_group.count;
@@ -78,6 +89,7 @@ pub const NeighborIterator = struct {
     }
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
+        if (!self.reader_active) return null;
         while (true) {
             while (self.current_mask == 0) {
                 if (!self.loadNextNonEmptyMask()) return null;
@@ -106,6 +118,7 @@ pub const NeighborIterator = struct {
     }
 
     pub fn snapshotDegree(self: *const NeighborIterator) usize {
+        if (!self.reader_active) return 0;
         return switch (self.direction) {
             .fwd => sumVisibleCount(self.core, self.node_adj_snapshot, .fwd),
             .rev => sumVisibleCount(self.core, self.node_adj_snapshot, .rev),
@@ -191,6 +204,11 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .current_block_for_mask = 0,
         .reader_active = true,
         .reader_token = reader_token,
+        .groups_visited = 0,
+        .group_count_bound = switch (direction) {
+            .fwd => node_adj_snapshot.group_count_fwd,
+            .rev => node_adj_snapshot.group_count_rev,
+        },
     };
 
     if (!iterator.contiguous_mode and iterator.current_group_index != constants.END_OF_CHAIN) {
@@ -256,7 +274,9 @@ fn sumVisibleCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, 
         .fwd => node_adj.first_group_fwd,
         .rev => node_adj.first_group_rev,
     };
-    while (group_index != constants.END_OF_CHAIN) {
+    var visited: u16 = 0;
+    while (visited < group_count) : (visited += 1) {
+        if (group_index == constants.END_OF_CHAIN) break;
         const group = page_ops.groupAtConst(graph, group_index);
         for (group.start..group.start + group.count) |block_index| {
             total += countVisibleEntriesInBlock(graph, @intCast(block_index), side);

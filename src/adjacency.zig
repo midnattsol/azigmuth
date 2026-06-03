@@ -75,7 +75,11 @@ pub fn appendGroupToSideAdj(graph: *graph_core.GraphCore, side_adj: *types.SideA
     page_ops.groupAt(graph, new_group_index).* = types.EdgeBlockGroup{ .start = new_block, .count = 1, .next = constants.END_OF_CHAIN };
 
     var group_index = side_adj.first_group;
+    var walk_visited: u16 = 0;
     while (true) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (walk_visited >= side_adj.group_count) return error.CorruptGraph;
+        walk_visited += 1;
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) {
             page_ops.groupAt(graph, group_index).next = new_group_index;
@@ -91,16 +95,19 @@ pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.S
     if (side_adj.group_count == 0) return side_adj.first_block + side_adj.block_count - 1;
 
     var group_index = side_adj.first_group;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < side_adj.group_count) : (visited += 1) {
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) return group.start + group.count - 1;
         group_index = group.next;
     }
+    return null;
 }
 
 pub fn extendTailGroupSide(graph: *graph_core.GraphCore, side_adj: *types.SideAdj) void {
     var group_index = side_adj.first_group;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < side_adj.group_count) : (visited += 1) {
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) { group.count += 1; break; }
         group_index = group.next;
@@ -111,7 +118,8 @@ pub fn removeTailFromSideAdj(graph: *graph_core.GraphCore, side_adj: *types.Side
     if (side_adj.group_count > 0) {
         var group_index = side_adj.first_group;
         var prev_group: ?u32 = null;
-        while (true) {
+        var visited: u16 = 0;
+        while (visited < side_adj.group_count) : (visited += 1) {
             const group = page_ops.groupAt(graph, group_index);
             if (group.next == constants.END_OF_CHAIN) {
                 std.debug.assert(group.count > 0);
@@ -160,7 +168,8 @@ pub fn hasEdgeInSideAdj(graph: *const graph_core.GraphCore, side_adj: types.Side
         return false;
     }
     var group_index = side_adj.first_group;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < side_adj.group_count) : (visited += 1) {
         const group = page_ops.groupAtConst(graph, group_index);
         var low: u32 = 0;
         var high: u32 = group.count;
@@ -182,6 +191,7 @@ pub fn hasEdgeInSideAdj(graph: *const graph_core.GraphCore, side_adj: types.Side
         if (group.next == constants.END_OF_CHAIN) return false;
         group_index = group.next;
     }
+    return false;
 }
 
 // ── NodeAdj snapshot helpers ───────────────────────────────────────────
@@ -238,7 +248,8 @@ pub fn appendGroupToAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, 
 
     const first_group = if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
     var group_index = first_group;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < group_count) : (visited += 1) {
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) {
             page_ops.groupAt(graph, group_index).next = new_group_index;
@@ -263,17 +274,21 @@ pub fn tailBlockIndex(graph: *graph_core.GraphCore, node_adj: *const types.NodeA
     if (groups == 0) return first + total - 1;
 
     var group_index = first_group;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < groups) : (visited += 1) {
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) return group.start + group.count - 1;
         group_index = group.next;
     }
+    return null;
 }
 
 pub fn extendTailGroup(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: AdjSide) void {
+    const groups = if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
     const first_group = if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
     var group_index = first_group;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < groups) : (visited += 1) {
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) {
             group.count += 1;
@@ -285,10 +300,12 @@ pub fn extendTailGroup(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, c
 
 pub fn removeTailFromAdj(graph: *graph_core.GraphCore, node_adj: *types.NodeAdj, comptime dir: AdjSide) void {
     if ((if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev) > 0) {
+        const groups = if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
         const first_group = if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
         var group_index = first_group;
         var prev_group: ?u32 = null;
-        while (true) {
+        var visited: u16 = 0;
+        while (visited < groups) : (visited += 1) {
             const group = page_ops.groupAt(graph, group_index);
             if (group.next == constants.END_OF_CHAIN) {
                 std.debug.assert(group.count > 0);
@@ -360,7 +377,8 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
     }
 
     var group_index = node_adj.first_group_fwd;
-    while (true) {
+    var visited: u16 = 0;
+    while (visited < node_adj.group_count_fwd) : (visited += 1) {
         const group = page_ops.groupAtConst(graph, group_index);
         var low: u32 = 0;
         var high: u32 = group.count;
@@ -387,6 +405,7 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
         if (group.next == constants.END_OF_CHAIN) return false;
         group_index = group.next;
     }
+    return false;
 }
 
 pub fn publishedNodeAdj(graph: *const graph_core.GraphCore, node: types.NodeId) !types.NodeAdj {

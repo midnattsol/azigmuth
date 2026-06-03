@@ -56,7 +56,11 @@ fn findMergeCandidate(
 
     var prev_idx: ?u32 = null;
     var group_idx = first_group;
+    var visited: u16 = 0;
     while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return null;
+        if (visited >= group_count or visited >= graph.group_count) return null;
+        visited += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         const group_start = group.start;
         const group_end = group_start + group.count;
@@ -335,6 +339,9 @@ fn computeNeedsRepair(
         var previous_group_end: ?u32 = null;
         var chain_is_contiguous = true;
         while (group_idx != constants.END_OF_CHAIN) {
+            if (group_idx >= graph.group_count) return true;
+            if (counted_groups >= group_count or counted_groups >= graph.group_count) return true;
+            counted_groups += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             const is_last_group = group.next == constants.END_OF_CHAIN;
             if (previous_group_end) |expected_start| {
@@ -557,7 +564,11 @@ fn rebuildStagingAdjAfterMerge(
     }
 
     var group_idx = first_group;
+    var visited_groups_build: u16 = 0;
     while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return error.CorruptGraph;
+        if (visited_groups_build >= group_count or visited_groups_build >= graph.group_count) return error.CorruptGraph;
+        visited_groups_build += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             if (block_idx == right_idx) continue;
@@ -717,7 +728,11 @@ fn hasAnyTombstone(
         }
     } else {
         var group_idx = first_group;
+        var visited: u16 = 0;
         while (group_idx != constants.END_OF_CHAIN) {
+            if (group_idx >= graph.group_count) return false;
+            if (visited >= group_count or visited >= graph.group_count) return false;
+            visited += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
@@ -768,7 +783,11 @@ pub fn sortedRebuildForward(
         }
     } else {
         var gidx = first_group;
+        var visited_groups: u16 = 0;
         while (gidx != constants.END_OF_CHAIN) {
+            if (gidx >= graph.group_count) return error.CorruptGraph;
+            if (visited_groups >= group_count or visited_groups >= graph.group_count) return error.CorruptGraph;
+            visited_groups += 1;
             const grp = page_ops.groupAtConst(graph, gidx);
             max_iters += grp.count;
             for (grp.start..grp.start + grp.count) |bi| {
@@ -811,7 +830,11 @@ pub fn sortedRebuildForward(
         }
     } else {
         var gidx = first_group;
+        var visited_groups2: u16 = 0;
         while (gidx != constants.END_OF_CHAIN) {
+            if (gidx >= graph.group_count) return error.CorruptGraph;
+            if (visited_groups2 >= group_count or visited_groups2 >= graph.group_count) return error.CorruptGraph;
+            visited_groups2 += 1;
             const grp = page_ops.groupAtConst(graph, gidx);
             for (grp.start..grp.start + grp.count) |bi| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .fwd);
@@ -901,7 +924,11 @@ pub fn sortedRebuildReverse(
         }
     } else {
         var gidx = first_group;
+        var visited_groups_rev1: u16 = 0;
         while (gidx != constants.END_OF_CHAIN) {
+            if (gidx >= graph.group_count) return error.CorruptGraph;
+            if (visited_groups_rev1 >= group_count or visited_groups_rev1 >= graph.group_count) return error.CorruptGraph;
+            visited_groups_rev1 += 1;
             const grp = page_ops.groupAtConst(graph, gidx);
             max_iters += grp.count;
             for (grp.start..grp.start + grp.count) |bi| {
@@ -947,7 +974,11 @@ pub fn sortedRebuildReverse(
         }
     } else {
         var gidx = first_group;
+        var visited_groups_rev2: u16 = 0;
         while (gidx != constants.END_OF_CHAIN) {
+            if (gidx >= graph.group_count) return error.CorruptGraph;
+            if (visited_groups_rev2 >= group_count or visited_groups_rev2 >= graph.group_count) return error.CorruptGraph;
+            visited_groups_rev2 += 1;
             const grp = page_ops.groupAtConst(graph, gidx);
             for (grp.start..grp.start + grp.count) |bi| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .rev);
@@ -1034,7 +1065,11 @@ fn retireAdjacencySide(
     }
 
     var group_idx = first_group;
+    var retired_visited: u16 = 0;
     while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return error.CorruptGraph;
+        if (retired_visited >= group_count or retired_visited >= graph.group_count) return error.CorruptGraph;
+        retired_visited += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             try retireBlock(graph, @intCast(block_idx), side);
@@ -1073,7 +1108,11 @@ fn collectForwardTombstoneDestinations(
     }
 
     var group_idx = published_adj.first_group_fwd;
+    var visited_dests: u16 = 0;
     while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return error.CorruptGraph;
+        if (visited_dests >= published_adj.group_count_fwd or visited_dests >= graph.group_count) return error.CorruptGraph;
+        visited_dests += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
@@ -1138,7 +1177,7 @@ pub fn countReverseSourceMatches(
     group_count: u16,
     first_group: u32,
     source_index: u32,
-) usize {
+) !usize {
     var matches: usize = 0;
     if (group_count == 0) {
         for (first_block..first_block + block_count) |block_idx| {
@@ -1150,7 +1189,11 @@ pub fn countReverseSourceMatches(
         }
     } else {
         var group_idx = first_group;
+        var rev_src_visited: u16 = 0;
         while (group_idx != constants.END_OF_CHAIN) {
+            if (group_idx >= graph.group_count) return error.CorruptGraph;
+            if (rev_src_visited >= group_count or rev_src_visited >= graph.group_count) return error.CorruptGraph;
+            rev_src_visited += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
@@ -1174,7 +1217,7 @@ pub fn prepareReverseWithoutSource(
     source_index: u32,
     allocator: std.mem.Allocator,
 ) !SortedRebuildResult {
-    const matches = countReverseSourceMatches(graph, first_block, block_count, group_count, first_group, source_index);
+    const matches = try countReverseSourceMatches(graph, first_block, block_count, group_count, first_group, source_index);
     if (matches != 1) return error.CorruptGraph;
     return sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, source_index, allocator);
 }
@@ -1332,7 +1375,11 @@ fn repairNodeSideLimited(
         }
     } else {
         var group_idx = first_group;
+        var visit_count: u16 = 0;
         while (group_idx != constants.END_OF_CHAIN) {
+            if (group_idx >= graph.group_count) return error.CorruptGraph;
+            if (visit_count >= group_count or visit_count >= graph.group_count) return error.CorruptGraph;
+            visit_count += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
                 total_live += @popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask);
@@ -1377,7 +1424,11 @@ fn repairNodeSideLimited(
         }
     } else {
         var group_idx = first_group;
+        var retire_visit: u16 = 0;
         while (group_idx != constants.END_OF_CHAIN) {
+            if (group_idx >= graph.group_count) return error.CorruptGraph;
+            if (retire_visit >= group_count or retire_visit >= graph.group_count) return error.CorruptGraph;
+            retire_visit += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
                 try retireBlock(graph, @intCast(block_idx), side);
@@ -1424,6 +1475,9 @@ fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes
 }
 
 fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
+    const reader_token = rcu.readerEnter(graph);
+    defer rcu.readerExit(graph, reader_token);
+
     const node_count = graph.publishedNodeCount();
     if (node_count == 0) return null;
 

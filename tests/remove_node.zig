@@ -161,3 +161,17 @@ test "removeNode: predecessor forward tombstone debt flag IS set immediately" {
     try testing.expect(!after.flags.needs_repair_fwd);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
 }
+
+test "removeNode: repairNode on removed node returns InvalidNode" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(b, a, 0, 0);
+
+    try graph.removeNode(a);
+    try testing.expectError(error.InvalidNode, graph.repairNode(a));
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}

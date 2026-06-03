@@ -16,6 +16,7 @@ const node_validity = @import("node_validity.zig");
 // ── Re-exports ───────────────────────────────────────────────────────────
 pub const NodeId = types.NodeId;
 pub const GraphError = types.GraphError;
+pub const DeinitError = error{ GraphBusy };
 pub const NodeFlags = types.NodeFlags;
 pub const EdgeFlags = types.EdgeFlags;
 pub const Edge = types.Edge;
@@ -46,6 +47,15 @@ pub const Graph = struct {
     graph: graph_core.GraphCore,
 
     // ── Lifecycle ─────────────────────────────────────────────────────
+
+    fn hasActiveReadersOrWriters(core: *const graph_core.GraphCore) bool {
+        if (core.active_writers.load(.acquire) != 0) return true;
+        if (core.reader_epoch_overflow.load(.acquire) != 0) return true;
+        for (&core.reader_epochs) |*slot| {
+            if (slot.load(.acquire) != 0) return true;
+        }
+        return false;
+    }
 
     pub fn init(allocator: std.mem.Allocator) !Graph {
         const first_page = try allocator.alloc(types.NodeBuffer, constants.NODES_PER_PAGE);
@@ -78,6 +88,8 @@ pub const Graph = struct {
     }
 
     pub fn deinit(self: *Graph) void {
+        std.debug.assert(!hasActiveReadersOrWriters(&self.graph));
+
         const alloc = self.graph.allocator;
         freeAtomicPages(types.NodeBuffer, alloc, self.graph.node_pages_pages[0..], constants.NODES_PER_PAGE);
         freeAtomicPages(types.EdgeBlockFwd, alloc, self.graph.edge_blocks_fwd_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
@@ -99,6 +111,11 @@ pub const Graph = struct {
         self.graph.retired_blocks_rev.deinit(alloc);
         self.graph.repair_fwd.deinit(alloc);
         self.graph.repair_rev.deinit(alloc);
+    }
+
+    pub fn deinitChecked(self: *Graph) DeinitError!void {
+        if (hasActiveReadersOrWriters(&self.graph)) return error.GraphBusy;
+        self.deinit();
     }
 
     // ── Node API ──────────────────────────────────────────────────────

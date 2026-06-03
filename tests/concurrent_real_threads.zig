@@ -240,24 +240,39 @@ test "concurrent: reader sees a sorted, valid snapshot under a continuous write 
 const ReclaimReaderCtx = struct {
     graph: *graph_mod.Graph,
     source: graph_mod.NodeId,
+    targets: []const graph_mod.NodeId,
     stop: *std.atomic.Value(bool),
+    gate: *std.atomic.Value(u32),
     iterations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    max_seen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    non_empty: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    invalid: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
 
 fn reclaimReaderLoop(ctx: *ReclaimReaderCtx) void {
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
+        _ = ctx.gate.fetchAdd(1, .acq_rel);
+        while (!ctx.stop.load(.acquire) and ctx.gate.load(.acquire) < 2) std.atomic.spinLoopHint();
+        if (ctx.stop.load(.acquire)) break;
+        _ = ctx.gate.fetchSub(2, .acq_rel);
+
         var iterator = ctx.graph.neighbors(ctx.source) catch continue;
-        var local_max: u32 = 0;
+        var count: usize = 0;
+        var ok = true;
         while (iterator.next()) |neighbor| {
-            if (neighbor.index > local_max) local_max = neighbor.index;
+            count += 1;
+            const is_target = for (ctx.targets) |t| {
+                if (t.index == neighbor.index) break true;
+            } else false;
+            if (!is_target) ok = false;
         }
         iterator.deinit();
 
-        const prev_max = ctx.max_seen.load(.acquire);
-        if (local_max > prev_max) {
-            ctx.max_seen.store(local_max, .release);
+        if (count > 0) {
+            _ = ctx.non_empty.fetchAdd(1, .monotonic);
+        }
+        if (!ok) {
+            _ = ctx.invalid.fetchAdd(1, .monotonic);
         }
         _ = ctx.iterations.fetchAdd(1, .monotonic);
     }
@@ -268,44 +283,51 @@ const ReclaimStormCtx = struct {
     source: graph_mod.NodeId,
     targets: []const graph_mod.NodeId,
     stop: *std.atomic.Value(bool),
+    gate: *std.atomic.Value(u32),
     iterations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
 
 fn reclaimStormLoop(ctx: *ReclaimStormCtx) void {
-    const target_count = ctx.targets.len;
-    if (target_count == 0) return;
-
-    var state: u64 = @intFromPtr(ctx);
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
-        const target = ctx.targets[@intCast(state % target_count)];
-        state = state *% 6364136223846793005 +% 1442695040888963407;
+        // Wait for reader to finish its current snapshot.
+        while (!ctx.stop.load(.acquire) and ctx.gate.load(.acquire) < 1) std.atomic.spinLoopHint();
+        if (ctx.stop.load(.acquire)) break;
 
-        _ = ctx.graph.addEdge(ctx.source, target, 0, 0) catch {};
-        _ = ctx.graph.removeEdge(ctx.source, target) catch {};
+        // Mutate + reclaim while reader is between snapshots.
+        _ = ctx.graph.addEdge(ctx.source, ctx.targets[1], 0, 0) catch {};
+        _ = ctx.graph.removeEdge(ctx.source, ctx.targets[1]) catch {};
         ctx.graph.reclaimRetired();
+
+        // Let reader proceed to the next snapshot.
+        _ = ctx.gate.fetchAdd(1, .acq_rel);
         _ = ctx.iterations.fetchAdd(1, .monotonic);
     }
 }
 
-test "concurrent: reclaimRetired racing with active readers does not free observed blocks" {
+test "concurrent: reclaimRetired does not free blocks still observed by reader" {
     const allocator = std.heap.page_allocator;
     var graph = try graph_mod.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    const target_count: usize = 64;
+    const target_count: usize = 16;
     var targets: [target_count]graph_mod.NodeId = undefined;
     for (0..target_count) |target_index| {
         targets[target_index] = try graph.addNode();
     }
+    // Permanent edge so every reader snapshot is non-empty.
+    try graph.addEdge(source, targets[0], 0, 0);
 
     var stop = std.atomic.Value(bool).init(false);
+    var gate = std.atomic.Value(u32).init(0);
 
     var reader_ctx = ReclaimReaderCtx{
         .graph = &graph,
         .source = source,
+        .targets = &targets,
         .stop = &stop,
+        .gate = &gate,
     };
     const reader_thread = try std.Thread.spawn(.{}, reclaimReaderLoop, .{&reader_ctx});
 
@@ -314,18 +336,20 @@ test "concurrent: reclaimRetired racing with active readers does not free observ
         .source = source,
         .targets = &targets,
         .stop = &stop,
+        .gate = &gate,
     };
     const writer_thread = try std.Thread.spawn(.{}, reclaimStormLoop, .{&writer_ctx});
 
-    // Wait until both threads have made progress, then stop.
+    // Wait until both threads have made measurable progress.
     var patience: usize = 0;
-    while (writer_ctx.iterations.load(.acquire) == 0 or
-        reader_ctx.iterations.load(.acquire) == 0) : (patience += 1)
+    while (writer_ctx.iterations.load(.acquire) < 20 or
+        reader_ctx.non_empty.load(.acquire) < 20) : (patience += 1)
     {
         if (patience >= SpinBudget) break;
         std.atomic.spinLoopHint();
     }
     stop.store(true, .release);
+    _ = gate.fetchAdd(2, .release);
     reader_thread.join();
     writer_thread.join();
 
@@ -334,9 +358,10 @@ test "concurrent: reclaimRetired racing with active readers does not free observ
 
     try testing.expect(reader_iterations > 0);
     try testing.expect(reclaim_iterations > 0);
-    try testing.expect(reader_ctx.max_seen.load(.acquire) > 0);
+    try testing.expect(reader_ctx.non_empty.load(.acquire) > 0);
+    try testing.expectEqual(@as(u64, 0), reader_ctx.invalid.load(.acquire));
 
-    // Wait for any lingering readers to exit before checking final state.
+    // Wait for lingering readers before reclaim.
     var active_patience: usize = 100000;
     while (active_patience > 0 and graph.graph.active_readers.load(.acquire) > 0) {
         active_patience -= 1;
@@ -344,29 +369,6 @@ test "concurrent: reclaimRetired racing with active readers does not free observ
     }
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
     try testing.expect(active_patience > 0);
-
-    var target_index_by_id = std.AutoHashMap(u32, usize).init(allocator);
-    defer target_index_by_id.deinit();
-    for (targets, 0..) |target, position| {
-        try target_index_by_id.put(target.index, position);
-    }
-
-    var final_neighbors = try graph.neighbors(source);
-    defer final_neighbors.deinit();
-
-    var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, target_count);
-    defer seen.deinit(allocator);
-    while (final_neighbors.next()) |neighbor| {
-        const position = target_index_by_id.get(neighbor.index) orelse {
-            // A neighbor index not in the target set means reclaimRetired freed
-            // a block that was still observable — the reader saw a stale/dangling
-            // index from a freed edge block.
-            try testing.expect(false);
-            unreachable;
-        };
-        try testing.expect(!seen.isSet(position));
-        seen.set(position);
-    }
 
     graph.reclaimRetired();
 

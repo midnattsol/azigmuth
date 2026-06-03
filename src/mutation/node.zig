@@ -132,7 +132,9 @@ fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.No
     }
 
     var group_index = published_adj.first_group_fwd;
-    while (group_index != constants.END_OF_CHAIN) {
+    var visited: u16 = 0;
+    while (visited < published_adj.group_count_fwd) : (visited += 1) {
+        if (group_index == constants.END_OF_CHAIN) break;
         const group = page_ops.groupAtConst(graph, group_index);
         for (group.start..group.start + group.count) |block_index| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
@@ -168,7 +170,9 @@ fn retireAdjacencySide(
     }
 
     var group_idx = first_group;
-    while (group_idx != constants.END_OF_CHAIN) {
+    var visited: u16 = 0;
+    while (visited < group_count) : (visited += 1) {
+        if (group_idx == constants.END_OF_CHAIN) break;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             switch (side) {
@@ -283,7 +287,9 @@ fn collectReverseSources(graph: *const graph_core.GraphCore, node: types.NodeId,
     }
 
     var group_idx = published_adj.first_group_rev;
-    while (group_idx != constants.END_OF_CHAIN) {
+    var visited: u16 = 0;
+    while (visited < published_adj.group_count_rev) : (visited += 1) {
+        if (group_idx == constants.END_OF_CHAIN) break;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
@@ -357,7 +363,9 @@ fn countVisibleIncomingEdgesExcludingSelf(graph: *const graph_core.GraphCore, pu
     }
 
     var group_idx = published_adj.first_group_rev;
-    while (group_idx != constants.END_OF_CHAIN) {
+    var visited: u16 = 0;
+    while (visited < published_adj.group_count_rev) : (visited += 1) {
+        if (group_idx == constants.END_OF_CHAIN) break;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);

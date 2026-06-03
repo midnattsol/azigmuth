@@ -4,7 +4,7 @@
 |----------------|------------------------------------------------|
 | **RFC**        | 0001                                           |
 | **Title**      | RB-CSR Graph Storage Engine                    |
-| **Status**     | Draft — Phase 1 implementation in progress     |
+| **Status**     | Draft — Phase 2 implementation in progress     |
 | **Author**     | —                                              |
 | **Date**       | 2026-05-30                                     |
 | **Supersedes** | —                                              |
@@ -126,8 +126,10 @@ pub const NodeBuffer = extern struct {
 `degree_fwd` / `degree_rev` cache the live edge count for each side.
 The sentinel value `0xFFFF` signals overflow. Phase 1 query APIs MAY
 conservatively fall back to an O(B) scan to guarantee exact answers
-under concurrent mutation; the cache remains maintained under the
-writer claim during `addEdge`, `removeEdge`, `removeNode`, and repair.
+under concurrent mutation; the cache saturates to overflow on edge
+addition and, when a mutation or repair drops the count below the
+overflow threshold, recovers an exact value so it remains a tight
+heuristic rather than a permanent unknown.
 It reuses what was previously a 4‑byte cache-line padding field,
 keeping `NodeBuffer` at exactly 64 bytes.
 Writers stage side-local updates in the inactive `fwd_buffers[]` /
@@ -299,7 +301,7 @@ pub const GraphError = error{
 | `EdgeAlreadyExists` | `addEdge` | Duplicate edge in non-multigraph mode. |
 | `CorruptGraph` | `validate` | Structural invariant violated. |
 | `ConcurrentMutation` | Reserved | Future: writer contention detected. |
-| `UnsupportedOperation` | `removeNode` (Phase 1), multigraph ops (Phase 1) | Feature not yet in current phase. |
+| `UnsupportedOperation` | multigraph ops (Phase 3) | Feature not yet in current phase. |
 | `RepairRequired` | `addEdge`, `removeEdge` (if sync repair disabled) | Hard amplification bound would be violated. Call `repairNode` or `repairBudgeted`. |
 
 `removeEdge` returns `bool`: `true` if the edge was found and removed, `false` if it did not exist. It does NOT return `error.EdgeNotFound`.
@@ -665,7 +667,9 @@ pub const Violation = union(enum) {
   Blocks reachable only from reader-held snapshots may remain retired
   until reclamation. Reclamation safety is verified by epoch/
   active_readers invariants, not by validation.
-- Repair debt queue entries reference valid nodes
+- Repair debt queues are best-effort auxiliary structures.  They MAY contain
+  stale or removed entries.  The authoritative source of repair debt is
+  `needs_repair_*` flags on published node state.
 
 ### 7.3 API
 
@@ -736,7 +740,6 @@ Pages follow the header in order: NodeBuffer pages, EdgeBlockFwd pages, EdgeBloc
 - Concurrent readers on different nodes never block
 
 **NOT implemented in Phase 1:**
-- `removeNode` (returns `error.UnsupportedOperation`)
 - Multigraph mode (returns `error.UnsupportedOperation`)
 - Persistence / mmap
 - Other block sizes (16, 32, 128)
@@ -752,6 +755,10 @@ Pages follow the header in order: NodeBuffer pages, EdgeBlockFwd pages, EdgeBloc
 **Deliverables:**
 - `removeNode` marks node as `removed`, clears outgoing adjacency
 - `neighbors` / `inNeighbors` skip edges to removed nodes
+- Forward tombstone debt is flagged immediately on live predecessors: after
+  `removeNode(A)`, any live node B that held an edge B → A has
+  `needs_repair_fwd` set so that `repairBudgeted` discovers the
+  compaction work without a full-graph scan.
 - Repair compaction: full-scan removal of incoming edges to tombstoned nodes (triggered by `repairNode`)
 
 **Acceptance criteria:**
@@ -917,6 +924,12 @@ disabled. Mutations either preserve the hard non-tail bound or return
 24. **Benchmark deletion scenario corrected.** Tests with sync repair disabled expect either bound preservation or `RepairRequired`.
 
 25. **removeNode Phase 2 clarified.** Outgoing edges removed from both forward and reverse. Incoming edges may persist until compaction.
+
+26. **Forward tombstone debt published immediately.** `removeNode` sets `needs_repair_fwd` on every live predecessor that held an edge to the removed node, so budgeted repair discovers the work without a full scan.
+
+27. **Repair debt queues are best-effort.** `repair_fwd` and `repair_rev` MAY contain stale or removed entries. Validation does not treat in-range entries as corruption.  The authoritative source of debt is `needs_repair_*` flags.
+
+28. **Degree cache overflow recovery.** When a deletion or repair drops the visible edge count below the overflow threshold (65535), the degree cache recovers an exact value rather than remaining at the `0xFFFF` sentinel indefinitely.
 
 ---
 

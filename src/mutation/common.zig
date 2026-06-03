@@ -61,7 +61,9 @@ pub fn recomputeDegreeIfOverflow(
         }
     } else {
         var group_idx = first_group;
-        while (group_idx != constants.END_OF_CHAIN) {
+        var visited: u16 = 0;
+        while (visited < group_count) : (visited += 1) {
+            if (group_idx == constants.END_OF_CHAIN) break;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
@@ -300,7 +302,9 @@ pub fn findSlotInAdj(
     }
 
     var group_idx = first_group;
-    while (group_idx != constants.END_OF_CHAIN) {
+    var visited: u16 = 0;
+    while (visited < group_count) : (visited += 1) {
+        if (group_idx == constants.END_OF_CHAIN) return null;
         const group = page_ops.groupAtConst(graph, group_idx);
         if (findSlotInBlockRun(graph, group.start, group.count, target, side)) |slot| return slot;
         group_idx = group.next;
@@ -490,7 +494,11 @@ pub fn rebuildAdjWithReplace(
     }
 
     var group_idx = first_group;
+    var visited_rebuild: u16 = 0;
     while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return error.CorruptGraph;
+        if (visited_rebuild >= group_count or visited_rebuild >= graph.group_count) return error.CorruptGraph;
+        visited_rebuild += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             if (block_idx == old_block) {
@@ -595,7 +603,11 @@ pub fn rebuildAdjWithReplaceSide(
     }
 
     var group_idx = first_group;
+    var visited_common: u16 = 0;
     while (group_idx != constants.END_OF_CHAIN) {
+        if (group_idx >= graph.group_count) return error.CorruptGraph;
+        if (visited_common >= group_count or visited_common >= graph.group_count) return error.CorruptGraph;
+        visited_common += 1;
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             if (block_idx == old_block) {

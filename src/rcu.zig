@@ -14,19 +14,25 @@ pub const ReaderToken = struct {
 };
 
 pub fn readerEnter(graph: *graph_core.GraphCore) ReaderToken {
-    const entry_epoch = graph.epoch.load(.acquire);
-    const encoded_epoch = entry_epoch +% 1;
+    while (true) {
+        const entry_epoch = graph.epoch.load(.acquire);
+        const encoded_epoch = entry_epoch +% 1;
 
-    for (&graph.reader_epochs, 0..) |*slot, slot_index| {
-        if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
+        for (&graph.reader_epochs, 0..) |*slot, slot_index| {
+            if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
+                if (graph.epoch.load(.acquire) != entry_epoch) {
+                    slot.store(0, .release);
+                    break;
+                }
+                _ = graph.active_readers.fetchAdd(1, .monotonic);
+                return .{ .slot = @intCast(slot_index), .epoch = entry_epoch };
+            }
+        } else {
+            _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
             _ = graph.active_readers.fetchAdd(1, .monotonic);
-            return .{ .slot = @intCast(slot_index), .epoch = entry_epoch };
+            return .{ .slot = NO_READER_SLOT, .epoch = entry_epoch };
         }
     }
-
-    _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
-    _ = graph.active_readers.fetchAdd(1, .monotonic);
-    return .{ .slot = NO_READER_SLOT, .epoch = entry_epoch };
 }
 
 pub fn readerExit(graph: *graph_core.GraphCore, token: ReaderToken) void {
@@ -74,7 +80,7 @@ pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
 }
 
 pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
-    _ = graph.epoch.fetchAdd(1, .monotonic);
+    _ = graph.epoch.fetchAdd(1, .release);
 }
 
 fn safeReclaimEpoch(graph: *graph_core.GraphCore) ?u64 {

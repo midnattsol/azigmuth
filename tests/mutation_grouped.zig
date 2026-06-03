@@ -263,3 +263,106 @@ test "mutation grouped: addEdge clones reverse group chain before tail mutation"
     try testing.expect((try graph.publishedNodeAdj(destination)).first_group_rev != first_group);
     try graph.validate();
 }
+
+fn publishSingleBlockGroupedForward(
+    graph: *graph_mod.Graph,
+    source: graph_mod.NodeId,
+    destination_index: u32,
+) !struct { block: u32, group: u32 } {
+    const block = try graph.allocBlockFwd();
+    setForwardBlock(graph, block, destination_index, 1);
+    const group = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node_buffer = try graph.nodeAt(source);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).block_count = 1;
+    helpers.publishedFwdSide(node_buffer).group_count = 1;
+    helpers.publishedFwdSide(node_buffer).first_group = group;
+    node_buffer.degree_fwd = 1;
+    helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    return .{ .block = block, .group = group };
+}
+
+fn publishSingleBlockGroupedReverse(
+    graph: *graph_mod.Graph,
+    destination: graph_mod.NodeId,
+    source_index: u32,
+) !struct { block: u32, group: u32 } {
+    const block = try graph.allocBlockRev();
+    setReverseBlock(graph, block, source_index, 1);
+    const group = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node_buffer = try graph.nodeAt(destination);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedRevSide(node_buffer).block_count = 1;
+    helpers.publishedRevSide(node_buffer).group_count = 1;
+    helpers.publishedRevSide(node_buffer).first_group = group;
+    node_buffer.degree_rev = 1;
+    helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = false, .needs_repair_rev = true, .removed = false });
+    return .{ .block = block, .group = group };
+}
+
+test "mutation grouped: addEdge COW on single-block grouped forward updates group.start" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 4);
+    const source = graph_mod.NodeId{ .index = 0 };
+    const old_dest = graph_mod.NodeId{ .index = 1 };
+    const new_dest = graph_mod.NodeId{ .index = 2 };
+
+    const old_fwd = try publishSingleBlockGroupedForward(&graph, source, old_dest.index);
+
+    // Reverse backlink for old_dest (ungrouped, contiguous)
+    try publishSingleReverseSource(&graph, old_dest, source.index);
+
+    graph.graph.edge_count.store(1, .release);
+    try graph.validate();
+
+    try graph.addEdge(source, new_dest, 0, 0);
+
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 2), try graph.outDegree(source));
+
+    const after = (try graph.nodeAtConst(source)).publishedAdj();
+    try testing.expectEqual(@as(u16, 1), after.group_count_fwd);
+    try testing.expectEqual(@as(u16, 1), after.block_count_fwd);
+    const after_group = page_ops.groupAtConst(&graph.graph, after.first_group_fwd);
+    try testing.expect(after_group.start != old_fwd.block);
+    try helpers.expectOutNeighbors(&graph, testing.allocator, source, &[_]u32{ old_dest.index, new_dest.index });
+}
+
+test "mutation grouped: addEdge COW on single-block grouped reverse updates group.start" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 4);
+    const old_source = graph_mod.NodeId{ .index = 0 };
+    const dest = graph_mod.NodeId{ .index = 1 };
+    const new_source = graph_mod.NodeId{ .index = 2 };
+
+    // Forward on old_source (ungrouped)
+    try publishSingleForwardEdge(&graph, old_source, dest.index);
+
+    // Reverse on dest: single-block grouped
+    const old_rev = try publishSingleBlockGroupedReverse(&graph, dest, old_source.index);
+
+    graph.graph.edge_count.store(1, .release);
+    try graph.validate();
+
+    try graph.addEdge(new_source, dest, 0, 0);
+
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 2), try graph.inDegree(dest));
+
+    const after = (try graph.nodeAtConst(dest)).publishedAdj();
+    try testing.expectEqual(@as(u16, 1), after.group_count_rev);
+    try testing.expectEqual(@as(u16, 1), after.block_count_rev);
+    const after_group = page_ops.groupAtConst(&graph.graph, after.first_group_rev);
+    try testing.expect(after_group.start != old_rev.block);
+    try helpers.expectInNeighbors(&graph, testing.allocator, dest, &[_]u32{ old_source.index, new_source.index });
+}

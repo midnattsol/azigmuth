@@ -184,6 +184,7 @@ test "graph_builder: edge ordering sorted after freeze" {
     defer g.deinit();
 
     var it = try g.neighbors(source);
+    defer it.deinit();
     var prev_idx: u32 = 0;
     var first = true;
     while (it.next()) |neighbor| {
@@ -212,6 +213,7 @@ test "graph_builder: reverse adjacency sorted after freeze" {
     defer g.deinit();
 
     var it = try g.inNeighbors(target);
+    defer it.deinit();
     var prev_idx: u32 = 0;
     var first = true;
     while (it.next()) |src_node| {

@@ -142,7 +142,11 @@ fn ensureTailCowGroupConstraintSide(
 
     const tail_index = prepared.tail_index.?;
     var group_index = side_adj.first_group;
+    var visited_constraint: u16 = 0;
     while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (visited_constraint >= side_adj.group_count or visited_constraint >= graph.group_count) return error.CorruptGraph;
+        visited_constraint += 1;
         const group = page_ops.groupAtConst(graph, group_index);
         if (tail_index >= group.start and tail_index < group.start + group.count) {
             if (group.count > 1) return error.RepairRequired;
@@ -206,7 +210,11 @@ fn appendGroupToSideAdjTracked(
     page_ops.groupAt(graph, new_group_index).* = types.EdgeBlockGroup{ .start = new_block, .count = 1, .next = constants.END_OF_CHAIN };
 
     var group_index = side_adj.first_group;
+    var append_visited: u16 = 0;
     while (true) {
+        if (group_index >= graph.group_count) return error.CorruptGraph;
+        if (append_visited >= side_adj.group_count) return error.CorruptGraph;
+        append_visited += 1;
         const group = page_ops.groupAt(graph, group_index);
         if (group.next == constants.END_OF_CHAIN) {
             page_ops.groupAt(graph, group_index).next = new_group_index;
@@ -221,11 +229,15 @@ fn removeTailFromSideAdjTracked(
     graph: *graph_core.GraphCore,
     side_adj: *types.SideAdj,
     scratch: *AddEdgeScratch,
-) void {
+) !void {
     if (side_adj.group_count > 0) {
         var group_index = side_adj.first_group;
         var prev_group: ?u32 = null;
+        var remove_visited: u16 = 0;
         while (true) {
+            if (group_index >= graph.group_count) return error.CorruptGraph;
+            if (remove_visited >= side_adj.group_count) return error.CorruptGraph;
+            remove_visited += 1;
             const group = page_ops.groupAt(graph, group_index);
             if (group.next == constants.END_OF_CHAIN) {
                 std.debug.assert(group.count > 0);
@@ -279,9 +291,12 @@ fn applyPreparedAppendSideTracked(
     if (prepared.old_block != null) {
         if (side_adj.block_count == 1) {
             side_adj.first_block = prepared.new_block;
+            if (side_adj.group_count == 1) {
+                page_ops.groupAt(graph, side_adj.first_group).start = prepared.new_block;
+            }
         } else {
             const was_contiguous = side_adj.group_count == 0;
-            removeTailFromSideAdjTracked(graph, side_adj, scratch);
+            try removeTailFromSideAdjTracked(graph, side_adj, scratch);
             try appendGroupToSideAdjTracked(graph, side_adj, prepared.new_block, scratch);
             if (was_contiguous) side_adj.block_count += 1;
         }
@@ -357,7 +372,7 @@ fn planRemovalSide(
         .rev => @intCast(@popCount(page_ops.edgeBlockAtConst(graph, found.block_idx, .rev).mask)),
     };
     const new_live: u7 = live_before - 1;
-    const tail_index = adjacency.tailBlockIndexSide(graph, side_adj).?;
+    const tail_index = adjacency.tailBlockIndexSide(graph, side_adj) orelse return error.CorruptGraph;
     const is_tail = found.block_idx == tail_index;
     if (!is_tail and new_live < constants.MIN_OCCUPANCY) return error.RepairRequired;
     return .{ .found = found, .live_before = live_before };

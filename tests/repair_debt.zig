@@ -456,3 +456,101 @@ test "repair debt: repairNode canonicalizes single-block grouped contiguous adja
     try testing.expectEqual(@as(u16, 1), repaired.block_count_fwd);
     try testing.expect(!repaired.flags.needs_repair_fwd);
 }
+
+test "repair debt: repairBudgeted fallback scan finds unflagged tombstone debt" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, 0);
+
+    try graph.removeNode(target);
+    try graph.validate();
+
+    // After removeNode, source.needs_repair_fwd MUST be true (tombstone debt).
+    {
+        const adj = (try graph.nodeAtConst(source)).publishedAdj();
+        try testing.expect(adj.flags.needs_repair_fwd);
+    }
+
+    // Clear needs_repair_fwd and all repair-debt sources so
+    // repairBudgeted MUST fall through to the full tombstone scan
+    // (findTombstoneDebtByScan) — the path that currently does NOT
+    // enter a reader critical section.
+    {
+        var buf = try graph.nodeAt(source);
+        var meta = buf.loadPublishedMeta();
+        var flags = meta.flags();
+        flags.needs_repair_fwd = false;
+        helpers.setPublishedFlags(buf, flags);
+    }
+
+    // Drain best-effort queues.
+    graph.graph.repair_fwd.clearRetainingCapacity();
+    graph.graph.repair_rev.clearRetainingCapacity();
+
+    // Reset scan cursors so the flag-scan pass starts from the beginning.
+    graph.graph.repair_scan_cursor_fwd = 0;
+    graph.graph.repair_scan_cursor_rev = 0;
+    graph.graph.repair_scan_cursor_tombstone = 0;
+
+    // The tombstone fallback scan should still discover and compact the debt.
+    const compacted = try graph.repairBudgeted(1);
+    try testing.expectEqual(@as(usize, 1), compacted);
+    try graph.validate();
+
+    const after = (try graph.nodeAtConst(source)).publishedAdj();
+    try testing.expect(!after.flags.needs_repair_fwd);
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}
+
+test "repair debt: valid two-run grouped forward adjacency does not set spurious needs_repair" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodesForTest(&graph, 258);
+    const node = graph_mod.NodeId{ .index = 0 };
+
+    // Group 0: 4 contiguous full blocks (all at or above MIN_OCCUPANCY).
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    const b3 = try graph.allocBlockFwd();
+    fillBlock(&graph, b0, 1, 64);
+    fillBlock(&graph, b1, 65, 64);
+    fillBlock(&graph, b2, 129, 64);
+    fillBlock(&graph, b3, 193, 64);
+
+    // Block at the next index is allocated but not owned by any node,
+    // creating a physical gap so the two groups are non-contiguous and
+    // a grouped-but-contiguous canonicalization is not required.
+    _ = try graph.allocBlockFwd();
+
+    // Group 1: single tail block.
+    const b5 = try graph.allocBlockFwd();
+    fillBlock(&graph, b5, 257, 1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 4, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b5, .count = 1, .next = constants.END_OF_CHAIN };
+
+    var node_buffer = try graph.nodeAt(node);
+    helpers.clearPublishedSides(node_buffer);
+    helpers.publishedFwdSide(node_buffer).first_block = b0;
+    helpers.publishedFwdSide(node_buffer).block_count = 5;
+    helpers.publishedFwdSide(node_buffer).group_count = 2;
+    helpers.publishedFwdSide(node_buffer).first_group = g0;
+    node_buffer.degree_fwd = 257;
+
+    var staging_adj = node_buffer.publishedAdj();
+    test_internals.repair.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
+
+    // This is a healthy grouped adjacency: 4 full blocks in the
+    // first run (≥4 blocks, no under-full non-tail), 1 tail block
+    // in the second run, groups are non-contiguous, no tombstones.
+    // needs_repair_fwd must NOT be set.
+    try testing.expect(!staging_adj.flags.needs_repair_fwd);
+}

@@ -14,6 +14,45 @@ const rcu = @import("rcu.zig");
 const adjacency_mod = @import("adjacency.zig");
 const node_validity = @import("node_validity.zig");
 
+fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj) bool {
+    const block_count = adjacency.block_count_fwd;
+    if (block_count == 0) return false;
+    const first_block = adjacency.first_block_fwd;
+    const group_count = adjacency.group_count_fwd;
+    const first_group = adjacency.first_group_fwd;
+
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |block_idx| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
+            const live = @popCount(block.mask);
+            for (0..live) |slot| {
+                const dst = block.edges[slot].destination;
+                if (dst < graph.publishedNodeCount() and
+                    page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj().flags.removed) return true;
+            }
+        }
+        return false;
+    }
+
+    var group_idx = first_group;
+    var visited: u16 = 0;
+    while (group_idx != constants.END_OF_CHAIN) : (visited += 1) {
+        if (visited >= group_count or group_idx >= graph.group_count) break;
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
+            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
+            const live = @popCount(block.mask);
+            for (0..live) |slot| {
+                const dst = block.edges[slot].destination;
+                if (dst < graph.publishedNodeCount() and
+                    page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj().flags.removed) return true;
+            }
+        }
+        group_idx = group.next;
+    }
+    return false;
+}
+
 const Side = enum { fwd, rev };
 const StackKindFast = enum { free, retired };
 
@@ -607,7 +646,10 @@ fn collectAdjacencyBlocks(
     var group_index = firstGroup(adjacency, side);
 
     while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return;
+        if (group_index >= graph.group_count) {
+            try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
+            return;
+        }
         if (visited_groups >= graph.group_count or visited_groups > expected_groups) {
             try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
             return;
@@ -924,8 +966,14 @@ fn appendLayoutDebtViolations(
     var chain_is_contiguous = true;
 
     while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return;
-        if (visited_groups >= graph.group_count or visited_groups >= groups) return;
+        if (group_index >= graph.group_count) {
+            try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
+            return;
+        }
+        if (visited_groups >= graph.group_count or visited_groups >= groups) {
+            try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
+            return;
+        }
         visited_groups += 1;
 
         const group = page_ops.groupAtConst(graph, group_index);
@@ -1077,10 +1125,15 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         const fwd_visible = sumVisibleAdjacency(graph, adjacency, .fwd);
         const rev_visible = sumVisibleAdjacency(graph, adjacency, .rev);
         if (!adjacency.flags.removed) {
-            if (node_buffer.degree_fwd < constants.DEGREE_OVERFLOW and fwd_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_fwd != fwd_visible) {
+            if (fwd_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_fwd != fwd_visible) {
                 return error.CorruptGraph;
             }
-            if (node_buffer.degree_rev < constants.DEGREE_OVERFLOW and rev_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_rev != rev_visible) {
+            if (rev_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_rev != rev_visible) {
+                return error.CorruptGraph;
+            }
+            // RFC §6.3, §A.26: a live predecessor with a forward reference
+            // to a removed node MUST have needs_repair_fwd set.
+            if (!adjacency.flags.needs_repair_fwd and forwardHasTombstone(graph, adjacency)) {
                 return error.CorruptGraph;
             }
         }
@@ -1183,17 +1236,19 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             var group_idx = adjacency.first_group_fwd;
             var visited_groups: u32 = 0;
             while (group_idx != constants.END_OF_CHAIN and visited_groups < adjacency.group_count_fwd) : (visited_groups += 1) {
-                if (group_idx < group_limit) {
-                    if (owned_groups_debug.isSet(group_idx)) {
-                        try violations.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
-                    }
-                    owned_groups_debug.set(group_idx);
-                    if (free_groups_debug.isSet(group_idx)) {
-                        try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = group_idx } });
-                    }
-                    if (retired_groups_debug.isSet(group_idx)) {
-                        try violations.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
-                    }
+                if (group_idx >= group_limit) {
+                    try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_idx } });
+                    break;
+                }
+                if (owned_groups_debug.isSet(group_idx)) {
+                    try violations.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
+                }
+                owned_groups_debug.set(group_idx);
+                if (free_groups_debug.isSet(group_idx)) {
+                    try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = group_idx } });
+                }
+                if (retired_groups_debug.isSet(group_idx)) {
+                    try violations.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
                 }
                 group_idx = page_ops.groupAtConst(graph, group_idx).next;
             }
@@ -1202,17 +1257,19 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             var group_idx = adjacency.first_group_rev;
             var visited_groups: u32 = 0;
             while (group_idx != constants.END_OF_CHAIN and visited_groups < adjacency.group_count_rev) : (visited_groups += 1) {
-                if (group_idx < group_limit) {
-                    if (owned_groups_debug.isSet(group_idx)) {
-                        try violations.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
-                    }
-                    owned_groups_debug.set(group_idx);
-                    if (free_groups_debug.isSet(group_idx)) {
-                        try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = group_idx } });
-                    }
-                    if (retired_groups_debug.isSet(group_idx)) {
-                        try violations.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
-                    }
+                if (group_idx >= group_limit) {
+                    try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_idx } });
+                    break;
+                }
+                if (owned_groups_debug.isSet(group_idx)) {
+                    try violations.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
+                }
+                owned_groups_debug.set(group_idx);
+                if (free_groups_debug.isSet(group_idx)) {
+                    try violations.append(allocator, .{ .block_orphaned_in_free_list = .{ .block = group_idx } });
+                }
+                if (retired_groups_debug.isSet(group_idx)) {
+                    try violations.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
                 }
                 group_idx = page_ops.groupAtConst(graph, group_idx).next;
             }
@@ -1240,12 +1297,17 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             const cached_fwd: usize = node_buffer.degree_fwd;
             const cached_rev: usize = node_buffer.degree_rev;
             const live_fwd: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .fwd));
-            if (cached_fwd < constants.DEGREE_OVERFLOW and live_fwd < constants.DEGREE_OVERFLOW and cached_fwd != live_fwd) {
+            if (live_fwd < constants.DEGREE_OVERFLOW and cached_fwd != live_fwd) {
                 try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_fwd), .actual = @intCast(cached_fwd) } });
             }
             const live_rev: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .rev));
-            if (cached_rev < constants.DEGREE_OVERFLOW and live_rev < constants.DEGREE_OVERFLOW and cached_rev != live_rev) {
+            if (live_rev < constants.DEGREE_OVERFLOW and cached_rev != live_rev) {
                 try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_rev), .actual = @intCast(cached_rev) } });
+            }
+            // RFC §6.3, §A.26: live predecessor with forward tombstone MUST
+            // have needs_repair_fwd set.
+            if (!adjacency.flags.needs_repair_fwd and forwardHasTombstone(graph, adjacency)) {
+                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = 0, .actual = 1 } });
             }
         }
 
