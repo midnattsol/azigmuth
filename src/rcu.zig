@@ -1,10 +1,10 @@
 //! RCU-style reader/writer synchronization and block retirement.
 
 const std = @import("std");
-const constants = @import("constants.zig");
-const graph_core = @import("graph_core.zig");
-const types = @import("types.zig");
-const page_ops = @import("page_ops.zig");
+const constants = @import("core/constants.zig");
+const graph_core = @import("core/graph_core.zig");
+const types = @import("core/types.zig");
+const page_ops = @import("storage/page_ops.zig");
 
 pub const NO_READER_SLOT: u32 = std.math.maxInt(u32);
 
@@ -44,34 +44,14 @@ pub fn readerExit(graph: *graph_core.GraphCore, token: ReaderToken) void {
     _ = graph.active_readers.fetchSub(1, .monotonic);
 }
 
-pub fn ensureRetireCapacity(graph: *graph_core.GraphCore, fwd_count: usize, rev_count: usize) !void {
-    _ = graph;
-    _ = fwd_count;
-    _ = rev_count;
-}
-
-fn appendDebugRetired(graph: *graph_core.GraphCore, list: *std.ArrayList(types.RetiredBlock), item: types.RetiredBlock) void {
-    if (!graph.debug_retired_enabled.load(.monotonic)) return;
-    while (true) {
-        const len = @atomicLoad(usize, &list.items.len, .acquire);
-        if (len >= list.capacity) return;
-        if (@cmpxchgWeak(usize, &list.items.len, len, len + 1, .acq_rel, .acquire) == null) {
-            list.items.ptr[len] = item;
-            return;
-        }
-    }
-}
-
 pub fn retireBlockFwd(graph: *graph_core.GraphCore, block_idx: u32) !void {
     const current_epoch = graph.epoch.load(.acquire);
     page_ops.retireBlock(graph, block_idx, current_epoch, .fwd);
-    appendDebugRetired(graph, &graph.retired_blocks_fwd, .{ .block = block_idx, .epoch = current_epoch });
 }
 
 pub fn retireBlockRev(graph: *graph_core.GraphCore, block_idx: u32) !void {
     const current_epoch = graph.epoch.load(.acquire);
     page_ops.retireBlock(graph, block_idx, current_epoch, .rev);
-    appendDebugRetired(graph, &graph.retired_blocks_rev, .{ .block = block_idx, .epoch = current_epoch });
 }
 
 pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
@@ -97,20 +77,9 @@ fn safeReclaimEpoch(graph: *graph_core.GraphCore) ?u64 {
     return min_epoch orelse graph.epoch.load(.acquire) +% 1;
 }
 
-fn pruneDebugRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: enum { fwd, rev }) void {
-    const list = if (side == .fwd) &graph.retired_blocks_fwd else &graph.retired_blocks_rev;
-    while (list.items.len > 0) {
-        if (list.items[0].epoch >= safe_epoch) break;
-        _ = list.orderedRemove(0);
-    }
-}
-
 pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     const safe_epoch = safeReclaimEpoch(graph) orelse return;
 
-    // Skip reclaim if safe_epoch has not advanced since the last pass.
-    // Without this, every mutation under a long reader would detach and
-    // re-push the entire retired stack — O(M²) accumulated cost.
     const last_safe_epoch = graph.last_reclaim_epoch.load(.monotonic);
     if (safe_epoch <= last_safe_epoch) return;
     graph.last_reclaim_epoch.store(safe_epoch, .monotonic);
@@ -118,17 +87,4 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     page_ops.reclaimRetired(graph, safe_epoch, .fwd);
     page_ops.reclaimRetired(graph, safe_epoch, .rev);
     page_ops.reclaimRetiredGroups(graph, safe_epoch);
-
-    if (graph.active_writers.load(.monotonic) == 0) {
-        if (graph.debug_retired_enabled.load(.monotonic)) {
-            pruneDebugRetired(graph, safe_epoch, .fwd);
-            pruneDebugRetired(graph, safe_epoch, .rev);
-        } else {
-            @atomicStore(usize, &graph.retired_blocks_fwd.items.len, 0, .release);
-            @atomicStore(usize, &graph.retired_blocks_rev.items.len, 0, .release);
-            graph.free_blocks_fwd.clearRetainingCapacity();
-            graph.free_blocks_rev.clearRetainingCapacity();
-            graph.free_groups.clearRetainingCapacity();
-        }
-    }
 }

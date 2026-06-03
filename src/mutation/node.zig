@@ -1,15 +1,15 @@
 //! Node-oriented mutation helpers and node removal implementation.
 
 const std = @import("std");
-const constants = @import("../constants.zig");
-const graph_core = @import("../graph_core.zig");
-const types = @import("../types.zig");
-const page_ops = @import("../page_ops.zig");
+const constants = @import("../core/constants.zig");
+const graph_core = @import("../core/graph_core.zig");
+const types = @import("../core/types.zig");
+const page_ops = @import("../storage/page_ops.zig");
 const adjacency = @import("../adjacency.zig");
 const rcu = @import("../rcu.zig");
-const repair = @import("../repair.zig");
+const repair = @import("../maintenance/repair.zig");
 const common = @import("common.zig");
-const node_validity = @import("../node_validity.zig");
+const node_validity = @import("../core/node_validity.zig");
 
 const DestinationUpdate = struct {
     node_index: u32,
@@ -34,6 +34,7 @@ fn toU22Degree(count: usize) u22 {
 }
 
 fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.NodeId, destinations: *std.ArrayList(u32)) !void {
+    const node_count = graph.publishedNodeCount();
     const published_adj = page_ops.nodeAtConst(graph, node).publishedAdj();
     if (published_adj.block_count_fwd == 0) return;
 
@@ -44,7 +45,9 @@ fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.No
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
             const live = @popCount(block.mask);
             for (0..live) |slot| {
-                try destinations.append(graph.allocator, block.edges[slot].destination);
+                const destination = block.edges[slot].destination;
+                if (destination >= node_count) return error.CorruptGraph;
+                try destinations.append(graph.allocator, destination);
             }
         }
         return;
@@ -59,7 +62,9 @@ fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.No
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
             const live = @popCount(block.mask);
             for (0..live) |slot| {
-                try destinations.append(graph.allocator, block.edges[slot].destination);
+                const destination = block.edges[slot].destination;
+                if (destination >= node_count) return error.CorruptGraph;
+                try destinations.append(graph.allocator, destination);
             }
         }
         group_index = group.next;
@@ -208,6 +213,21 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         if (chain_block_count != source_adj_before.block_count_fwd) return error.CorruptGraph;
     }
 
+    if (source_adj_before.group_count_rev > 0) {
+        var chain_group_count: u16 = 0;
+        var chain_block_count: u16 = 0;
+        var chain_idx = source_adj_before.first_group_rev;
+        while (chain_idx != constants.END_OF_CHAIN) : (chain_group_count += 1) {
+            if (chain_idx >= graph.group_count) return error.CorruptGraph;
+            if (chain_group_count >= source_adj_before.group_count_rev) return error.CorruptGraph;
+            const ch_group = page_ops.groupAtConst(graph, chain_idx);
+            chain_block_count += ch_group.count;
+            chain_idx = ch_group.next;
+        }
+        if (chain_group_count != source_adj_before.group_count_rev) return error.CorruptGraph;
+        if (chain_block_count != source_adj_before.block_count_rev) return error.CorruptGraph;
+    }
+
     // RFC §A.25: reject duplicate outgoing destinations before any publish.
     {
         var seen: std.ArrayList(u32) = .empty;
@@ -233,6 +253,8 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     // live predecessor still has a forward edge to the removed node.
     // Compare the validated count against the exact published degree_rev.
     const source_meta = source_node.loadPublishedMeta();
+    const predecessor_reader = rcu.readerEnter(graph);
+    defer rcu.readerExit(graph, predecessor_reader);
     {
         var seen_incoming: std.ArrayList(u32) = .empty;
         defer seen_incoming.deinit(graph.allocator);
@@ -260,8 +282,6 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         }
         if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
     }
-
-    const removed_visible_edge_count = countVisibleForwardEdges(graph, forward_destinations.items) + countVisibleIncomingEdgesExcludingSelf(graph, source_adj_before, node.index);
 
     var related_nodes: std.ArrayList(RelatedNode) = .empty;
     defer {
@@ -350,6 +370,16 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         }
     }
 
+    var removed_visible_edge_count: usize = if (had_self_edge) 1 else 0;
+    for (destination_updates.items) |update| {
+        if (update.needs_reverse_retire and !update.published_adj_before.flags.removed) {
+            removed_visible_edge_count += 1;
+        }
+        if (update.decrement_visible_fwd and !update.published_adj_before.flags.removed) {
+            removed_visible_edge_count += 1;
+        }
+    }
+
     var source_staging_adj = source_adj_before;
     if (had_self_edge) {
         var rb = try repair.prepareReverseWithoutSource(
@@ -385,6 +415,10 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     source_staging_adj.flags.needs_repair_fwd = false;
     source_staging_adj.flags.needs_repair_rev = false;
 
+    // Publish predecessor-side degree/repair updates before tombstoning the
+    // removed node. Readers may therefore observe a transient mixed-version
+    // view across endpoints while removeNode is in flight; the operation only
+    // guarantees logical consistency after it returns.
     for (destination_updates.items) |update| {
         if (update.decrement_visible_fwd) {
             const meta = update.node_buffer.loadPublishedMeta();

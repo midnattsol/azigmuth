@@ -1,15 +1,15 @@
 //! Edge insertion and removal — mutable edge operations built on the shared
 //! RCU + COW mutation machinery with per-side publication.
 
-const constants = @import("../constants.zig");
-const graph_core = @import("../graph_core.zig");
-const types = @import("../types.zig");
-const page_ops = @import("../page_ops.zig");
+const constants = @import("../core/constants.zig");
+const graph_core = @import("../core/graph_core.zig");
+const types = @import("../core/types.zig");
+const page_ops = @import("../storage/page_ops.zig");
 const adjacency = @import("../adjacency.zig");
 const rcu = @import("../rcu.zig");
-const repair = @import("../repair.zig");
+const repair = @import("../maintenance/repair.zig");
 const common = @import("common.zig");
-const node_validity = @import("../node_validity.zig");
+const node_validity = @import("../core/node_validity.zig");
 const std = @import("std");
 
 const PreparedAppendBlock = struct {
@@ -54,32 +54,24 @@ const SideRewriteResult = struct {
     degree_after: u22,
 };
 
-/// Walks the published side via BlockCursor, collecting block indices
-/// with an optional replacement or append, into a stack-local buffer.
-/// Returns the slice of valid entries in `out`.
-fn collectBlockList(
-    graph: *const graph_core.GraphCore,
-    published_side: types.SideAdj,
-    old_block: ?u32,
-    new_block: ?u32,
-    append_block: ?u32,
-    out: []u32,
-) ![]const u32 {
-    var count: usize = 0;
-    var cursor = common.BlockCursor.init(published_side);
-    while (cursor.next(graph)) |block_idx| {
-        if (old_block != null and block_idx == old_block.?) {
-            if (new_block) |nb| {
-                if (count < out.len) { out[count] = nb; count += 1; }
-            }
-        } else {
-            if (count < out.len) { out[count] = block_idx; count += 1; }
-        }
+fn nodeAdjForSide(side_adj: types.SideAdj, flags: types.NodeFlags, comptime side: adjacency.AdjSide) types.NodeAdj {
+    var adj = std.mem.zeroes(types.NodeAdj);
+    adj.flags = flags;
+    switch (side) {
+        .fwd => {
+            adj.first_block_fwd = side_adj.first_block;
+            adj.block_count_fwd = side_adj.block_count;
+            adj.group_count_fwd = side_adj.group_count;
+            adj.first_group_fwd = side_adj.first_group;
+        },
+        .rev => {
+            adj.first_block_rev = side_adj.first_block;
+            adj.block_count_rev = side_adj.block_count;
+            adj.group_count_rev = side_adj.group_count;
+            adj.first_group_rev = side_adj.first_group;
+        },
     }
-    if (append_block) |ab| {
-        if (count < out.len) { out[count] = ab; count += 1; }
-    }
-    return out[0..count];
+    return adj;
 }
 
 fn prepareAppendBlockSide(
@@ -152,17 +144,17 @@ fn applyPreparedAppendSideTracked(
         return;
     }
 
-    if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
     if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.OutOfMemory;
 
-    var block_list: [128]u32 = undefined;
-    const final_blocks = try collectBlockList(
+    var block_list: std.ArrayList(u32) = .empty;
+    defer block_list.deinit(graph.allocator);
+    try common.collectBlockList(
         graph, side_adj.*,
         prepared.old_block, prepared.new_block,
         if (prepared.old_block == null) prepared.new_block else null,
         &block_list,
     );
-    try common.buildSideFromBlocks(side_adj, graph, final_blocks, scratch);
+    try common.buildSideFromBlocks(side_adj, graph, block_list.items, scratch);
 }
 
 fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination: types.NodeId, relation: u16, flags: u16) !void {
@@ -260,14 +252,15 @@ fn applyRemovalPlanSide(
         },
     }
 
-    var block_list: [128]u32 = undefined;
-    const final_blocks = try collectBlockList(
+    var block_list: std.ArrayList(u32) = .empty;
+    defer block_list.deinit(graph.allocator);
+    try common.collectBlockList(
         graph, published_side.*,
         old_block, if (new_live > 0) new_block else null,
         null,
         &block_list,
     );
-    try common.buildSideFromBlocks(staging_side, graph, final_blocks, allocs);
+    try common.buildSideFromBlocks(staging_side, graph, block_list.items, allocs);
 
     return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
 }
@@ -284,10 +277,10 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 
     const source_meta = source_node.loadPublishedMeta();
     const destination_meta = destination_node.loadPublishedMeta();
-    const source_adj_before = source_node.publishedAdjFromMeta(source_meta);
-    const destination_adj_before = destination_node.publishedAdjFromMeta(destination_meta);
     const source_pub = source_node.publishedFwdFromMeta(source_meta);
-    if (!node_validity.snapshotIsLive(source_adj_before) or !node_validity.snapshotIsLive(destination_adj_before)) {
+    const source_flags = source_meta.flags();
+    const destination_flags = destination_meta.flags();
+    if (source_meta.removed or destination_meta.removed) {
         return error.InvalidNode;
     }
 
@@ -321,20 +314,12 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 
     try applyPreparedAppendSideTracked(graph, sfwd, forward_prepared, &scratch);
     try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags);
-    var source_publish_adj = source_adj_before;
-    source_publish_adj.first_block_fwd = sfwd.first_block;
-    source_publish_adj.block_count_fwd = sfwd.block_count;
-    source_publish_adj.group_count_fwd = sfwd.group_count;
-    source_publish_adj.first_group_fwd = sfwd.first_group;
+    var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
     repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
 
     try applyPreparedAppendSideTracked(graph, srev, reverse_prepared, &scratch);
     insertReverseEdge(graph, reverse_prepared.new_block, source);
-    var destination_publish_adj = destination_adj_before;
-    destination_publish_adj.first_block_rev = srev.first_block;
-    destination_publish_adj.block_count_rev = srev.block_count;
-    destination_publish_adj.group_count_rev = srev.group_count;
-    destination_publish_adj.first_group_rev = srev.first_group;
+    var destination_publish_adj = nodeAdjForSide(srev.*, destination_flags, .rev);
     repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
 
     scratch.disarm();
@@ -377,9 +362,9 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     const source_meta = source_node.loadPublishedMeta();
     const destination_meta = destination_node.loadPublishedMeta();
-    const source_adj = source_node.publishedAdjFromMeta(source_meta);
-    const destination_adj = destination_node.publishedAdjFromMeta(destination_meta);
-    if (!node_validity.snapshotIsLive(source_adj) or !node_validity.snapshotIsLive(destination_adj)) {
+    const source_flags = source_meta.flags();
+    const destination_flags = destination_meta.flags();
+    if (source_meta.removed or destination_meta.removed) {
         return error.InvalidNode;
     }
 
@@ -418,18 +403,10 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd, &allocs);
     const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev, &allocs);
-    var source_publish_adj = source_adj;
-    source_publish_adj.first_block_fwd = sfwd.first_block;
-    source_publish_adj.block_count_fwd = sfwd.block_count;
-    source_publish_adj.group_count_fwd = sfwd.group_count;
-    source_publish_adj.first_group_fwd = sfwd.first_group;
+    var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
     repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
 
-    var destination_publish_adj = destination_adj;
-    destination_publish_adj.first_block_rev = srev.first_block;
-    destination_publish_adj.block_count_rev = srev.block_count;
-    destination_publish_adj.group_count_rev = srev.group_count;
-    destination_publish_adj.first_group_rev = srev.first_group;
+    var destination_publish_adj = nodeAdjForSide(srev.*, destination_flags, .rev);
     repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
 
     allocs.disarm();

@@ -19,18 +19,41 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&lib_check.step);
     b.getInstallStep().dependOn(&lib_check.step);
 
-    // ---- test: run all test-bearing modules ----
-    const test_internals_mod = b.createModule(.{
-        .root_source_file = b.path("src/test_internals.zig"),
+    // ---- test: single module provides all test access ----
+    const graph_mod = b.addModule("graph_mod", .{
+        .root_source_file = b.path("src/graph.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+
+    // ---- test helper modules ----
+    const publish_mod = b.createModule(.{
+        .root_source_file = b.path("tests/helpers/publishing.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    publish_mod.addImport("graph_mod", graph_mod);
+
+    const graph_helpers_mod = b.createModule(.{
+        .root_source_file = b.path("tests/helpers/graph.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    graph_helpers_mod.addImport("graph_mod", graph_mod);
+
+    const neighbors_mod = b.createModule(.{
+        .root_source_file = b.path("tests/helpers/neighbors.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    neighbors_mod.addImport("graph_mod", graph_mod);
+
     const test_step = b.step("test", "Run all non-stress tests");
-    addTestFiles(b, test_step, target, optimize, test_internals_mod);
+    addTestFiles(b, test_step, target, optimize, graph_mod, publish_mod, graph_helpers_mod, neighbors_mod);
 
     const stress_step = b.step("stress", "Run long-running stress tests");
-    addTestFile(b, stress_step, target, optimize, test_internals_mod, "stress_rcu.zig");
+    addTestFile(b, stress_step, target, optimize, graph_mod, publish_mod, graph_helpers_mod, neighbors_mod, "rcu/stress.zig");
 }
 
 fn addTestFile(
@@ -38,7 +61,10 @@ fn addTestFile(
     test_step: *std.Build.Step,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    test_internals_mod: *std.Build.Module,
+    graph_mod: *std.Build.Module,
+    publish_mod: *std.Build.Module,
+    graph_helpers_mod: *std.Build.Module,
+    neighbors_mod: *std.Build.Module,
     test_path: []const u8,
 ) void {
     const test_mod = b.createModule(.{
@@ -46,7 +72,10 @@ fn addTestFile(
         .target = target,
         .optimize = optimize,
     });
-    test_mod.addImport("test_internals", test_internals_mod);
+    test_mod.addImport("graph_mod", graph_mod);
+    test_mod.addImport("publish", publish_mod);
+    test_mod.addImport("graph_helpers", graph_helpers_mod);
+    test_mod.addImport("neighbors", neighbors_mod);
 
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
@@ -58,7 +87,10 @@ fn addTestFiles(
     test_step: *std.Build.Step,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    test_internals_mod: *std.Build.Module,
+    graph_mod: *std.Build.Module,
+    publish_mod: *std.Build.Module,
+    graph_helpers_mod: *std.Build.Module,
+    neighbors_mod: *std.Build.Module,
 ) void {
     const tests_dir_path = b.pathFromRoot("tests");
     var tests_dir = std.Io.Dir.cwd().openDir(b.graph.io, tests_dir_path, .{ .iterate = true }) catch |err| {
@@ -76,9 +108,7 @@ fn addTestFiles(
 
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.Io.Dir.path.extension(entry.basename), ".zig")) continue;
-        if (std.mem.eql(u8, entry.basename, "helpers.zig")) continue;
-        if (std.mem.eql(u8, entry.basename, "stress_rcu.zig")) continue;
 
-        addTestFile(b, test_step, target, optimize, test_internals_mod, entry.path);
+        addTestFile(b, test_step, target, optimize, graph_mod, publish_mod, graph_helpers_mod, neighbors_mod, entry.path);
     }
 }

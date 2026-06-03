@@ -286,7 +286,7 @@ pub const GraphError = error{
     InvalidNode,           // NodeId out of bounds, removed, or tombstoned
     EdgeAlreadyExists,     // duplicate in non-multigraph mode
     CorruptGraph,          // validate() found invariant violation
-    ConcurrentMutation,    // reserved: per-node writer contention
+    ConcurrentMutation,    // writer/repair contention detected
     UnsupportedOperation,  // feature not yet in current phase
     RepairRequired,        // hard read bound would be violated
 };
@@ -298,7 +298,7 @@ pub const GraphError = error{
 | `InvalidNode` | All queries taking `NodeId`, `addEdge`, `removeEdge`, `removeNode` | `id.index >= node_count`, or node is removed/tombstoned. |
 | `EdgeAlreadyExists` | `addEdge` | Duplicate edge in non-multigraph mode. |
 | `CorruptGraph` | `validate` | Structural invariant violated. |
-| `ConcurrentMutation` | Reserved | Future: writer contention detected. |
+| `ConcurrentMutation` | `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Contended writer/repair operation detected; caller should retry later. |
 | `UnsupportedOperation` | multigraph ops (Phase 3) | Feature not yet in current phase. |
 | `RepairRequired` | `addEdge`, `removeEdge` (if sync repair disabled) | Hard amplification bound would be violated. Call `repairNode` or `repairBudgeted`. |
 
@@ -571,6 +571,13 @@ stored adjacency blocks until repair, but they are no longer part of the
 public **logical** graph. Public traversal, public degree queries, and
 `edge_count` MUST exclude such tombstoned references even before
 compaction runs.
+
+During a concurrent `removeNode(A)` call, readers MAY observe a transient
+mixed-version view across `A` and its live predecessors, just as with other
+multi-node mutations: for example, a predecessor's published degree may be
+updated before `A.removed` becomes visible. This is allowed while the call is
+in flight. Once `removeNode(A)` returns, the public logical graph MUST reflect
+the removal consistently.
 
 Full scan removal (O(E)) is available as a compaction step in repair, not on every `removeNode` call.
 
