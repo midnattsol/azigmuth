@@ -4,7 +4,7 @@
 |----------------|------------------------------------------------|
 | **RFC**        | 0001                                           |
 | **Title**      | RB-CSR Graph Storage Engine                    |
-| **Status**     | Draft — Phase 2 implementation in progress     |
+| **Status**     | Draft — exact-degree redesign implemented     |
 | **Author**     | —                                              |
 | **Date**       | 2026-05-30                                     |
 | **Supersedes** | —                                              |
@@ -102,7 +102,9 @@ pub const PublishedMeta = packed struct(u64) {
     needs_repair_fwd: bool = false,
     needs_repair_rev: bool = false,
     removed: bool = false,
-    _reserved: u59 = 0,
+    degree_fwd: u22 = 0,
+    degree_rev: u22 = 0,
+    _reserved: u15 = 0,
 };
 
 pub const SideAdj = extern struct {
@@ -118,20 +120,16 @@ pub const NodeBuffer = extern struct {
     rev_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
     fwd_buffers: [2]SideAdj,
     rev_buffers: [2]SideAdj,
-    degree_fwd: u16 = 0,
-    degree_rev: u16 = 0,
+    _reserved_local: u32 = 0,
 };
 ```
 
-`degree_fwd` / `degree_rev` cache the live edge count for each side.
-The sentinel value `0xFFFF` signals overflow. Phase 1 query APIs MAY
-conservatively fall back to an O(B) scan to guarantee exact answers
-under concurrent mutation; the cache saturates to overflow on edge
-addition and, when a mutation or repair drops the count below the
-overflow threshold, recovers an exact value so it remains a tight
-heuristic rather than a permanent unknown.
-It reuses what was previously a 4‑byte cache-line padding field,
-keeping `NodeBuffer` at exactly 64 bytes.
+`degree_fwd` / `degree_rev` are **exact logical degree counts** published
+atomically alongside the public flags and side indices.  Because `block_count_*`
+is `u16` and each block holds `64` edges, the representable range fits
+comfortably in `u22` (max `65,535 × 64 = 4,194,240`).  Phase 1 query APIs
+read the published degree directly; no overflow sentinel nor O(B) fallback
+is needed.
 Writers stage side-local updates in the inactive `fwd_buffers[]` /
 `rev_buffers[]` entries, then publish a new coherent node snapshot by
 CAS/updating `published_meta` with `.release`.
@@ -923,13 +921,13 @@ disabled. Mutations either preserve the hard non-tail bound or return
 
 24. **Benchmark deletion scenario corrected.** Tests with sync repair disabled expect either bound preservation or `RepairRequired`.
 
-25. **removeNode Phase 2 clarified.** Outgoing edges removed from both forward and reverse. Incoming edges may persist until compaction.
+25. **removeNode Phase 2 clarified.** Outgoing edges removed from both forward and reverse. Incoming edges may persist until compaction. Before publishing, `removeNode` MUST validate the local forward/reverse bijection around the removed node without a full-graph scan: each outgoing destination's reverse entry must contain the source exactly once, each live incoming predecessor listed in `reverse(node)` must have a forward edge to `node`, and the count of validated incoming sources must match the published `degree_rev`.
 
 26. **Forward tombstone debt published immediately.** `removeNode` sets `needs_repair_fwd` on every live predecessor that held an edge to the removed node, so budgeted repair discovers the work without a full scan.
 
 27. **Repair debt queues are best-effort.** `repair_fwd` and `repair_rev` MAY contain stale or removed entries. Validation does not treat in-range entries as corruption.  The authoritative source of debt is `needs_repair_*` flags.
 
-28. **Degree cache overflow recovery.** When a deletion or repair drops the visible edge count below the overflow threshold (65535), the degree cache recovers an exact value rather than remaining at the `0xFFFF` sentinel indefinitely.
+28. **Exact logical degrees.** Each node's public logical degree (excluding tombstones to removed endpoints) is published atomically in `PublishedMeta.degree_fwd` / `degree_rev`.  `outDegree()` and `inDegree()` return these exact published values (`u22` range, limited by `block_count: u16 × 64 = 4,194,240`).  The former `0xFFFF` sentinel and overflow recovery logic are removed.
 
 ---
 

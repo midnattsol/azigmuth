@@ -38,7 +38,13 @@ pub const PublishedMeta = packed struct(u64) {
     needs_repair_fwd: bool = false,
     needs_repair_rev: bool = false,
     removed: bool = false,
-    _reserved: u59 = 0,
+    degree_fwd: u22 = 0,
+    degree_rev: u22 = 0,
+    _reserved: u15 = 0,
+
+    pub fn flags(self: PublishedMeta) NodeFlags {
+        return NodeFlags.fromMeta(self);
+    }
 
     pub fn withFlags(self: PublishedMeta, node_flags: NodeFlags) PublishedMeta {
         var next = self;
@@ -46,10 +52,6 @@ pub const PublishedMeta = packed struct(u64) {
         next.needs_repair_rev = node_flags.needs_repair_rev;
         next.removed = node_flags.removed;
         return next;
-    }
-
-    pub fn flags(self: PublishedMeta) NodeFlags {
-        return NodeFlags.fromMeta(self);
     }
 };
 
@@ -101,9 +103,9 @@ pub const NodeAdj = extern struct {
 
 /// RCU double-buffer for adjacency headers, per side, with a single atomic
 /// publication word that selects both published side buffers and carries the
-/// public node flags. Readers load one coherent node snapshot from
-/// `published_meta`, while writers on disjoint logical sides still publish with
-/// per-side claims and CAS. Exactly 64 bytes.
+/// public node flags plus exact logical degree per side.  Readers load one
+/// coherent node snapshot from `published_meta`, while writers on disjoint
+/// logical sides still publish with per-side claims and CAS.  Exactly 64 bytes.
 pub const NodeBuffer = extern struct {
     published_meta: std.atomic.Value(u64) = std.atomic.Value(u64).init(@bitCast(PublishedMeta{})),
 
@@ -115,9 +117,9 @@ pub const NodeBuffer = extern struct {
     fwd_buffers: [2]SideAdj,
     rev_buffers: [2]SideAdj,
 
-    /// Cached edge counts maintained under the writer claim before publish.
-    degree_fwd: u16 = 0,
-    degree_rev: u16 = 0,
+    /// Reserved for future per-node versioning or writer-local scratch.
+    /// Exact logical degrees are authoritative in PublishedMeta, not here.
+    _reserved_local: u32 = 0,
 
     pub fn loadPublishedMeta(self: *const NodeBuffer) PublishedMeta {
         return @bitCast(self.published_meta.load(.acquire));
@@ -164,22 +166,31 @@ pub const NodeBuffer = extern struct {
         self.rev_buffers[1 - meta.rev_index] = self.rev_buffers[meta.rev_index];
     }
 
-    pub fn desiredMetaForPublishFwd(meta: PublishedMeta, flags: NodeFlags) PublishedMeta {
-        var desired = meta.withFlags(flags);
+    pub fn desiredMetaForPublishFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u22) PublishedMeta {
+        var desired = meta;
         desired.fwd_index = 1 - meta.fwd_index;
+        desired.needs_repair_fwd = needs_repair_fwd;
+        desired.degree_fwd = new_degree_fwd;
         return desired;
     }
 
-    pub fn desiredMetaForPublishRev(meta: PublishedMeta, flags: NodeFlags) PublishedMeta {
-        var desired = meta.withFlags(flags);
+    pub fn desiredMetaForPublishRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) PublishedMeta {
+        var desired = meta;
         desired.rev_index = 1 - meta.rev_index;
+        desired.needs_repair_rev = needs_repair_rev;
+        desired.degree_rev = new_degree_rev;
         return desired;
     }
 
-    pub fn desiredMetaForPublishBoth(meta: PublishedMeta, flags: NodeFlags) PublishedMeta {
-        var desired = meta.withFlags(flags);
+    pub fn desiredMetaForPublishBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u22, rev_degree: u22) PublishedMeta {
+        var desired = meta;
         desired.fwd_index = 1 - meta.fwd_index;
         desired.rev_index = 1 - meta.rev_index;
+        desired.needs_repair_fwd = flags.needs_repair_fwd;
+        desired.needs_repair_rev = flags.needs_repair_rev;
+        desired.removed = flags.removed;
+        desired.degree_fwd = fwd_degree;
+        desired.degree_rev = rev_degree;
         return desired;
     }
 
@@ -268,7 +279,9 @@ pub const Violation = union(enum) {
     block_orphaned_in_free_list: struct { block: u32 },
     repair_debt_invalid_node: struct { entry: u32 },
     removed_node_has_outgoing: struct { node: u32 },
+    removed_node_has_reverse_residual: struct { node: u32, degree_rev: u22 },
     removed_node_marked_for_repair: struct { node: u32 },
+    forward_tombstone_missing_repair_flag: struct { node: u32 },
     edge_count_mismatch: struct { expected: u64, actual: u64 },
     retired_block_reachable: struct { block: u32, node: u32 },
     forward_reverse_count_mismatch: struct { forward_total: u64, reverse_total: u64 },

@@ -27,9 +27,15 @@ pub const MIN_OCCUPANCY: u6 = 48;
 /// Maximum number of groups per node before repair is required.
 pub const MAX_GROUPS_PER_NODE: u16 = 4;
 
-/// Sentinel stored in NodeBuffer.degree_* when the node has 65535 or more
-/// edges on that side.  outDegree / inDegree fall back to an O(B) scan.
-pub const DEGREE_OVERFLOW: u16 = 0xFFFF;
+/// Maximum number of blocks per side per node.  With 64 edges per block
+/// the theoretical maximum degree per side is 4,194,240.
+pub const MAX_BLOCKS_PER_SIDE: u22 = 65535;
+
+/// Maximum number of edges per block.
+pub const EDGES_PER_BLOCK: u7 = 64;
+
+/// Maximum number of edges per side per node.
+pub const MAX_DEGREE_PER_SIDE: u22 = 65535 * 64;
 
 /// Maximum page directory sizes for atomically-published storage pages.
 /// These keep page lookup lock-free while preserving stable page addresses.

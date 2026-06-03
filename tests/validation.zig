@@ -269,14 +269,14 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
         helpers.clearPublishedSides(d1);
         helpers.publishedRevSide(d1).first_block = rb0;
         helpers.publishedRevSide(d1).block_count = 1;
-        d1.degree_rev = 1;
+        helpers.setPublishedRevDegree(d1, @as(u22, @intCast(1)));
     }
     {
         const d2 = try graph.nodeAt(.{ .index = 2 });
         helpers.clearPublishedSides(d2);
         helpers.publishedRevSide(d2).first_block = rb1;
         helpers.publishedRevSide(d2).block_count = 1;
-        d2.degree_rev = 1;
+        helpers.setPublishedRevDegree(d2, @as(u22, @intCast(1)));
     }
 
     const node = try graph.nodeAt(.{ .index = 0 });
@@ -286,7 +286,7 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
     helpers.publishedFwdSide(node).block_count = 1;
     helpers.publishedFwdSide(node).group_count = 1;
     helpers.publishedFwdSide(node).first_group = g0;
-    node.degree_fwd = 2;
+    helpers.setPublishedFwdDegree(node, @as(u22, @intCast(2)));
     graph.graph.edge_count.store(2, .release);
 
     // validate() must now detect this mismatch.
@@ -320,7 +320,7 @@ test "validation: removed node entry in repair queue is currently accepted" {
     try testing.expect(!containsViolation(violations, .repair_debt_invalid_node));
 }
 
-test "validation: detects degree cache mismatch in fast validate" {
+test "validation: detects published exact degree mismatch on forward side" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -328,13 +328,13 @@ test "validation: detects degree cache mismatch in fast validate" {
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
 
-    var node = try graph.nodeAt(source);
-    node.degree_fwd = 7;
+    // Corrupt the published forward degree — it should match the visible count.
+    helpers.setPublishedFwdDegree(try graph.nodeAt(source), 999);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 }
 
-test "validation: detects degree cache stuck at overflow after removal drops visible count below threshold" {
+test "validation: detects published exact degree mismatch on reverse side" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -342,30 +342,7 @@ test "validation: detects degree cache stuck at overflow after removal drops vis
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
 
-    // Simulate a node whose degree cache previously overflowed but has not been
-    // recovered by any subsequent mutation that would recompute it.
-    var node = try graph.nodeAt(source);
-    node.degree_fwd = constants.DEGREE_OVERFLOW;
-
-    // RFC §2.5 & §A.28: when visible degree drops below overflow threshold the
-    // cache MUST recover an exact value.  A sticky overflow is a structural bug.
-    try testing.expectError(error.CorruptGraph, graph.validate());
-
-    const violations = try graph.debugValidate(testing.allocator);
-    defer testing.allocator.free(violations);
-    try testing.expect(containsViolation(violations, .degree_mismatch));
-}
-
-test "validation: detects degree cache stuck at overflow on reverse side" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const source = try graph.addNode();
-    const target = try graph.addNode();
-    try graph.addEdge(source, target, 0, 0);
-
-    var node = try graph.nodeAt(target);
-    node.degree_rev = constants.DEGREE_OVERFLOW;
+    helpers.setPublishedRevDegree(try graph.nodeAt(target), 999);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 
@@ -426,7 +403,7 @@ test "validation: debugValidate reports missing needs_repair_fwd on predecessor 
     try testing.expect(violations.len > 0);
 }
 
-test "validation: overflow degree cache on removed node is not flagged (removed nodes are exempt)" {
+test "validation: removed node with non-zero published degree is flagged" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -435,13 +412,11 @@ test "validation: overflow degree cache on removed node is not flagged (removed 
     try graph.addEdge(source, target, 0, 0);
     try graph.removeNode(target);
 
-    // Use page_ops.nodeAt to bypass the liveness check (removed nodes are
-    // inaccessible via the public graph.nodeAt()).
+    // Removed nodes must have published degree 0 on both sides.
     const node = page_ops.nodeAt(&graph.graph, target);
-    node.degree_rev = constants.DEGREE_OVERFLOW;
+    helpers.setPublishedRevDegree(node, 1);
 
-    // Removed nodes are exempt from degree cache checks (RFC §7.2).
-    try graph.validate();
+    try testing.expectError(error.CorruptGraph, graph.validate());
 }
 
 test "validation: debugValidate survives invalid first_group" {

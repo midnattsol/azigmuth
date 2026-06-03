@@ -31,7 +31,7 @@ test "removeNode: public API invalidates removed node and hides tombstoned incom
     try expectRemovedNodeInvalid(&graph, a);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(c));
-    try testing.expectEqual(@as(u16, 0), (try graph.nodeAtConst(b)).degree_fwd);
+    try testing.expectEqual(@as(u22, 0), (try graph.nodeAtConst(b)).loadPublishedMeta().degree_fwd);
     // Tombstone b -> a may remain structural until repair compaction,
     // but it is no longer part of the visible logical edge count.
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());

@@ -289,20 +289,16 @@ fn sumVisibleCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, 
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-    const reader_token = rcu.readerEnter(@constCast(graph));
-    defer rcu.readerExit(@constCast(graph), reader_token);
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const node_adj = node_buffer.publishedAdj();
-    try node_validity.ensureLiveSnapshot(node_adj);
-    return sumVisibleCount(graph, node_adj, .fwd);
+    const meta = node_buffer.loadPublishedMeta();
+    if (meta.removed) return error.InvalidNode;
+    return meta.degree_fwd;
 }
 
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-    const reader_token = rcu.readerEnter(@constCast(graph));
-    defer rcu.readerExit(@constCast(graph), reader_token);
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const node_adj = node_buffer.publishedAdj();
-    try node_validity.ensureLiveSnapshot(node_adj);
-    return sumVisibleCount(graph, node_adj, .rev);
+    const meta = node_buffer.loadPublishedMeta();
+    if (meta.removed) return error.InvalidNode;
+    return meta.degree_rev;
 }

@@ -210,6 +210,7 @@ test "mutation: reverse-only orphan does not make removeEdge report success" {
     clearPublished(destination_node);
     rev(destination_node).first_block = reverse_block;
     rev(destination_node).block_count = 1;
+    helpers.setPublishedRevDegree(destination_node, 1);
 
     try testing.expect(!try graph.removeEdge(source, destination));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -551,7 +552,7 @@ test "mutation: findSlotInAdj works with blocks not globally key-sorted" {
     try testing.expectEqual(b0, result2.?.block_idx);
 }
 
-test "mutation: outDegree works on manually constructed adjacency (cold cache)" {
+test "mutation: outDegree returns published exact degree on manually constructed adjacency" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -560,7 +561,6 @@ test "mutation: outDegree works on manually constructed adjacency (cold cache)" 
         _ = try graph.addNode();
     }
 
-    // Build a 2-block adjacency by hand — degree cache starts at 0.
     const b0 = try graph.allocBlockFwd();
     var block0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
     for (0..64) |i| {
@@ -576,12 +576,12 @@ test "mutation: outDegree works on manually constructed adjacency (cold cache)" 
     clearPublished(node);
     fwd(node).first_block = b0;
     fwd(node).block_count = 2;
+    helpers.setPublishedFwdDegree(node, 65);
 
-    // Cache is cold (degree_fwd=0) but blocks exist → must fall back to scan.
     try testing.expectEqual(@as(usize, 65), try graph.outDegree(src));
 }
 
-test "mutation: outDegree ignores stale positive degree cache" {
+test "mutation: validate detects published degree vs visible mismatch" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -597,9 +597,10 @@ test "mutation: outDegree ignores stale positive degree cache" {
     clearPublished(node);
     fwd(node).first_block = block;
     fwd(node).block_count = 1;
-    node.degree_fwd = 99;
+    helpers.setPublishedFwdDegree(node, 99);
+    helpers.setPublishedRevDegree(try graph.nodeAt(.{ .index = 1 }), 1);
 
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(src));
+    try testing.expectError(error.CorruptGraph, graph.validate());
 }
 
 test "mutation: empty block between live blocks in contiguous adjacency" {
@@ -983,17 +984,17 @@ test "mutation: degree cache survives repair" {
         var rev_block = page_ops.edgeBlockAt(&graph.graph, r, .rev);
         rev_block.sources[0] = src.index;
         rev_block.mask = constants.denseMask(1);
-        var dn = try graph.nodeAt(.{ .index = @intCast(dst) });
+        const dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         rev(dn).first_block = r;
         rev(dn).block_count = 1;
-        dn.degree_rev = 1;
+        helpers.setPublishedRevDegree(dn, @as(u22, @intCast(1)));
     }
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
     fwd(node).first_block = b0;
     fwd(node).block_count = 2;
-    node.degree_fwd = 83;
+    helpers.setPublishedFwdDegree(node, @as(u22, @intCast(83)));
     graph.graph.edge_count.store(83, .release);
 
     try graph.repairNode(src);
@@ -1070,39 +1071,35 @@ test "mutation: removeEdge from single-block group preserves group count" {
     try testing.expectEqual(@as(usize, 129), try graph.outDegree(src));
 }
 
-test "mutation: degree cache at overflow falls back to O(B) scan" {
+test "mutation: outDegree returns exact published degree O(1)" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const src = try graph.addNode();
-    for (0..65535) |_| {
-        _ = try graph.addNode();
-    }
-
-    // Build 65536 edges manually (1024 blocks of 64)
-    var first_block: u32 = 0;
-    for (0..1024) |chunk| {
-        const b = try graph.allocBlockFwd();
-        if (chunk == 0) first_block = b;
-        var blk = page_ops.edgeBlockAt(&graph.graph, b, .fwd);
-        for (0..64) |j| {
-            blk.edges[j] = .{ .destination = @intCast(chunk * 64 + j), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-        }
-        blk.mask = constants.FULL_BLOCK_MASK;
-    }
-
-    const node = try graph.nodeAt(src);
-    fwd(node).first_block = first_block;
-    fwd(node).block_count = 1024;
-    node.degree_fwd = constants.DEGREE_OVERFLOW;
-    graph.graph.edge_count.store(65536, .release);
-
-    // Cache is at DEGREE_OVERFLOW → O(B) scan must return the real count
-    try testing.expectEqual(@as(usize, 65536), try graph.outDegree(src));
-    try testing.expectEqual(constants.DEGREE_OVERFLOW, node.degree_fwd);
+    for (0..130) |_| _ = try graph.addNode();
+    for (1..130) |i| try graph.addEdge(src, .{ .index = @intCast(i) }, 0, 0);
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 129), try graph.outDegree(src));
 }
 
-test "mutation: degree cache recovers exact value after decrement from overflow" {
+test "mutation: addEdge returns error when degree would exceed MAX_DEGREE_PER_SIDE" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+
+    const source_node = try graph.nodeAt(source);
+    helpers.setPublishedFwdDegree(source_node, constants.MAX_DEGREE_PER_SIDE);
+
+    try testing.expectError(error.OutOfMemory, graph.addEdge(source, destination, 0, 0));
+
+    // Assert no partial state was published: edge_count and forged degree unchanged.
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+    try testing.expectEqual(constants.MAX_DEGREE_PER_SIDE, helpers.publishedDegrees(source_node).fwd);
+}
+
+test "mutation: removeEdge publishes exact decremented degree" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -1112,16 +1109,10 @@ test "mutation: degree cache recovers exact value after decrement from overflow"
     try graph.addEdge(src, dst1, 0, 0);
     try graph.addEdge(src, dst2, 0, 0);
 
-    // Simulate a node whose degree cache previously overflowed.
-    var node = try graph.nodeAt(src);
-    node.degree_fwd = constants.DEGREE_OVERFLOW;
-
-    // removeEdge must recover the exact degree from overflow rather than
-    // leaving the cache sticky.
     try testing.expect(try graph.removeEdge(src, dst1));
     try graph.validate();
 
-    try testing.expectEqual(@as(u16, 1), node.degree_fwd);
+    try testing.expectEqual(@as(u22, 1), (try graph.nodeAtConst(src)).loadPublishedMeta().degree_fwd);
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(src));
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 }

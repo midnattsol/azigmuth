@@ -16,7 +16,7 @@ const DestinationUpdate = struct {
     node_buffer: *types.NodeBuffer,
     published_adj_before: types.NodeAdj,
     staging_adj_after: types.NodeAdj,
-    new_degree_rev: u16,
+    new_degree_rev: u22,
     decrement_visible_fwd: bool,
     needs_reverse_retire: bool = false,
 };
@@ -82,11 +82,11 @@ const ScratchAllocations = struct {
     }
 };
 
-fn toCachedDegree(count: usize) u16 {
-    return if (count < constants.DEGREE_OVERFLOW) @intCast(count) else constants.DEGREE_OVERFLOW;
+fn toU22Degree(count: usize) u22 {
+    return @as(u22, @intCast(count));
 }
 
-fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj, fwd_degree: u22, rev_degree: u22) void {
     const meta = node.loadPublishedMeta();
     node.stagingFwd(meta).* = .{
         .first_block = adj.first_block_fwd,
@@ -100,10 +100,10 @@ fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     };
-    _ = common.publishStagedBoth(node, meta, adj.flags);
+    _ = common.publishStagedBoth(node, meta, adj.flags, fwd_degree, rev_degree);
 }
 
-fn publishRevAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+fn publishRevAdj(node: *types.NodeBuffer, adj: types.NodeAdj, new_rev_degree: u22) void {
     const meta = node.loadPublishedMeta();
     node.stagingRev(meta).* = .{
         .first_block = adj.first_block_rev,
@@ -111,7 +111,7 @@ fn publishRevAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     };
-    _ = common.publishStagedRev(node, meta, adj.flags);
+    _ = common.publishStagedRev(node, meta, adj.flags.needs_repair_rev, new_rev_degree);
 }
 
 fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.NodeId, destinations: *std.ArrayList(u32)) !void {
@@ -395,6 +395,18 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     defer forward_destinations.deinit(graph.allocator);
     try collectForwardDestinations(graph, node, &forward_destinations);
 
+    // RFC §A.25: reject duplicate outgoing destinations before any publish.
+    {
+        var seen: std.ArrayList(u32) = .empty;
+        defer seen.deinit(graph.allocator);
+        for (forward_destinations.items) |destination_index| {
+            for (seen.items) |s| {
+                if (s == destination_index) return error.CorruptGraph;
+            }
+            try seen.append(graph.allocator, destination_index);
+        }
+    }
+
     var reverse_sources: std.ArrayList(u32) = .empty;
     defer reverse_sources.deinit(graph.allocator);
     try collectReverseSources(graph, node, &reverse_sources);
@@ -402,6 +414,40 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     const had_self_edge = for (forward_destinations.items) |destination_index| {
         if (destination_index == node.index) break true;
     } else false;
+
+    // Validate incoming reverse completeness before any publish.
+    // Reject invalid, removed, and duplicate sources.  Verify that every
+    // live predecessor still has a forward edge to the removed node.
+    // Compare the validated count against the exact published degree_rev.
+    const source_meta = source_node.loadPublishedMeta();
+    {
+        var seen_incoming: std.ArrayList(u32) = .empty;
+        defer seen_incoming.deinit(graph.allocator);
+        var valid_count: u22 = 0;
+        var self_count: u22 = 0;
+        for (reverse_sources.items) |source_index| {
+            if (source_index >= graph.publishedNodeCount()) return error.CorruptGraph;
+            if (source_index == node.index) {
+                self_count += 1;
+                if (self_count > 1 or !had_self_edge) return error.CorruptGraph;
+                continue;
+            }
+            if (!node_validity.isNodeLiveIndex(graph, source_index)) continue;
+
+            for (seen_incoming.items) |s| {
+                if (s == source_index) return error.CorruptGraph;
+            }
+            try seen_incoming.append(graph.allocator, source_index);
+
+            const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_index }).publishedAdj();
+            if (!adjacency.hasEdgeInAdj(graph, source_fwd, node.index)) return error.CorruptGraph;
+
+            valid_count += 1;
+            if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
+        }
+        if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
+    }
+
     const removed_visible_edge_count = countVisibleForwardEdges(graph, forward_destinations.items) + countVisibleIncomingEdgesExcludingSelf(graph, source_adj_before, node.index);
 
     var related_nodes: std.ArrayList(RelatedNode) = .empty;
@@ -458,6 +504,9 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
             var destination_staging_adj = destination_adj_before;
             try buildReverseAdjacencyFromBlocksTracked(&destination_staging_adj, graph, rb.new_blocks.items, &scratch);
             const live_after: usize = rb.live_after;
+            // Removed nodes always have logical degree 0 regardless of
+            // residual reverse structure after tombstone cleanup.
+            const new_rev_deg = if (destination_adj_before.flags.removed) @as(u22, 0) else toU22Degree(live_after);
             repair.updateRepairDebt(graph, &destination_staging_adj, related.node_index, .rev);
 
             try destination_updates.append(graph.allocator, .{
@@ -465,7 +514,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
                 .node_buffer = related.node_buffer,
                 .published_adj_before = destination_adj_before,
                 .staging_adj_after = destination_staging_adj,
-                .new_degree_rev = toCachedDegree(live_after),
+                .new_degree_rev = new_rev_deg,
                 .decrement_visible_fwd = related.needs_visible_fwd_decrement,
                 .needs_reverse_retire = true,
             });
@@ -475,7 +524,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
                 .node_buffer = related.node_buffer,
                 .published_adj_before = related.node_buffer.publishedAdj(),
                 .staging_adj_after = related.node_buffer.publishedAdj(),
-                .new_degree_rev = related.node_buffer.degree_rev,
+                .new_degree_rev = related.node_buffer.loadPublishedMeta().degree_rev,
                 .decrement_visible_fwd = true,
             });
         }
@@ -508,30 +557,28 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     source_staging_adj.flags.removed = true;
     source_staging_adj.flags.needs_repair_fwd = false;
     source_staging_adj.flags.needs_repair_rev = false;
-    source_node.degree_fwd = 0;
-    source_node.degree_rev = 0;
 
     for (destination_updates.items) |update| {
         if (update.decrement_visible_fwd) {
-            common.decrementDegree(&update.node_buffer.degree_fwd);
+            const meta = update.node_buffer.loadPublishedMeta();
+            update.node_buffer.copyPublishedToStagingFwd(meta);
+            const new_fwd: u22 = @as(u22, @intCast(meta.degree_fwd)) - 1;
+            _ = common.publishStagedFwd(update.node_buffer, meta, meta.needs_repair_fwd, new_fwd);
         }
         if (update.needs_reverse_retire) {
-            update.node_buffer.degree_rev = update.new_degree_rev;
-            publishRevAdj(update.node_buffer, update.staging_adj_after);
+            publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);
         }
     }
 
-    publishBothAdj(source_node, source_staging_adj);
+    publishBothAdj(source_node, source_staging_adj, 0, 0);
 
     // With the target node now marked removed, recompute forward repair debt
     // on each live predecessor.  Their forward adjacency still contains a
     // tombstoned reference that needs compaction, and the flag makes it
     // immediately discoverable by repairBudgeted.
-    // Also recover exact degree cache if it was previously saturated.
     for (destination_updates.items) |update| {
         if (update.decrement_visible_fwd) {
             repair.updateRepairDebtSide(graph, update.node_buffer, update.node_index, .fwd);
-            common.recomputeDegreeIfOverflow(graph, &update.node_buffer.degree_fwd, update.node_index, .fwd);
         }
     }
 

@@ -17,7 +17,7 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
 }
 
 fn publishForwardBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_block: u32, block_count: u16) !void {
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = first_block;
     helpers.publishedFwdSide(node_buffer).block_count = block_count;
@@ -25,11 +25,11 @@ fn publishForwardBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     for (first_block..first_block + block_count) |block_index| {
         total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .fwd).mask);
     }
-    node_buffer.degree_fwd = @intCast(total);
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast((total))));
 }
 
 fn publishReverseBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_block: u32, block_count: u16) !void {
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedRevSide(node_buffer).first_block = first_block;
     helpers.publishedRevSide(node_buffer).block_count = block_count;
@@ -37,7 +37,7 @@ fn publishReverseBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     for (first_block..first_block + block_count) |block_index| {
         total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .rev).mask);
     }
-    node_buffer.degree_rev = @intCast(total);
+    helpers.setPublishedRevDegree(node_buffer, @as(u22, @intCast((total))));
 }
 
 fn fillForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
@@ -62,10 +62,10 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     block.sources[0] = source_index;
     block.mask = constants.denseMask(1);
 
-    var node_buffer = try graph.nodeAt(.{ .index = destination_index });
+    const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     helpers.publishedRevSide(node_buffer).first_block = block_index;
     helpers.publishedRevSide(node_buffer).block_count = 1;
-    node_buffer.degree_rev = 1;
+    helpers.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
 }
 
 fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -201,15 +201,15 @@ test "repair: repairBudgeted counts a node with forward and reverse debt once" {
     fillReverseBlock(&graph, rev0, 40, 20);
     fillReverseBlock(&graph, rev1, 60, 20);
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = fwd0;
     helpers.publishedFwdSide(node_buffer).block_count = 2;
     helpers.publishedRevSide(node_buffer).first_block = rev0;
     helpers.publishedRevSide(node_buffer).block_count = 2;
     helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = true, .removed = false });
-    node_buffer.degree_fwd = 40;
-    node_buffer.degree_rev = 40;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(40)));
+    helpers.setPublishedRevDegree(node_buffer, @as(u22, @intCast(40)));
 
     try graph.graph.repair_fwd.append(graph.graph.allocator, node.index);
     try graph.graph.repair_rev.append(graph.graph.allocator, node.index);
@@ -233,7 +233,7 @@ test "repair: updateRepairDebt does not enqueue duplicates" {
     fillForwardBlock(&graph, second_block, 21, 20);
     try publishForwardBlocks(&graph, node, first_block, 2);
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     var adj = node_buffer.publishedAdj();
     repair.updateRepairDebt(&graph.graph, &adj, node.index, .fwd);
     helpers.setPublishedAdjSnapshot(node_buffer, adj);
@@ -262,12 +262,12 @@ test "repair: grouped adjacency can compact across group boundary" {
     page_ops.groupAt(&graph.graph, first_group).* = .{ .start = first_block, .count = 1, .next = second_group };
     page_ops.groupAt(&graph.graph, second_group).* = .{ .start = second_block, .count = 1, .next = constants.END_OF_CHAIN };
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).block_count = 2;
     helpers.publishedFwdSide(node_buffer).group_count = 2;
     helpers.publishedFwdSide(node_buffer).first_group = first_group;
-    node_buffer.degree_fwd = 40;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(40)));
     graph.graph.edge_count.store(40, .release);
 
     const compacted = try repair.repairNodeSide(&graph.graph, node, .fwd);
@@ -337,13 +337,13 @@ test "repair: grouped adjacency becomes contiguous after repair" {
     page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
     page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = constants.END_OF_CHAIN };
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = b0;
     helpers.publishedFwdSide(node_buffer).block_count = 3;
     helpers.publishedFwdSide(node_buffer).group_count = 3;
     helpers.publishedFwdSide(node_buffer).first_group = g0;
-    node_buffer.degree_fwd = 60;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(60)));
     graph.graph.edge_count.store(60, .release);
 
     const compacted = try repair.repairNodeSide(&graph.graph, node, .fwd);
@@ -372,10 +372,10 @@ test "repair: valid forward blocks produce valid reverse after repair" {
         var rev = page_ops.edgeBlockAt(&graph.graph, r, .rev);
         rev.sources[0] = src.index;
         rev.mask = constants.denseMask(1);
-        var dn = try graph.nodeAt(.{ .index = @intCast(dst) });
+        const dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         helpers.publishedRevSide(dn).first_block = r;
         helpers.publishedRevSide(dn).block_count = 1;
-        dn.degree_rev = 1;
+        helpers.setPublishedRevDegree(dn, @as(u22, @intCast(1)));
     }
 
     try publishForwardBlocks(&graph, src, b0, 2);

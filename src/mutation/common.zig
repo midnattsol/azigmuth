@@ -10,79 +10,6 @@ const adjacency = @import("../adjacency.zig");
 const rcu = @import("../rcu.zig");
 const node_validity = @import("../node_validity.zig");
 
-/// Increment the degree cache.  Caller must hold the writer claim.
-pub fn incrementDegree(deg: *u16) void {
-    if (deg.* < constants.DEGREE_OVERFLOW - 1) deg.* += 1 else deg.* = constants.DEGREE_OVERFLOW;
-}
-
-/// Decrement the degree cache.  Caller must hold the writer claim.
-/// If the counter does not hold a valid cached value it is forced to
-/// `DEGREE_OVERFLOW` so callers fall back to the O(B) scan.
-pub fn decrementDegree(deg: *u16) void {
-    if (deg.* > 0 and deg.* < constants.DEGREE_OVERFLOW) deg.* -= 1 else deg.* = constants.DEGREE_OVERFLOW;
-}
-
-/// When a mutation drops the logical edge count of a side that was
-/// previously at overflow, recompute the exact visible degree and
-/// store it in `deg`.  Caller must hold the writer claim for that side.
-pub fn recomputeDegreeIfOverflow(
-    graph: *const graph_core.GraphCore,
-    deg: *u16,
-    node_index: u32,
-    comptime side: adjacency.AdjSide,
-) void {
-    if (deg.* != constants.DEGREE_OVERFLOW) return;
-
-    const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_index });
-    const adj = node_buffer.publishedAdj();
-
-    const block_count: u16 = if (side == .fwd) adj.block_count_fwd else adj.block_count_rev;
-    if (block_count == 0) {
-        deg.* = 0;
-        return;
-    }
-
-    var total: usize = 0;
-    const first_block: u32 = if (side == .fwd) adj.first_block_fwd else adj.first_block_rev;
-    const group_count: u16 = if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
-    const first_group: u32 = if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const candidate = switch (side) {
-                    .fwd => block.edges[slot].destination,
-                    .rev => block.sources[slot],
-                };
-                if (node_validity.isNodeLiveIndex(graph, candidate)) total += 1;
-            }
-        }
-    } else {
-        var group_idx = first_group;
-        var visited: u16 = 0;
-        while (visited < group_count) : (visited += 1) {
-            if (group_idx == constants.END_OF_CHAIN) break;
-            const group = page_ops.groupAtConst(graph, group_idx);
-            for (group.start..group.start + group.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    const candidate = switch (side) {
-                        .fwd => block.edges[slot].destination,
-                        .rev => block.sources[slot],
-                    };
-                    if (node_validity.isNodeLiveIndex(graph, candidate)) total += 1;
-                }
-            }
-            group_idx = group.next;
-        }
-    }
-
-    deg.* = if (total < constants.DEGREE_OVERFLOW) @intCast(total) else constants.DEGREE_OVERFLOW;
-}
-
 /// Tracks which adjacency claims were successfully acquired during a mutation,
 /// so the deferred release only drops the ones that were actually taken.
 pub const ClaimedAdjacencies = struct {
@@ -250,34 +177,28 @@ pub fn tryClaimNodeSides(node: *types.NodeBuffer, want_fwd: bool, want_rev: bool
     return claims;
 }
 
-pub fn publishStagedFwd(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags) types.PublishedMeta {
+pub fn publishStagedFwd(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u22) types.PublishedMeta {
     var expected = expected_meta;
     while (true) {
-        var merged_flags = expected.flags();
-        merged_flags.needs_repair_fwd = flags.needs_repair_fwd;
-        merged_flags.removed = flags.removed;
-        const desired = types.NodeBuffer.desiredMetaForPublishFwd(expected, merged_flags);
+        const desired = types.NodeBuffer.desiredMetaForPublishFwd(expected, needs_repair_fwd, new_degree_fwd);
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
     }
 }
 
-pub fn publishStagedRev(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags) types.PublishedMeta {
+pub fn publishStagedRev(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) types.PublishedMeta {
     var expected = expected_meta;
     while (true) {
-        var merged_flags = expected.flags();
-        merged_flags.needs_repair_rev = flags.needs_repair_rev;
-        merged_flags.removed = flags.removed;
-        const desired = types.NodeBuffer.desiredMetaForPublishRev(expected, merged_flags);
+        const desired = types.NodeBuffer.desiredMetaForPublishRev(expected, needs_repair_rev, new_degree_rev);
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
     }
 }
 
-pub fn publishStagedBoth(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags) types.PublishedMeta {
+pub fn publishStagedBoth(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u22, rev_degree: u22) types.PublishedMeta {
     var expected = expected_meta;
     while (true) {
-        const desired = types.NodeBuffer.desiredMetaForPublishBoth(expected, flags);
+        const desired = types.NodeBuffer.desiredMetaForPublishBoth(expected, flags, fwd_degree, rev_degree);
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
     }
@@ -457,6 +378,10 @@ pub fn rebuildAdjWithReplace(
                 }
                 tail_group_ptr.* = group;
             } else {
+                if (switch (dir) {
+                    .fwd => adj.group_count_fwd,
+                    .rev => adj.group_count_rev,
+                } >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
                 const group = try page_ops.allocGroup(graph_ptr);
                 page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
                 page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;
@@ -572,6 +497,7 @@ pub fn rebuildAdjWithReplaceSide(
                 adj.group_count = 2;
                 tail_group_ptr.* = group;
             } else {
+                if (adj.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
                 const group = if (allocs_optional) |a| try a.allocGroup(graph_ptr) else try page_ops.allocGroup(graph_ptr);
                 page_ops.groupAt(graph_ptr, group).* = .{ .start = run_start_ptr.*, .count = run_count_ptr.*, .next = constants.END_OF_CHAIN };
                 page_ops.groupAt(graph_ptr, tail_group_ptr.*.?).next = group;

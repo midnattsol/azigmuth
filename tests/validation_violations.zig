@@ -134,9 +134,9 @@ test "validation: debugValidate emits degree_mismatch when cached degree diverge
     try graph.addEdge(source, target_a, 0, 0);
     try graph.addEdge(source, target_b, 0, 0);
 
-    var node_buffer = try graph.nodeAt(source);
-    node_buffer.degree_fwd = 0;
-    node_buffer.degree_rev = 99;
+    const node_buffer = try graph.nodeAt(source);
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(0)));
+    helpers.setPublishedRevDegree(node_buffer, @as(u22, @intCast(99)));
 
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
@@ -190,6 +190,35 @@ test "validation: debugValidate detects forward/reverse visible count mismatch" 
         if (v == .forward_reverse_count_mismatch) {
             try testing.expectEqual(@as(u64, 2), v.forward_reverse_count_mismatch.forward_total);
             try testing.expectEqual(@as(u64, 3), v.forward_reverse_count_mismatch.reverse_total);
+        }
+    }
+}
+
+test "validation: debugValidate emits forward_tombstone_missing_repair_flag when flag is absent" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(a, b, 0, 0);
+
+    try graph.removeNode(b);
+    try graph.validate();
+
+    const a_node = try graph.nodeAt(a);
+    {
+        var flags = a_node.loadPublishedMeta().flags();
+        flags.needs_repair_fwd = false;
+        helpers.setPublishedFlags(a_node, flags);
+    }
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(hasViolationTag(violations, .forward_tombstone_missing_repair_flag));
+
+    for (violations) |v| {
+        if (v == .forward_tombstone_missing_repair_flag) {
+            try testing.expectEqual(a.index, v.forward_tombstone_missing_repair_flag.node);
         }
     }
 }

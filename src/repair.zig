@@ -15,7 +15,7 @@ const rcu = @import("rcu.zig");
 const node_validity = @import("node_validity.zig");
 const mutation_common = @import("mutation/common.zig");
 
-fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
+fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj, fwd_degree: u22, rev_degree: u22) void {
     const meta = node.loadPublishedMeta();
     node.stagingFwd(meta).* = .{
         .first_block = adj.first_block_fwd,
@@ -29,7 +29,7 @@ fn publishBothAdj(node: *types.NodeBuffer, adj: types.NodeAdj) void {
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     };
-    _ = mutation_common.publishStagedBoth(node, meta, adj.flags);
+    _ = mutation_common.publishStagedBoth(node, meta, adj.flags, fwd_degree, rev_degree);
 }
 
 fn findMergeCandidate(
@@ -362,7 +362,6 @@ fn computeNeedsRepair(
                 }
             }
             if (needs_repair) break;
-            counted_groups += 1;
             if (group.next == constants.END_OF_CHAIN) break;
             group_idx = group.next;
         }
@@ -389,7 +388,12 @@ pub fn updateRepairDebtSide(
     updateRepairDebt(graph, &adj, node_index, side);
     var expected = node.loadPublishedMeta();
     while (true) {
-        const desired = expected.withFlags(adj.flags);
+        var desired = expected;
+        if (side == .fwd) {
+            desired.needs_repair_fwd = adj.flags.needs_repair_fwd;
+        } else {
+            desired.needs_repair_rev = adj.flags.needs_repair_rev;
+        }
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse break;
         expected = actual;
     }
@@ -1253,7 +1257,7 @@ const ReverseCleanupTarget = struct {
     node_buffer: *types.NodeBuffer,
     published_adj_before: types.NodeAdj,
     staging_adj_after: types.NodeAdj,
-    new_degree_rev: u16,
+    new_degree_rev: u22,
 };
 
 fn repairForwardTombstonesWithReverseCleanup(
@@ -1305,20 +1309,21 @@ fn repairForwardTombstonesWithReverseCleanup(
             .node_buffer = destination_node,
             .published_adj_before = destination_adj_before,
             .staging_adj_after = reverse_result.staging_adj,
-            .new_degree_rev = if (destination_adj_before.flags.removed) 0 else @as(u16, @intCast(@min(reverse_result.live_after, constants.DEGREE_OVERFLOW))),
+            .new_degree_rev = if (destination_adj_before.flags.removed) @as(u22, 0) else @as(u22, @intCast(reverse_result.live_after)),
         });
     }
 
     allocs.disarm();
 
     for (reverse_updates.items) |update| {
-        update.node_buffer.degree_rev = update.new_degree_rev;
-        publishBothAdj(update.node_buffer, update.staging_adj_after);
+        const preserved_fwd = update.node_buffer.loadPublishedMeta().degree_fwd;
+        publishBothAdj(update.node_buffer, update.staging_adj_after, preserved_fwd, update.new_degree_rev);
         try retireAdjacencySide(graph, update.published_adj_before, .rev);
     }
 
-    node_mut.degree_fwd = if (source_result.live_after < constants.DEGREE_OVERFLOW) @intCast(source_result.live_after) else constants.DEGREE_OVERFLOW;
-    publishBothAdj(node_mut, source_result.staging_adj);
+    const preserved_rev = node_mut.loadPublishedMeta().degree_rev;
+    const new_fwd: u22 = @as(u22, @intCast(source_result.live_after));
+    publishBothAdj(node_mut, source_result.staging_adj, new_fwd, preserved_rev);
     try retireAdjacencySide(graph, source_adj_before, .fwd);
 
     return 1;
@@ -1409,13 +1414,12 @@ fn repairNodeSideLimited(
     try buildAdjacencyFromBlocks(&staging_adj, graph, side, sorted.new_blocks.items, &allocs);
 
     updateRepairDebt(graph, &staging_adj, node.index, side);
-    if (side == .fwd) {
-        node_mut.degree_fwd = if (live_total < constants.DEGREE_OVERFLOW) @intCast(live_total) else constants.DEGREE_OVERFLOW;
-    } else {
-        node_mut.degree_rev = if (live_total < constants.DEGREE_OVERFLOW) @intCast(live_total) else constants.DEGREE_OVERFLOW;
-    }
+    const meta = node_mut.loadPublishedMeta();
+    const new_live: u22 = @as(u22, @intCast(live_total));
     allocs.disarm();
-    publishBothAdj(node_mut, staging_adj);
+    publishBothAdj(node_mut, staging_adj,
+        if (side == .fwd) new_live else meta.degree_fwd,
+        if (side == .rev) new_live else meta.degree_rev);
 
     // Retire old blocks after publishing the replacement
     if (group_count == 0) {

@@ -450,6 +450,11 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
         return error.EdgeAlreadyExists;
     }
 
+    if (source_meta.degree_fwd >= constants.MAX_DEGREE_PER_SIDE) return error.OutOfMemory;
+    if (destination_meta.degree_rev >= constants.MAX_DEGREE_PER_SIDE) return error.OutOfMemory;
+    if (@as(u22, source_adj_before.block_count_fwd) >= constants.MAX_BLOCKS_PER_SIDE) return error.OutOfMemory;
+    if (@as(u22, destination_adj_before.block_count_rev) >= constants.MAX_BLOCKS_PER_SIDE) return error.OutOfMemory;
+
     var scratch = AddEdgeScratch{};
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
@@ -483,20 +488,20 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 
     scratch.disarm();
 
+    const new_source_degree: u22 = @as(u22, @intCast(source_meta.degree_fwd)) + 1;
+    const new_dest_degree: u22 = @as(u22, @intCast(destination_meta.degree_rev)) + 1;
+
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishStagedBoth(source_node, source_meta, merged_flags);
+        _ = common.publishStagedBoth(source_node, source_meta, merged_flags, new_source_degree, new_dest_degree);
     } else {
         // publish reverse first, then forward (RFC §5.2)
-        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags);
-        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags);
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, new_dest_degree);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, new_source_degree);
     }
-
-    common.incrementDegree(&source_node.degree_fwd);
-    common.incrementDegree(&destination_node.degree_rev);
 
     if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
     if (reverse_prepared.old_block) |old_block| try rcu.retireBlockRev(graph, old_block);
@@ -578,22 +583,20 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     allocs.disarm();
 
+    const new_source_degree: u22 = @as(u22, @intCast(source_meta.degree_fwd)) - 1;
+    const new_dest_degree: u22 = @as(u22, @intCast(destination_meta.degree_rev)) - 1;
+
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishStagedBoth(source_node, source_meta, merged_flags);
+        _ = common.publishStagedBoth(source_node, source_meta, merged_flags, new_source_degree, new_dest_degree);
     } else {
         // publish reverse first, then forward (RFC §5.2)
-        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags);
-        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags);
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, new_dest_degree);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, new_source_degree);
     }
-
-    common.decrementDegree(&source_node.degree_fwd);
-    common.decrementDegree(&destination_node.degree_rev);
-    common.recomputeDegreeIfOverflow(graph, &source_node.degree_fwd, source.index, .fwd);
-    common.recomputeDegreeIfOverflow(graph, &destination_node.degree_rev, destination.index, .rev);
 
     try rcu.retireBlockFwd(graph, forward_build.old_block);
     try rcu.retireBlockRev(graph, reverse_build.old_block);

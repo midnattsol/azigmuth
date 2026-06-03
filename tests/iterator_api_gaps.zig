@@ -124,7 +124,7 @@ test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency re
     helpers.publishedRevSide(node).block_count = 3;
     helpers.publishedRevSide(node).group_count = 3;
     helpers.publishedRevSide(node).first_group = group0;
-    node.degree_rev = 130;
+    helpers.setPublishedRevDegree(node, @as(u22, @intCast(130)));
 
     var it = try graph.inNeighbors(hub);
     defer it.deinit();

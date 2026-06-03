@@ -29,10 +29,10 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     block.sources[0] = source_index;
     block.mask = constants.denseMask(1);
 
-    var node_buffer = try graph.nodeAt(.{ .index = destination_index });
+    const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     helpers.publishedRevSide(node_buffer).first_block = block_index;
     helpers.publishedRevSide(node_buffer).block_count = 1;
-    node_buffer.degree_rev = 1;
+    helpers.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
 }
 
 fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -65,7 +65,7 @@ test "repair debt: needs_repair flag is cleared after repairNode" {
     }
     second_block_edges.mask = constants.denseMask(36);
 
-    var node_buffer = try graph.nodeAt(source);
+    const node_buffer = try graph.nodeAt(source);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = block0;
     helpers.publishedFwdSide(node_buffer).block_count = 2;
@@ -108,7 +108,7 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
     }
     second_block_edges.mask = constants.denseMask(32);
 
-    var node_buffer = try graph.nodeAt(source);
+    const node_buffer = try graph.nodeAt(source);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = block0;
     helpers.publishedFwdSide(node_buffer).block_count = 2;
@@ -197,12 +197,12 @@ test "repair debt: grouped non-tail runs below 4 blocks trigger repair debt" {
     page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
     page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).block_count = 3;
     helpers.publishedFwdSide(node_buffer).group_count = 3;
     helpers.publishedFwdSide(node_buffer).first_group = g0;
-    node_buffer.degree_fwd = 129;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
 
     var staging_adj = node_buffer.publishedAdj();
     test_internals.repair.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
@@ -238,12 +238,12 @@ test "repair debt: validate requires run fragmentation debt to be marked" {
     try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
     try publishReverseSourcesForForwardRange(&graph, node.index, 129, 1);
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).block_count = 3;
     helpers.publishedFwdSide(node_buffer).group_count = 3;
     helpers.publishedFwdSide(node_buffer).first_group = g0;
-    node_buffer.degree_fwd = 129;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
     graph.graph.edge_count.store(129, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -280,7 +280,7 @@ test "repair debt: contiguous MAX_GROUPS_PER_NODE groups trigger canonical repai
     page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = g3 };
     page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1, .next = constants.END_OF_CHAIN };
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).block_count = 4;
     helpers.publishedFwdSide(node_buffer).group_count = 4;
@@ -324,7 +324,7 @@ test "repair debt: repairNode canonicalizes grouped contiguous layout even when 
     helpers.publishedFwdSide(node_buffer).block_count = 3;
     helpers.publishedFwdSide(node_buffer).group_count = 3;
     helpers.publishedFwdSide(node_buffer).first_group = g0;
-    node_buffer.degree_fwd = 129;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
     helpers.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     graph.graph.edge_count.store(129, .release);
 
@@ -435,7 +435,7 @@ test "repair debt: repairNode canonicalizes single-block grouped contiguous adja
         helpers.clearPublishedSides(d1);
         helpers.publishedRevSide(d1).first_block = rb;
         helpers.publishedRevSide(d1).block_count = 1;
-        d1.degree_rev = 1;
+        helpers.setPublishedRevDegree(d1, @as(u22, @intCast(1)));
     }
 
     const node = try graph.nodeAt(.{ .index = 0 });
@@ -444,7 +444,7 @@ test "repair debt: repairNode canonicalizes single-block grouped contiguous adja
     helpers.publishedFwdSide(node).block_count = 1;
     helpers.publishedFwdSide(node).group_count = 1;
     helpers.publishedFwdSide(node).first_group = g0;
-    node.degree_fwd = 1;
+    helpers.setPublishedFwdDegree(node, @as(u22, @intCast(1)));
     helpers.setPublishedFlags(node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     graph.graph.edge_count.store(1, .release);
 
@@ -537,13 +537,13 @@ test "repair debt: valid two-run grouped forward adjacency does not set spurious
     page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 4, .next = g1 };
     page_ops.groupAt(&graph.graph, g1).* = .{ .start = b5, .count = 1, .next = constants.END_OF_CHAIN };
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = b0;
     helpers.publishedFwdSide(node_buffer).block_count = 5;
     helpers.publishedFwdSide(node_buffer).group_count = 2;
     helpers.publishedFwdSide(node_buffer).first_group = g0;
-    node_buffer.degree_fwd = 257;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(257)));
 
     var staging_adj = node_buffer.publishedAdj();
     test_internals.repair.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);

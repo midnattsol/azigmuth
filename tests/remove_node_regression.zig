@@ -156,3 +156,28 @@ test "regression: removeNode returns CorruptGraph when incoming reverse backlink
 
     try testing.expectError(error.CorruptGraph, graph.removeNode(a));
 }
+
+test "regression: removeNode returns CorruptGraph when outgoing forward destination is duplicated" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(a, b, 0, 0); // a -> b
+
+    // Corrupt forward(a): duplicate destination b without touching reverse(b).
+    const a_adj = page_ops.nodeAt(&graph.graph, a).publishedAdj();
+    if (a_adj.block_count_fwd > 0 and a_adj.group_count_fwd == 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, a_adj.first_block_fwd, .fwd);
+        const live = @popCount(block.mask);
+        if (live < 64) {
+            block.edges[live] = block.edges[live - 1]; // duplicate b
+            block.mask = constants.denseMask(@intCast(live + 1));
+        }
+    }
+
+    // RFC §A.25: removeNode MUST validate the local forward/reverse bijection
+    // without a full-graph scan.  A duplicated outgoing destination breaks that
+    // bijection and must be rejected.
+    try testing.expectError(error.CorruptGraph, graph.removeNode(a));
+}

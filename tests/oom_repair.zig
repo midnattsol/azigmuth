@@ -31,10 +31,10 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     block.sources[0] = source_index;
     block.mask = constants.denseMask(1);
 
-    var node_buffer = try graph.nodeAt(.{ .index = destination_index });
+    const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     helpers.publishedRevSide(node_buffer).first_block = block_index;
     helpers.publishedRevSide(node_buffer).block_count = 1;
-    node_buffer.degree_rev = 1;
+    helpers.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
 }
 
 fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -51,11 +51,11 @@ fn publishRepairCandidate(graph: *graph_mod.Graph, node: graph_mod.NodeId) !stru
     try publishReverseSourcesForForwardRange(graph, node.index, 1, 20);
     try publishReverseSourcesForForwardRange(graph, node.index, 21, 20);
 
-    var node_buffer = try graph.nodeAt(node);
+    const node_buffer = try graph.nodeAt(node);
     helpers.clearPublishedSides(node_buffer);
     helpers.publishedFwdSide(node_buffer).first_block = first_block;
     helpers.publishedFwdSide(node_buffer).block_count = 2;
-    node_buffer.degree_fwd = 40;
+    helpers.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(40)));
     graph.graph.edge_count.store(40, .release);
 
     return .{ .first_block = first_block, .second_block = second_block };

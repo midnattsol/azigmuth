@@ -478,50 +478,53 @@ pub const GraphBuilder = struct {
         self.edge_keys = std.AutoHashMap(u64, void).init(allocator);
     }
 
-    fn cacheDegreesFromAdjacencies(self: *GraphBuilder) void {
+    fn publishExactDegrees(self: *GraphBuilder) void {
         for (0..self.graph.nodeCount()) |node_index| {
             const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
             const adj = node_buffer.publishedAdj();
 
-            var fwd: usize = 0;
+            var fwd: u22 = 0;
             if (adj.block_count_fwd > 0) {
                 if (adj.group_count_fwd == 0) {
                     const end = adj.first_block_fwd + adj.block_count_fwd;
                     for (adj.first_block_fwd..end) |block_index| {
-                        fwd += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask);
+                        fwd += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask)));
                     }
                 } else {
                     var group_idx = adj.first_group_fwd;
                     while (group_idx != constants.END_OF_CHAIN) {
                         const group = page_ops.groupAtConst(&self.graph.graph, group_idx);
                         for (group.start..group.start + group.count) |block_index| {
-                            fwd += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask);
+                            fwd += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask)));
                         }
                         group_idx = group.next;
                     }
                 }
             }
-            node_buffer.degree_fwd = if (fwd < constants.DEGREE_OVERFLOW) @intCast(fwd) else constants.DEGREE_OVERFLOW;
 
-            var rev: usize = 0;
+            var rev: u22 = 0;
             if (adj.block_count_rev > 0) {
                 if (adj.group_count_rev == 0) {
                     const end = adj.first_block_rev + adj.block_count_rev;
                     for (adj.first_block_rev..end) |block_index| {
-                        rev += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask);
+                        rev += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask)));
                     }
                 } else {
                     var group_idx = adj.first_group_rev;
                     while (group_idx != constants.END_OF_CHAIN) {
                         const group = page_ops.groupAtConst(&self.graph.graph, group_idx);
                         for (group.start..group.start + group.count) |block_index| {
-                            rev += @popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask);
+                            rev += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask)));
                         }
                         group_idx = group.next;
                     }
                 }
             }
-            node_buffer.degree_rev = if (rev < constants.DEGREE_OVERFLOW) @intCast(rev) else constants.DEGREE_OVERFLOW;
+
+            var meta = node_buffer.loadPublishedMeta();
+            meta.degree_fwd = fwd;
+            meta.degree_rev = rev;
+            node_buffer.storePublishedMeta(meta);
         }
     }
 
@@ -535,7 +538,7 @@ pub const GraphBuilder = struct {
         try self.publishForwardAdjacencies();
         try self.publishReverseAdjacencies();
         self.graph.graph.edge_count.store(@intCast(self.edges.items.len), .release);
-        self.cacheDegreesFromAdjacencies();
+        self.publishExactDegrees();
 
         const result = Graph{ .graph = self.graph.graph };
         self.clearBuildStorage();

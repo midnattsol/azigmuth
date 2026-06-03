@@ -1114,7 +1114,11 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         try validateReverseConsistencyFast(graph, node_id, adjacency);
 
         if (adjacency.flags.removed) {
-            if (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or node_buffer.degree_fwd != 0) {
+            const meta = node_buffer.loadPublishedMeta();
+            if (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or meta.degree_fwd != 0) {
+                return error.CorruptGraph;
+            }
+            if (meta.degree_rev != 0) {
                 return error.CorruptGraph;
             }
             if (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev) {
@@ -1125,10 +1129,11 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         const fwd_visible = sumVisibleAdjacency(graph, adjacency, .fwd);
         const rev_visible = sumVisibleAdjacency(graph, adjacency, .rev);
         if (!adjacency.flags.removed) {
-            if (fwd_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_fwd != fwd_visible) {
+            const meta = node_buffer.loadPublishedMeta();
+            if (@as(usize, meta.degree_fwd) != fwd_visible) {
                 return error.CorruptGraph;
             }
-            if (rev_visible < constants.DEGREE_OVERFLOW and node_buffer.degree_rev != rev_visible) {
+            if (@as(usize, meta.degree_rev) != rev_visible) {
                 return error.CorruptGraph;
             }
             // RFC §6.3, §A.26: a live predecessor with a forward reference
@@ -1289,30 +1294,34 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             }
         }
 
-        // RFC §2.5: degree cache consistency. Removed nodes are exempt:
-        // their reverse side may retain residual tomstoned structure that
+        // RFC §2.5: published exact degree consistency. Removed nodes are exempt:
+        // their reverse side may retain residual tombstoned structure that
         // does not contribute to the public logical degree.
         const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
+        const meta = node_buffer.loadPublishedMeta();
         if (!adjacency.flags.removed) {
-            const cached_fwd: usize = node_buffer.degree_fwd;
-            const cached_rev: usize = node_buffer.degree_rev;
             const live_fwd: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .fwd));
-            if (live_fwd < constants.DEGREE_OVERFLOW and cached_fwd != live_fwd) {
-                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_fwd), .actual = @intCast(cached_fwd) } });
+            const pub_fwd: u22 = meta.degree_fwd;
+            if (@as(usize, pub_fwd) != live_fwd) {
+                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_fwd), .actual = pub_fwd } });
             }
             const live_rev: usize = @intCast(sumVisibleAdjacency(graph, adjacency, .rev));
-            if (live_rev < constants.DEGREE_OVERFLOW and cached_rev != live_rev) {
-                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_rev), .actual = @intCast(cached_rev) } });
+            const pub_rev: u22 = meta.degree_rev;
+            if (@as(usize, pub_rev) != live_rev) {
+                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = @intCast(live_rev), .actual = pub_rev } });
             }
             // RFC §6.3, §A.26: live predecessor with forward tombstone MUST
             // have needs_repair_fwd set.
             if (!adjacency.flags.needs_repair_fwd and forwardHasTombstone(graph, adjacency)) {
-                try violations.append(allocator, .{ .degree_mismatch = .{ .node = node_id, .expected = 0, .actual = 1 } });
+                try violations.append(allocator, .{ .forward_tombstone_missing_repair_flag = .{ .node = node_id } });
             }
         }
 
-        if (adjacency.flags.removed and (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or node_buffer.degree_fwd != 0)) {
+        if (adjacency.flags.removed and (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or meta.degree_fwd != 0)) {
             try violations.append(allocator, .{ .removed_node_has_outgoing = .{ .node = node_id } });
+        }
+        if (adjacency.flags.removed and meta.degree_rev != 0) {
+            try violations.append(allocator, .{ .removed_node_has_reverse_residual = .{ .node = node_id, .degree_rev = meta.degree_rev } });
         }
         if (adjacency.flags.removed and (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev)) {
             try violations.append(allocator, .{ .removed_node_marked_for_repair = .{ .node = node_id } });
