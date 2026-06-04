@@ -775,6 +775,20 @@ Pages follow the header in order: NodeBuffer pages, EdgeBlockFwd pages, EdgeBloc
 
 ---
 
+## Design Limitations
+
+| Limitation | Value | Why |
+|---|---|---|
+| Max degree per side per node | 4,194,239 (`u22`; `block_count: u16 × 64`) | `PublishedMeta.degree_fwd` / `degree_rev` are `u22`; `block_count_*` fields are `u16`. See `constants.MAX_DEGREE_PER_SIDE`. |
+| Max block groups per node | 4 (`MAX_GROUPS_PER_NODE`) | Prevents group fragmentation runaway. Nodes with more than 4 groups require repair. |
+| Supernodes (> 4.19M edges in one direction) | Not supported in Phase 1/2 | Would require a wider block-count field or a structural redesign. Accepted as an architecture trade-off for locality and compactness. |
+
+These limits are structural, not tunable. Workloads that exceed them are out of scope
+for the current storage format and would require a different configuration profile or
+an external sharding layer.
+
+---
+
 # Part II — Implementation Phases
 
 ## Phase 1: Core Mutable Graph (Minimum Shippable)
@@ -814,25 +828,52 @@ Pages follow the header in order: NodeBuffer pages, EdgeBlockFwd pages, EdgeBloc
 
 ## Phase 2: Node Deletion
 
-**Goal:** Remove nodes with tombstone semantics.
+**Goal:** Remove nodes with tombstone semantics.  Cleanup is driven by
+the existing repair/debt infrastructure — no separate removal pipeline.
 
 **Deliverables:**
-- `removeNode` marks node as `removed`, clears outgoing adjacency
-- `neighbors` / `inNeighbors` skip edges to removed nodes
-- Forward tombstone debt is flagged immediately on live predecessors: after
-  `removeNode(A)`, any live node B that held an edge B → A has
-  `needs_repair_fwd` set so that `repairBudgeted` discovers the
-  compaction work without a full-graph scan.
-- Repair compaction: full-scan removal of incoming edges to tombstoned nodes (triggered by `repairNode`)
+- `removeNode` is the **single canonical deletion API**.
+- On entry, `removeNode` claims both sides of the target node, validates the
+  local forward/reverse bijection, and collects all predecessor/destination
+  indices from the target's reverse and forward adjacency descriptors.
+- **Synchronous guarantees** (must hold when `removeNode` returns):
+  - The target node is marked `removed`.
+  - Its forward-adjacency descriptor is cleared (zero blocks, zero groups).
+  - Every live predecessor that held an edge to the target has its
+    `degree_fwd` decremented and `needs_repair_fwd` set via CAS on
+    `published_meta` — **without** requiring `fwd_claim` on the predecessor.
+  - Every live destination that was reachable from the target has the
+    target's source entry removed from its reverse adjacency.
+  - `edge_count` is decremented by the count of visible edges that
+    reference live endpoints.
+- **Debt intentionally left behind:**
+  - Tombstoned forward entries on predecessors (they still contain the
+    removed destination; the degree and flag already reflect this).
+  - These are discovered by `repairBudgeted` via the `needs_repair_fwd`
+    flag set during the publish loop — without a full-graph scan.
+  - The caller is **not required** to call `repairBudgeted` after
+    `removeNode`; the graph remains logically consistent with or without
+    compaction.
 
 **Acceptance criteria:**
 - After `removeNode(A)`:
-  - A is marked removed.
+  - A is marked removed; `hasNode(A)` returns `false`.
   - All outgoing edges A → X are removed from `forward(A)` and `reverse(X)`.
-  - `neighbors(B)` no longer includes A if A → B existed.
-  - Incoming edges Y → A may remain as tombstoned references until compaction.
-  - Those tombstoned references are not part of the public logical graph: public traversal, public degree queries, and `edge_count` exclude them immediately after `removeNode(A)`.
-- After compaction repair, all traces of removed nodes are eliminated.
+  - `outDegree(A)` and `inDegree(A)` return `error.InvalidNode`.
+  - `neighbors(B)` excludes A if it was tombstoned in B's forward adjacency.
+  - `edge_count` reflects the removal immediately.
+- Predecessor-side tombstone cleanup can be driven progressively by
+  `repairBudgeted` without blocking readers or writers on disjoint nodes.
+- A node with high in-degree (celebrity) does not cause
+  `removeNode` to fail with `ConcurrentMutation` on an unrelated predecessor
+  mutation — the predecessor CAS-loop is contention-tolerant.
+
+**Concurrency note:**
+`removeNode` publishes predecessor degree updates via CAS on `published_meta`
+without claiming the predecessor's `fwd_claim`.  This allows concurrent
+writes on predecessors to proceed normally.  If a predecessor's
+`published_meta` changes between load and CAS, the CAS is retried — there is
+no `ConcurrentMutation` surface for the forward-degree path.
 
 ---
 

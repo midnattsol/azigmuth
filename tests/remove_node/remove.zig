@@ -173,3 +173,51 @@ test "removeNode: repairNode on removed node returns InvalidNode" {
     try graph.validate();
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 }
+
+test "removeNode: celebrity node (high in-degree) does not corrupt forward/reverse consistency" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const celebrity = try graph.addNode();
+    var predecesors: [200]graph_mod.NodeId = undefined;
+    for (0..200) |i| {
+        predecesors[i] = try graph.addNode();
+        try graph.addEdge(predecesors[i], celebrity, 0, 0);
+    }
+
+    const edge_count_before = graph.edgeCount();
+    try testing.expectEqual(@as(u64, 200), edge_count_before);
+
+    try graph.removeNode(celebrity);
+
+    // Celebrity is removed.
+    try testing.expect(!graph.hasNode(celebrity));
+    try testing.expectError(error.InvalidNode, graph.outDegree(celebrity));
+    try testing.expectError(error.InvalidNode, graph.inDegree(celebrity));
+
+    // Every predecessor's forward degree dropped by 1 and has repair debt.
+    for (0..200) |i| {
+        const deg = try graph.outDegree(predecesors[i]);
+        try testing.expectEqual(@as(usize, 0), deg);
+        const adj = try graph.publishedNodeAdj(predecesors[i]);
+        try testing.expect(adj.flags.needs_repair_fwd);
+    }
+
+    // Graph is consistent after removal.
+    try graph.validate();
+
+    // Budgeted repair can compact the debt progressively.
+    const repaired = try graph.repairBudgeted(50);
+    try testing.expect(repaired > 0);
+
+    // All debt can be drained.
+    while (true) {
+        const n = try graph.repairBudgeted(gl: {
+            break :gl std.math.maxInt(usize);
+        });
+        if (n == 0) break;
+    }
+
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}

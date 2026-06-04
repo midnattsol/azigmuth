@@ -102,6 +102,14 @@ fn collectReverseSources(graph: *const graph_core.GraphCore, node: types.NodeId,
     }
 }
 
+/// Collects a node that must be touched during removeNode.
+///
+/// Forward-degree decrements on predecessors are published via CAS on
+/// `published_meta` (see `publishMetaFwdUpdated` in `claims.zig`), so claiming
+/// `fwd_claim` on the predecessor is unnecessary for that path.  Only
+/// `rev_claim` is needed for reverse-side cleanup (block replacement).
+/// This matches the RFC Phase 2 contract: predecessor updates are CAS-only
+/// and do not require `fwd_claim`.
 fn markRelatedNode(
     graph: *graph_core.GraphCore,
     related_nodes: *std.ArrayList(RelatedNode),
@@ -112,14 +120,15 @@ fn markRelatedNode(
     for (related_nodes.items) |*entry| {
         if (entry.node_index != node_index) continue;
         if (mark_reverse_cleanup) try entry.claims.ensureRev();
-        if (mark_visible_fwd_decrement) try entry.claims.ensureFwd();
+        // fwd_claim is NOT needed for visible_fwd_decrement — CAS on
+        // published_meta provides the atomicity directly.
         entry.needs_reverse_cleanup = entry.needs_reverse_cleanup or mark_reverse_cleanup;
         entry.needs_visible_fwd_decrement = entry.needs_visible_fwd_decrement or mark_visible_fwd_decrement;
         return;
     }
 
     const node_buffer = page_ops.nodeAt(graph, .{ .index = node_index });
-    const claims = try common.tryClaimNodeSides(node_buffer, mark_visible_fwd_decrement, mark_reverse_cleanup);
+    const claims = try common.tryClaimNodeSides(node_buffer, false, mark_reverse_cleanup);
     try related_nodes.append(graph.allocator, .{
         .node_index = node_index,
         .node_buffer = node_buffer,
@@ -253,7 +262,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     // live predecessor still has a forward edge to the removed node.
     // Compare the validated count against the exact published degree_rev.
     const source_meta = source_node.loadPublishedMeta();
-    const predecessor_reader = rcu.readerEnter(graph);
+    const predecessor_reader = try rcu.readerEnter(graph);
     defer rcu.readerExit(graph, predecessor_reader);
     {
         var seen_incoming: std.ArrayList(u32) = .empty;
@@ -419,12 +428,15 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     // removed node. Readers may therefore observe a transient mixed-version
     // view across endpoints while removeNode is in flight; the operation only
     // guarantees logical consistency after it returns.
+    //
+    // Forward-degree decrements use the meta-only CAS helper
+    // (`publishMetaFwdUpdated`) which does NOT require `fwd_claim` on the
+    // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
+    // (RFC Phase 2 §concurrency note).
     for (destination_updates.items) |update| {
         if (update.decrement_visible_fwd) {
             const meta = update.node_buffer.loadPublishedMeta();
-            update.node_buffer.copyPublishedToStagingFwd(meta);
-            const new_fwd: u22 = @as(u22, @intCast(meta.degree_fwd)) - 1;
-            _ = common.publishStagedFwd(update.node_buffer, meta, meta.needs_repair_fwd, new_fwd);
+            _ = common.publishMetaFwdUpdated(update.node_buffer, meta, meta.needs_repair_fwd);
         }
         if (update.needs_reverse_retire) {
             common.publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);

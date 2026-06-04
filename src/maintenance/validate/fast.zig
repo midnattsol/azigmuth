@@ -16,7 +16,7 @@ const consistency = @import("consistency.zig");
 const violations = @import("violations.zig");
 
 pub fn validate(graph: *const graph_core.GraphCore) !void {
-    const reader_token = common.readerEnter(graph);
+    const reader_token = try common.readerEnter(graph);
     defer common.readerExit(graph, reader_token);
 
     const node_count = graph.publishedNodeCount();

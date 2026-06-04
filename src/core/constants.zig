@@ -52,4 +52,8 @@ comptime {
     std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 520);
     std.debug.assert(@sizeOf(types.EdgeBlockRev) == 264);
     std.debug.assert(@sizeOf(types.EdgeBlockGroup) == 12);
+    std.debug.assert(@sizeOf(types.NodeAdj) == 28);
+    std.debug.assert(@sizeOf(types.SideAdj) == 12);
+    std.debug.assert(@sizeOf(types.PublishedMeta) == 8);
+    std.debug.assert(@bitSizeOf(types.PublishedMeta) == 64);
 }

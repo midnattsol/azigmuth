@@ -51,7 +51,7 @@ test "rcu safety: reclamation advances after overflow reader exits" {
 
     _ = try graph.removeEdge(src, dst);
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     graph.bumpEpoch();
@@ -77,7 +77,7 @@ test "rcu safety: last_reclaim_epoch optimization does not block reclamation" {
     graph.bumpEpoch();
     graph.reclaimRetired();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     _ = try graph.removeEdge(src, targets[2]);

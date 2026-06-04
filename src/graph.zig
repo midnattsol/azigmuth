@@ -74,6 +74,22 @@ pub const Graph = struct {
         return false;
     }
 
+    fn checkOpen(core: *const graph_core.GraphCore) GraphError!void {
+        if (core.closing.load(.acquire)) return error.GraphBusy;
+    }
+
+    /// Begin a mutation call.  Ensures the graph is open and registers
+    /// the call in `active_calls`.  Double-checks `closing` after
+    /// incrementing to close the check-then-set race window.
+    fn beginMutation(core: *graph_core.GraphCore) GraphError!void {
+        if (core.closing.load(.acquire)) return error.GraphBusy;
+        _ = core.active_calls.fetchAdd(1, .acq_rel);
+        if (core.closing.load(.acquire)) {
+            _ = core.active_calls.fetchSub(1, .acq_rel);
+            return error.GraphBusy;
+        }
+    }
+
     pub fn init(allocator: std.mem.Allocator) !Graph {
         const first_page = try allocator.alloc(types.NodeBuffer, constants.NODES_PER_PAGE);
         errdefer allocator.free(first_page);
@@ -107,14 +123,19 @@ pub const Graph = struct {
     }
 
     pub fn deinitChecked(self: *Graph) DeinitError!void {
-        if (hasActiveReadersOrWriters(&self.graph)) return error.GraphBusy;
+        self.graph.closing.store(true, .release);
+        if (hasActiveReadersOrWriters(&self.graph)) {
+            self.graph.closing.store(false, .release);
+            return error.GraphBusy;
+        }
         self.deinit();
+        // closing stays true — graph is now dead
     }
 
     // ── Node API ──────────────────────────────────────────────────────
 
     pub fn addNode(self: *Graph) !types.NodeId {
-        _ = self.graph.active_calls.fetchAdd(1, .acq_rel);
+        try beginMutation(&self.graph);
         defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
 
         while (true) {
@@ -129,14 +150,17 @@ pub const Graph = struct {
     }
 
     pub fn nodeCount(self: *const Graph) usize {
+        if (self.graph.closing.load(.acquire)) return 0;
         return self.graph.publishedNodeCount();
     }
 
     pub fn edgeCount(self: *const Graph) u64 {
+        if (self.graph.closing.load(.acquire)) return 0;
         return self.graph.edge_count.load(.acquire);
     }
 
     pub fn hasNode(self: *const Graph, id: types.NodeId) bool {
+        if (self.graph.closing.load(.acquire)) return false;
         return node_validity.isNodeLive(&self.graph, id);
     }
 
@@ -184,8 +208,8 @@ pub const Graph = struct {
 
     pub const ReaderToken = rcu.ReaderToken;
 
-    pub fn readerEnter(self: *Graph) ReaderToken {
-        return rcu.readerEnter(&self.graph);
+    pub fn readerEnter(self: *Graph) GraphError!ReaderToken {
+        return try rcu.readerEnter(&self.graph);
     }
 
     pub fn readerExit(self: *Graph, token: ReaderToken) void {
@@ -229,23 +253,25 @@ pub const Graph = struct {
     }
 
     pub fn outDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
+        try checkOpen(&self.graph);
         return query.outDegree(&self.graph, node);
     }
 
     pub fn inDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
+        try checkOpen(&self.graph);
         return query.inDegree(&self.graph, node);
     }
 
     // ── Repair API ────────────────────────────────────────────────────
 
     pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
-        _ = self.graph.active_calls.fetchAdd(1, .acq_rel);
+        try beginMutation(&self.graph);
         defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
         return repair.repairNode(&self.graph, node);
     }
 
     pub fn repairBudgeted(self: *Graph, max_nodes: usize) GraphError!usize {
-        _ = self.graph.active_calls.fetchAdd(1, .acq_rel);
+        try beginMutation(&self.graph);
         defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
         return repair.repairBudgeted(&self.graph, max_nodes);
     }
@@ -253,19 +279,19 @@ pub const Graph = struct {
     // ── Mutation ──────────────────────────────────────────────────────
 
     pub fn addEdge(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
-        _ = self.graph.active_calls.fetchAdd(1, .acq_rel);
+        try beginMutation(&self.graph);
         defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
         return mutation.addEdge(&self.graph, source, destination, relation, flags);
     }
 
     pub fn removeEdge(self: *Graph, source: types.NodeId, destination: types.NodeId) GraphError!bool {
-        _ = self.graph.active_calls.fetchAdd(1, .acq_rel);
+        try beginMutation(&self.graph);
         defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
         return mutation.removeEdge(&self.graph, source, destination);
     }
 
     pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!void {
-        _ = self.graph.active_calls.fetchAdd(1, .acq_rel);
+        try beginMutation(&self.graph);
         defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
         return mutation.removeNode(&self.graph, node);
     }

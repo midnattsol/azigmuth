@@ -13,7 +13,8 @@ pub const ReaderToken = struct {
     epoch: u64,
 };
 
-pub fn readerEnter(graph: *graph_core.GraphCore) ReaderToken {
+pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
+    if (graph.closing.load(.acquire)) return error.GraphBusy;
     while (true) {
         const entry_epoch = graph.epoch.load(.acquire);
         const encoded_epoch = entry_epoch +% 1;
@@ -24,10 +25,17 @@ pub fn readerEnter(graph: *graph_core.GraphCore) ReaderToken {
                     slot.store(0, .release);
                     break;
                 }
+                // Double-check closing after acquiring the slot.
+                if (graph.closing.load(.acquire)) {
+                    slot.store(0, .release);
+                    return error.GraphBusy;
+                }
                 _ = graph.active_readers.fetchAdd(1, .monotonic);
                 return .{ .slot = @intCast(slot_index), .epoch = entry_epoch };
             }
         } else {
+            // Overflow slot — still check closing before committing.
+            if (graph.closing.load(.acquire)) return error.GraphBusy;
             _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
             _ = graph.active_readers.fetchAdd(1, .monotonic);
             return .{ .slot = NO_READER_SLOT, .epoch = entry_epoch };

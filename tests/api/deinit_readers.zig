@@ -8,7 +8,7 @@ test "lifecycle: readerEnter increments active_readers, readerExit decrements" {
 
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     try testing.expect(graph.graph.active_readers.load(.acquire) > 0);
 
     graph.readerExit(token);
@@ -37,9 +37,9 @@ test "lifecycle: multiple readerEnter calls are balanced by matching readerExit"
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const t1 = graph.readerEnter();
-    const t2 = graph.readerEnter();
-    const t3 = graph.readerEnter();
+    const t1 = graph.readerEnter() catch unreachable;
+    const t2 = graph.readerEnter() catch unreachable;
+    const t3 = graph.readerEnter() catch unreachable;
 
     try testing.expect(graph.graph.active_readers.load(.acquire) >= 3);
 
@@ -54,7 +54,7 @@ test "lifecycle: readerExit clears the reader slot leaving active count at zero"
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     try testing.expect(graph.graph.active_readers.load(.acquire) > 0);
     graph.readerExit(token);
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
@@ -79,7 +79,7 @@ test "lifecycle: deinitChecked fails with active readerEnter token" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     try testing.expectError(error.GraphBusy, graph.deinitChecked());

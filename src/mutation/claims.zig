@@ -118,3 +118,14 @@ pub fn publishStagedBoth(node: *types.NodeBuffer, expected_meta: types.Published
         expected = actual;
     }
 }
+
+/// CAS-only forward degree update — decrement by 1.
+pub fn publishMetaFwdUpdated(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        const new_degree: u22 = @as(u22, @intCast(@as(u64, expected.degree_fwd) - 1));
+        const desired = types.NodeBuffer.desiredMetaForUpdateFwd(expected, needs_repair_fwd, new_degree);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
+}

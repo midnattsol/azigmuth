@@ -1,3 +1,18 @@
+//! Public `Graph` handle — heap-allocated opaque type that forms the single
+//! canonical entry point for all graph operations.  Callers never see the
+//! internal layout and must go through the methods defined here.
+//!
+//! Lifetime:
+//!   - `init(allocator)` allocates and returns a `*Graph`.  The caller owns the
+//!     pointer and must call `deinit()` or `deinitChecked()`.
+//!   - `deinit()` consumes the handle unconditionally.
+//!   - `deinitChecked()` consumes the handle only on success; on
+//!     `error.GraphBusy` the handle remains valid and can be retried later
+//!     (all active iterators or pending calls must release first).
+//!   - All query methods (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`,
+//!     `bfs`, `dfs`, `hasCycle`, `validate`, `debugValidate`) are lock-free
+//!     readers and never block writers.
+
 const std = @import("std");
 const internal = @import("../graph.zig");
 const public_iterator = @import("public_iterator.zig");
@@ -5,9 +20,9 @@ const bfs_internal = @import("../algorithms/bfs.zig");
 const dfs_internal = @import("../algorithms/dfs.zig");
 const cycle_internal = @import("../algorithms/cycle.zig");
 
-// ── Convenience helpers ──────────────────────────────────────────────
-
 pub const Graph = opaque {
+    /// Allocates and returns a heap-allocated `*Graph`.  The caller owns the
+    /// returned pointer and must call `deinit()` or `deinitChecked()` when done.
     pub fn init(allocator: std.mem.Allocator) !*Graph {
         const g = try allocator.create(internal.Graph);
         errdefer allocator.destroy(g);
@@ -15,6 +30,10 @@ pub const Graph = opaque {
         return @ptrCast(g);
     }
 
+    /// Destroys the graph handle unconditionally.  All page-backed storage,
+    /// repair queues, and the handle itself are freed.  Must not be called while
+    /// writers, readers, or repairers are active — use `deinitChecked()` for a
+    /// safe teardown check.
     pub fn deinit(self: *Graph) void {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         const alloc = g.graph.allocator;
@@ -22,6 +41,10 @@ pub const Graph = opaque {
         alloc.destroy(g);
     }
 
+    /// Safe teardown: returns `error.GraphBusy` if any reader, writer, or
+    /// repairer is still active.  On success the handle is consumed just like
+    /// `deinit()`.  On `GraphBusy` the handle remains valid — the caller may
+    /// drain active operations and retry.
     pub fn deinitChecked(self: *Graph) internal.DeinitError!void {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         const alloc = g.graph.allocator;

@@ -76,8 +76,8 @@ pub fn bitmapIsSet(bitmap: []const u64, block_index: u32) bool {
     return (bitmap[word_index] & mask) != 0;
 }
 
-pub fn readerEnter(graph: *const graph_core.GraphCore) rcu.ReaderToken {
-    return rcu.readerEnter(@constCast(graph));
+pub fn readerEnter(graph: *const graph_core.GraphCore) types.GraphError!rcu.ReaderToken {
+    return try rcu.readerEnter(@constCast(graph));
 }
 
 pub fn readerExit(graph: *const graph_core.GraphCore, token: rcu.ReaderToken) void {

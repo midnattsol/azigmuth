@@ -2,14 +2,20 @@
 
 A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 
-Phase 1 focuses on a mutable directed graph with:
-
 - page-based node and edge-block pools
 - forward and reverse adjacency
 - lock-free reader iterators via per-node RCU snapshots
 - sorted fixed-size edge blocks with dense occupancy masks
 - local repair and validation
+- tombstone-based node deletion (Phase 2) with debt/repair cleanup
 - a `GraphBuilder` convenience wrapper for bulk construction
+
+## Design limits
+
+- Max degree per side per node: **4,194,239** (u22 block_count × 64 edges).
+- Max block groups per node: **4** (`MAX_GROUPS_PER_NODE`).
+- Supernodes (> 4.19M edges in one direction) are not supported in the
+  current storage format — accepted architecture trade-off.
 
 ## Basic usage
 

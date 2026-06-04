@@ -160,7 +160,7 @@ fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes
 }
 
 fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
-    const reader_token = rcu.readerEnter(graph);
+    const reader_token = rcu.readerEnter(graph) catch return null;
     defer rcu.readerExit(graph, reader_token);
 
     const node_count = graph.publishedNodeCount();

@@ -2,7 +2,7 @@
 //! NeighborIterator form the single public API surface; everything else in the
 //! source tree is implementation detail not covered by the stability contract.
 //!
-//! Usage:
+//! Usage with Graph:
 //!   const graphz = @import("graphz");
 //!   var g = try graphz.Graph.init(allocator);
 //!   defer g.deinit();
@@ -22,6 +22,15 @@
 //!
 //!   const order = try g.bfs(n, allocator);
 //!   defer allocator.free(order);
+//!
+//! Usage with GraphBuilder:
+//!   var builder = try graphz.GraphBuilder.init(allocator);
+//!   defer builder.deinit();  // required even after freeze()
+//!   const a = try builder.addNode();
+//!   const b = try builder.addNode();
+//!   try builder.addEdge(a, b, 0, .{});
+//!   var g2 = try builder.freeze();  // builder becomes inert
+//!   defer g2.deinit();              // graph lifetime independent of builder
 
 const graph = @import("graph.zig");
 const public_graph = @import("api/public_graph.zig");

@@ -6,7 +6,7 @@ test "rcu: readerEnter returns valid token with epoch" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     try testing.expect(token.slot != std.math.maxInt(u32));
@@ -16,7 +16,7 @@ test "rcu: readerExit clears slot" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     graph.readerExit(token);
 
     const active = graph.graph.active_readers.load(.acquire);
@@ -27,11 +27,11 @@ test "rcu: multiple readers active simultaneously" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token1 = graph.readerEnter();
+    const token1 = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token1);
-    const token2 = graph.readerEnter();
+    const token2 = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token2);
-    const token3 = graph.readerEnter();
+    const token3 = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token3);
 
     const active = graph.graph.active_readers.load(.acquire);
@@ -42,7 +42,7 @@ test "rcu: readerEnter records epoch" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     const slot_idx = token.slot;
@@ -114,7 +114,7 @@ test "rcu: active_readers counter increments on enter" {
     defer graph.deinit();
 
     const before = graph.graph.active_readers.load(.acquire);
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
     const during = graph.graph.active_readers.load(.acquire);
     try testing.expect(during == before + 1);
@@ -124,7 +124,7 @@ test "rcu: active_readers counter decrements on exit" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     graph.readerExit(token);
     const after = graph.graph.active_readers.load(.acquire);
     try testing.expectEqual(@as(u32, 0), after);
@@ -137,7 +137,7 @@ test "rcu: many sequential readers do not leak slots" {
     const iterations: usize = 100;
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        const token = graph.readerEnter();
+        const token = graph.readerEnter() catch unreachable;
         graph.readerExit(token);
     }
 
@@ -195,7 +195,7 @@ test "rcu: epoch near max u64 increments correctly" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     _ = graph.graph.epoch.store(std.math.maxInt(u64) - 1, .release);
@@ -212,7 +212,7 @@ test "rcu: retired blocks not reclaimed while reader holds old epoch" {
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
 
     // Remove the edge; this retires the forward/reverse blocks.
     try testing.expect(try graph.removeEdge(src, dst));
@@ -233,7 +233,7 @@ test "rcu: epoch increments do not affect already-entered readers" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     const reader_epoch = token.epoch;

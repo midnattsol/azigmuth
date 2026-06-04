@@ -14,6 +14,7 @@ pub const GraphError = error{
     ConcurrentMutation,
     UnsupportedOperation,
     RepairRequired,
+    GraphBusy,
 };
 
 /// Per-node boolean flags. Backed by u32.
@@ -197,6 +198,18 @@ pub const NodeBuffer = extern struct {
         desired.removed = flags.removed;
         desired.degree_fwd = fwd_degree;
         desired.degree_rev = rev_degree;
+        return desired;
+    }
+
+    /// CAS-friendly forward update: changes `degree_fwd` and `needs_repair_fwd`
+    /// WITHOUT touching staging buffers or flipping `fwd_index`/`rev_index`.
+    /// Safe to call without `fwd_claim` — the 64-bit CAS on `published_meta`
+    /// provides the atomicity.  Intended for paths where only the meta counters
+    /// need updating (e.g. predecessor forward-degree decrement in removeNode).
+    pub fn desiredMetaForUpdateFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u22) PublishedMeta {
+        var desired = meta.bumpedVersion();
+        desired.needs_repair_fwd = needs_repair_fwd;
+        desired.degree_fwd = new_degree_fwd;
         return desired;
     }
 

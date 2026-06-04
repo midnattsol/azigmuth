@@ -189,7 +189,7 @@ fn buildIteratorState(direction: Direction, node_adj: types.NodeAdj) struct {
 fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, direction: Direction) types.GraphError!NeighborIterator {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 
-    const reader_token = rcu.readerEnter(@constCast(graph));
+    const reader_token = try rcu.readerEnter(@constCast(graph));
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
     const node_buffer = page_ops.nodeAtConst(graph, node);

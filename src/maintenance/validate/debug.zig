@@ -14,7 +14,7 @@ const consistency = @import("consistency.zig");
 const v = @import("violations.zig");
 
 pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator) ![]types.Violation {
-    const reader_token = common.readerEnter(graph);
+    const reader_token = try common.readerEnter(graph);
     defer common.readerExit(graph, reader_token);
 
     var list: std.ArrayList(types.Violation) = .empty;

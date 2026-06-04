@@ -22,13 +22,16 @@ fn addChildrenLoop(ctx: *AddChildrenCtx) void {
     while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
 
     var added: usize = 0;
-    while (!ctx.stop.load(.acquire) and added < 256) {
+    while (!ctx.stop.load(.acquire) and added < 4096) {
+        while (!ctx.stop.load(.acquire) and !ctx.traversal_active.load(.acquire)) {
+            std.atomic.spinLoopHint();
+        }
+        if (ctx.stop.load(.acquire)) break;
+
         const child = ctx.graph.addNode() catch continue;
         ctx.graph.addEdge(ctx.parent, child, 0, 0) catch continue;
         _ = ctx.created.fetchAdd(1, .monotonic);
-        if (ctx.traversal_active.load(.acquire)) {
-            _ = ctx.created_during_traversal.fetchAdd(1, .monotonic);
-        }
+        _ = ctx.created_during_traversal.fetchAdd(1, .monotonic);
         added += 1;
         std.atomic.spinLoopHint();
     }
@@ -81,10 +84,6 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
     defer thread.join();
 
     start.store(true, .release);
-    var wait_for_mutation: usize = 0;
-    while (ctx.created.load(.acquire) == 0 and wait_for_mutation < 5_000_000) : (wait_for_mutation += 1) {
-        std.atomic.spinLoopHint();
-    }
     traversal_active.store(true, .release);
     const order = try bfs_mod.bfs(&graph.graph, setup.root, testing.allocator);
     traversal_active.store(false, .release);
@@ -109,10 +108,6 @@ test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
     defer thread.join();
 
     start.store(true, .release);
-    var wait_for_mutation: usize = 0;
-    while (ctx.created.load(.acquire) == 0 and wait_for_mutation < 5_000_000) : (wait_for_mutation += 1) {
-        std.atomic.spinLoopHint();
-    }
     traversal_active.store(true, .release);
     const order = try dfs_mod.dfs(&graph.graph, setup.root, testing.allocator);
     traversal_active.store(false, .release);
@@ -136,10 +131,6 @@ test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
     defer thread.join();
 
     start.store(true, .release);
-    var wait_for_mutation: usize = 0;
-    while (ctx.created.load(.acquire) == 0 and wait_for_mutation < 5_000_000) : (wait_for_mutation += 1) {
-        std.atomic.spinLoopHint();
-    }
     traversal_active.store(true, .release);
     const has_cycle = try cycle_mod.hasCycle(&graph.graph, testing.allocator);
     traversal_active.store(false, .release);

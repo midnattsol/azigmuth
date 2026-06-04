@@ -24,7 +24,7 @@ test "rcu: reclaimRetired is no-op when safe_epoch has not advanced" {
     try graph.retireBlockFwd(block3);
 
     // Hold a reader at the current epoch.
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
     // Bump epoch.  The reader's safe epoch is still the previous value
@@ -61,7 +61,7 @@ test "rcu: long-running reader does not cause retired list growth beyond retired
     defer graph.deinit();
 
     // Hold a reader so blocks are retired rather than freed immediately.
-    const token = graph.readerEnter();
+    const token = graph.readerEnter() catch unreachable;
 
     // Do many add-edge + remove-edge cycles; each cycle retires blocks.
     const src = try graph.addNode();

@@ -98,6 +98,12 @@ pub const GraphCore = struct {
     repair_scan_cursor_rev: u32 = 0,
     repair_scan_cursor_tombstone: u32 = 0,
 
+    /// Closes the graph to new calls.  Set by `deinitChecked` before checking
+    /// for active readers/writers and calling `deinit`.  Prevents the
+    /// check-then-free race by signalling new entrants to back off while
+    /// teardown is in progress.
+    closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
     pub inline fn publishedNodeCount(self: *const GraphCore) u32 {
         return self.node_count.load(.acquire);
     }
