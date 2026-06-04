@@ -116,8 +116,10 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
 
         try v.appendOwnershipAndShapeViolations(graph, allocator, &list, &owned_forward_blocks, &free_forward_blocks, &retired_forward_blocks, node_id, forward_blocks.items, .fwd);
         try v.appendOwnershipAndShapeViolations(graph, allocator, &list, &owned_reverse_blocks, &free_reverse_blocks, &retired_reverse_blocks, node_id, reverse_blocks.items, .rev);
-        try consistency.appendForwardConsistencyViolations(graph, allocator, &list, node_id, forward_blocks.items);
-        try consistency.appendReverseConsistencyViolations(graph, allocator, &list, node_id, reverse_blocks.items);
+        if (!adjacency.flags.removed) {
+            try consistency.appendForwardConsistencyViolations(graph, allocator, &list, node_id, forward_blocks.items);
+            try consistency.appendReverseConsistencyViolations(graph, allocator, &list, node_id, reverse_blocks.items);
+        }
 
         if (!adjacency.flags.removed) {
             for (forward_blocks.items) |block| {

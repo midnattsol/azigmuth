@@ -312,6 +312,27 @@ fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSid
     }
 }
 
+pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u32, comptime side: adjacency.AdjSide) !void {
+    if (required_block_count == 0) return;
+
+    const last_block_index = required_block_count - 1;
+    const last_page_index = pageOf(last_block_index, constants.EDGE_BLOCKS_PER_PAGE);
+
+    var page_index: u32 = 0;
+    while (page_index <= last_page_index) : (page_index += 1) {
+        switch (side) {
+            .fwd => {
+                _ = try ensurePage(graph, types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+                _ = try ensureMetaPage(graph, graph.edge_blocks_fwd_meta_pages[0..], page_index);
+            },
+            .rev => {
+                _ = try ensurePage(graph, types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+                _ = try ensureMetaPage(graph, graph.edge_blocks_rev_meta_pages[0..], page_index);
+            },
+        }
+    }
+}
+
 pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
     if (popStack(graph, .free, side)) |block_index| {
         edgeBlockAt(graph, block_index, side).* = std.mem.zeroes(switch (side) {

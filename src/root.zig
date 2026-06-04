@@ -33,9 +33,9 @@
 //!   defer g2.deinit();              // graph lifetime independent of builder
 
 const graph = @import("graph.zig");
+const public_iterator = @import("neighbor_iterator.zig");
 const public_graph = @import("api/public_graph.zig");
 const public_builder = @import("api/public_builder.zig");
-const public_iterator = @import("api/public_iterator.zig");
 
 // ── Core types ────────────────────────────────────────────────────────
 pub const NodeId = graph.NodeId;

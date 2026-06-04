@@ -104,6 +104,8 @@ pub fn appendForwardConsistencyViolations(
     source_node: u32,
     blocks: []const common.TraversedBlock,
 ) !void {
+    if (!node_validity.isNodeLiveIndex(graph, source_node)) return;
+
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_index, .fwd)) continue;
 
@@ -115,6 +117,7 @@ pub fn appendForwardConsistencyViolations(
             if (destination_node >= graph.publishedNodeCount()) continue;
 
             const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+            if (destination_adjacency.flags.removed) continue;
             if (!adjacencyContains(graph, destination_adjacency, source_node, .rev)) {
                 try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = source_node, .dst = destination_node } });
             }
@@ -129,6 +132,8 @@ pub fn appendReverseConsistencyViolations(
     destination_node: u32,
     blocks: []const common.TraversedBlock,
 ) !void {
+    if (!node_validity.isNodeLiveIndex(graph, destination_node)) return;
+
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_index, .rev)) continue;
 
@@ -140,6 +145,7 @@ pub fn appendReverseConsistencyViolations(
             if (source_node >= graph.publishedNodeCount()) continue;
 
             const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+            if (source_adjacency.flags.removed) continue;
             if (!adjacencyContains(graph, source_adjacency, destination_node, .fwd)) {
                 try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = source_node, .dst = destination_node } });
             }
@@ -217,6 +223,7 @@ pub fn appendLayoutDebtViolations(
 }
 
 pub fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source_node: u32, adjacency: types.NodeAdj) !void {
+    if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
 
     if (common.groupCount(adjacency, .fwd) == 0) {
@@ -245,12 +252,14 @@ pub fn validateForwardConsistencyInContiguousBlocks(graph: *const graph_core.Gra
             if (destination_node >= graph.publishedNodeCount()) return error.CorruptGraph;
 
             const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+            if (destination_adjacency.flags.removed) continue;
             if (!adjacencyContains(graph, destination_adjacency, source_node, .rev)) return error.CorruptGraph;
         }
     }
 }
 
 pub fn validateReverseConsistencyFast(graph: *const graph_core.GraphCore, destination_node: u32, adjacency: types.NodeAdj) !void {
+    if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .rev) == 0) return;
 
     if (common.groupCount(adjacency, .rev) == 0) {
@@ -279,6 +288,7 @@ pub fn validateReverseConsistencyInContiguousBlocks(graph: *const graph_core.Gra
             if (source_node >= graph.publishedNodeCount()) return error.CorruptGraph;
 
             const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+            if (source_adjacency.flags.removed) continue;
             if (!adjacencyContains(graph, source_adjacency, destination_node, .fwd)) return error.CorruptGraph;
         }
     }

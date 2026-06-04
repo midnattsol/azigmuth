@@ -20,8 +20,6 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     defer common.readerExit(graph, reader_token);
 
     const node_count = graph.publishedNodeCount();
-    var total_forward: u64 = 0;
-    var total_reverse: u64 = 0;
     var total_visible_forward: u64 = 0;
     var total_visible_reverse: u64 = 0;
     var owned_forward_blocks: [common.TRACKED_BLOCK_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_BLOCK_BITMAP_WORDS;
@@ -47,10 +45,8 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
         const adjacency = node_buffer.publishedAdj();
 
-        const fwd_live = try shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd);
-        const rev_live = try shape.validateAdjacencyBlocksFast(graph, adjacency, .rev);
-        total_forward += fwd_live;
-        total_reverse += rev_live;
+        _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd);
+        _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .rev);
         total_visible_forward += sums.sumVisibleAdjacency(graph, adjacency, .fwd);
         total_visible_reverse += sums.sumVisibleAdjacency(graph, adjacency, .rev);
         try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_forward_blocks[0..], free_forward_blocks[0..], retired_forward_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .fwd);
@@ -125,7 +121,6 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         }
     }
 
-    if (total_forward != total_reverse) return error.CorruptGraph;
     if (total_visible_forward != total_visible_reverse) return error.CorruptGraph;
     if (total_visible_forward != graph.edge_count.load(.acquire)) return error.CorruptGraph;
 }

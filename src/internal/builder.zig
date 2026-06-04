@@ -31,6 +31,45 @@ const BuilderEdge = struct {
     }
 };
 
+const FreezePlan = struct {
+    fwd_degrees: []u32,
+    rev_degrees: []u32,
+    fwd_block_counts: []u16,
+    rev_block_counts: []u16,
+    total_fwd_blocks: u32 = 0,
+    total_rev_blocks: u32 = 0,
+
+    fn init(allocator: std.mem.Allocator, node_count: usize) !FreezePlan {
+        const fwd_degrees = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(fwd_degrees);
+        const rev_degrees = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(rev_degrees);
+        const fwd_block_counts = try allocator.alloc(u16, node_count);
+        errdefer allocator.free(fwd_block_counts);
+        const rev_block_counts = try allocator.alloc(u16, node_count);
+        errdefer allocator.free(rev_block_counts);
+
+        @memset(fwd_degrees, 0);
+        @memset(rev_degrees, 0);
+        @memset(fwd_block_counts, 0);
+        @memset(rev_block_counts, 0);
+
+        return .{
+            .fwd_degrees = fwd_degrees,
+            .rev_degrees = rev_degrees,
+            .fwd_block_counts = fwd_block_counts,
+            .rev_block_counts = rev_block_counts,
+        };
+    }
+
+    fn deinit(self: *FreezePlan, allocator: std.mem.Allocator) void {
+        allocator.free(self.fwd_degrees);
+        allocator.free(self.rev_degrees);
+        allocator.free(self.fwd_block_counts);
+        allocator.free(self.rev_block_counts);
+    }
+};
+
 pub const GraphBuilder = struct {
     graph: Graph,
     edges: std.ArrayList(BuilderEdge) = .empty,
@@ -88,20 +127,53 @@ pub const GraphBuilder = struct {
 
     fn blockCountForEdgeCount(edge_count: usize) !u16 {
         const blocks = edge_count / 64 + @intFromBool(edge_count % 64 != 0);
-        if (blocks > std.math.maxInt(u16)) return error.OutOfMemory;
+        if (blocks > std.math.maxInt(u16)) return error.BlockLimitReached;
         return @intCast(blocks);
     }
 
-    fn publishForwardRun(self: *GraphBuilder, source_index: u32, run: []const BuilderEdge) !void {
+    fn buildFreezePlan(self: *GraphBuilder) !FreezePlan {
+        const allocator = self.graph.graph.allocator;
+        const node_count = self.graph.nodeCount();
+        var plan = try FreezePlan.init(allocator, node_count);
+        errdefer plan.deinit(allocator);
+
+        for (self.edges.items) |edge| {
+            plan.fwd_degrees[edge.source] += 1;
+            plan.rev_degrees[edge.destination] += 1;
+        }
+
+        for (0..node_count) |node_index| {
+            const fwd_block_count = try blockCountForEdgeCount(plan.fwd_degrees[node_index]);
+            const rev_block_count = try blockCountForEdgeCount(plan.rev_degrees[node_index]);
+            plan.fwd_block_counts[node_index] = fwd_block_count;
+            plan.rev_block_counts[node_index] = rev_block_count;
+            plan.total_fwd_blocks += fwd_block_count;
+            plan.total_rev_blocks += rev_block_count;
+        }
+
+        return plan;
+    }
+
+    fn prepareBlockCapacity(self: *GraphBuilder, plan: *const FreezePlan) !struct { base_fwd: u32, base_rev: u32 } {
+        const base_fwd = self.graph.graph.block_fwd_count;
+        const base_rev = self.graph.graph.block_rev_count;
+
+        const final_fwd_count = std.math.add(u32, base_fwd, plan.total_fwd_blocks) catch return error.OutOfMemory;
+        const final_rev_count = std.math.add(u32, base_rev, plan.total_rev_blocks) catch return error.OutOfMemory;
+
+        try page_ops.ensureBlockCapacity(&self.graph.graph, final_fwd_count, .fwd);
+        try page_ops.ensureBlockCapacity(&self.graph.graph, final_rev_count, .rev);
+
+        return .{ .base_fwd = base_fwd, .base_rev = base_rev };
+    }
+
+    fn publishForwardRun(self: *GraphBuilder, source_index: u32, run: []const BuilderEdge, first_block: u32, block_count: u16) void {
         if (run.len == 0) return;
 
-        const block_count = try blockCountForEdgeCount(run.len);
-        var first_block: u32 = 0;
         var edge_index: usize = 0;
 
         for (0..block_count) |block_offset| {
-            const block_index = try page_ops.allocBlock(&self.graph.graph, .fwd);
-            if (block_offset == 0) first_block = block_index;
+            const block_index = first_block + @as(u32, @intCast(block_offset));
             const block = page_ops.edgeBlockAt(&self.graph.graph, block_index, .fwd);
             block.* = std.mem.zeroes(types.EdgeBlockFwd);
 
@@ -126,16 +198,13 @@ pub const GraphBuilder = struct {
         node_buffer.fwd_buffers[0].first_group = 0;
     }
 
-    fn publishReverseRun(self: *GraphBuilder, destination_index: u32, run: []const BuilderEdge) !void {
+    fn publishReverseRun(self: *GraphBuilder, destination_index: u32, run: []const BuilderEdge, first_block: u32, block_count: u16) void {
         if (run.len == 0) return;
 
-        const block_count = try blockCountForEdgeCount(run.len);
-        var first_block: u32 = 0;
         var edge_index: usize = 0;
 
         for (0..block_count) |block_offset| {
-            const block_index = try page_ops.allocBlock(&self.graph.graph, .rev);
-            if (block_offset == 0) first_block = block_index;
+            const block_index = first_block + @as(u32, @intCast(block_offset));
             const block = page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev);
             block.* = std.mem.zeroes(types.EdgeBlockRev);
 
@@ -155,30 +224,40 @@ pub const GraphBuilder = struct {
         node_buffer.rev_buffers[0].first_group = 0;
     }
 
-    fn publishForwardAdjacencies(self: *GraphBuilder) !void {
+    fn publishForwardAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_fwd: u32) void {
         std.sort.heap(BuilderEdge, self.edges.items, {}, BuilderEdge.lessForward);
 
+        var next_block_index = base_fwd;
         var start: usize = 0;
         while (start < self.edges.items.len) {
             const source = self.edges.items[start].source;
             var end = start + 1;
             while (end < self.edges.items.len and self.edges.items[end].source == source) : (end += 1) {}
-            try self.publishForwardRun(source, self.edges.items[start..end]);
+            const block_count = plan.fwd_block_counts[source];
+            self.publishForwardRun(source, self.edges.items[start..end], next_block_index, block_count);
+            next_block_index += block_count;
             start = end;
         }
+
+        std.debug.assert(next_block_index == base_fwd + plan.total_fwd_blocks);
     }
 
-    fn publishReverseAdjacencies(self: *GraphBuilder) !void {
+    fn publishReverseAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_rev: u32) void {
         std.sort.heap(BuilderEdge, self.edges.items, {}, BuilderEdge.lessReverse);
 
+        var next_block_index = base_rev;
         var start: usize = 0;
         while (start < self.edges.items.len) {
             const destination = self.edges.items[start].destination;
             var end = start + 1;
             while (end < self.edges.items.len and self.edges.items[end].destination == destination) : (end += 1) {}
-            try self.publishReverseRun(destination, self.edges.items[start..end]);
+            const block_count = plan.rev_block_counts[destination];
+            self.publishReverseRun(destination, self.edges.items[start..end], next_block_index, block_count);
+            next_block_index += block_count;
             start = end;
         }
+
+        std.debug.assert(next_block_index == base_rev + plan.total_rev_blocks);
     }
 
     fn clearBuildStorage(self: *GraphBuilder) void {
@@ -189,64 +268,30 @@ pub const GraphBuilder = struct {
         self.edge_keys = std.AutoHashMap(u64, void).init(allocator);
     }
 
-    fn publishExactDegrees(self: *GraphBuilder) void {
+    fn publishExactDegrees(self: *GraphBuilder, plan: *const FreezePlan) void {
         for (0..self.graph.nodeCount()) |node_index| {
             const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
-            const adj = node_buffer.publishedAdj();
-
-            var fwd: u22 = 0;
-            if (adj.block_count_fwd > 0) {
-                if (adj.group_count_fwd == 0) {
-                    const end = adj.first_block_fwd + adj.block_count_fwd;
-                    for (adj.first_block_fwd..end) |block_index| {
-                        fwd += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask)));
-                    }
-                } else {
-                    var group_idx = adj.first_group_fwd;
-                    while (group_idx != constants.END_OF_CHAIN) {
-                        const group = page_ops.groupAtConst(&self.graph.graph, group_idx);
-                        for (group.start..group.start + group.count) |block_index| {
-                            fwd += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .fwd).mask)));
-                        }
-                        group_idx = group.next;
-                    }
-                }
-            }
-
-            var rev: u22 = 0;
-            if (adj.block_count_rev > 0) {
-                if (adj.group_count_rev == 0) {
-                    const end = adj.first_block_rev + adj.block_count_rev;
-                    for (adj.first_block_rev..end) |block_index| {
-                        rev += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask)));
-                    }
-                } else {
-                    var group_idx = adj.first_group_rev;
-                    while (group_idx != constants.END_OF_CHAIN) {
-                        const group = page_ops.groupAtConst(&self.graph.graph, group_idx);
-                        for (group.start..group.start + group.count) |block_index| {
-                            rev += @as(u22, @intCast(@popCount(page_ops.edgeBlockAtConst(&self.graph.graph, @intCast(block_index), .rev).mask)));
-                        }
-                        group_idx = group.next;
-                    }
-                }
-            }
-
-            var meta = node_buffer.loadPublishedMeta();
-            meta.degree_fwd = fwd;
-            meta.degree_rev = rev;
-            node_buffer.storePublishedMeta(meta);
+            node_buffer.storePublishedMeta(.{
+                .degree_fwd = @intCast(plan.fwd_degrees[node_index]),
+                .degree_rev = @intCast(plan.rev_degrees[node_index]),
+            });
         }
     }
 
     pub fn freeze(self: *GraphBuilder) !Graph {
         if (self.frozen) return error.UnsupportedOperation;
 
+        var plan = try self.buildFreezePlan();
+        defer plan.deinit(self.graph.graph.allocator);
+        const reservation = try self.prepareBlockCapacity(&plan);
+
         self.resetPublishedAdjacencyBuffers();
-        try self.publishForwardAdjacencies();
-        try self.publishReverseAdjacencies();
+        self.publishForwardAdjacencies(&plan, reservation.base_fwd);
+        self.publishReverseAdjacencies(&plan, reservation.base_rev);
+        self.graph.graph.block_fwd_count = reservation.base_fwd + plan.total_fwd_blocks;
+        self.graph.graph.block_rev_count = reservation.base_rev + plan.total_rev_blocks;
         self.graph.graph.edge_count.store(@intCast(self.edges.items.len), .release);
-        self.publishExactDegrees();
+        self.publishExactDegrees(&plan);
 
         const result = Graph{ .graph = self.graph.graph };
         self.clearBuildStorage();

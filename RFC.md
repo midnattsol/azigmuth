@@ -104,7 +104,7 @@ pub const PublishedMeta = packed struct(u64) {
     removed: bool = false,
     degree_fwd: u22 = 0,
     degree_rev: u22 = 0,
-    _reserved: u15 = 0,
+    version: u15 = 0,
 };
 
 pub const SideAdj = extern struct {
@@ -129,7 +129,11 @@ atomically alongside the public flags and side indices.  Because `block_count_*`
 is `u16` and each block holds `64` edges, the representable range fits
 comfortably in `u22` (max `65,535 × 64 = 4,194,240`).  Phase 1 query APIs
 read the published degree directly; no overflow sentinel nor O(B) fallback
-is needed.
+is needed. `version` is a writer-maintained publish counter used to ensure each
+successful metadata publication changes the packed word and avoids ABA-style
+reuse of the same bit pattern across consecutive publishes. The counter wraps
+modulo `u15`; monotonicity is not required, only that each successful publish
+produces a distinct packed word from the immediately previous one.
 Writers stage side-local updates in the inactive `fwd_buffers[]` /
 `rev_buffers[]` entries, then publish a new coherent node snapshot by
 CAS/updating `published_meta` with `.release`.
@@ -283,6 +287,8 @@ pub const Violation = union(enum) { ... };  // see §7
 ```zig
 pub const GraphError = error{
     OutOfMemory,
+    DegreeLimitReached,
+    BlockLimitReached,
     InvalidNode,           // NodeId out of bounds, removed, or tombstoned
     EdgeAlreadyExists,     // duplicate in non-multigraph mode
     CorruptGraph,          // validate() found invariant violation
@@ -297,12 +303,14 @@ pub const DeinitError = error{GraphBusy};
 
 | Error | May be returned by | Meaning |
 |-------|-------------------|---------|
-| `OutOfMemory` | `init`, `addNode`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted`, `debugValidate`, `neighborsMaterialized`, `inNeighborsMaterialized`, `bfs`, `dfs`, `NeighborIterator.materialize` | Allocator exhausted. Graph unchanged. |
-| `InvalidNode` | All queries taking `NodeId` (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`, `hasNode`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`) | `id.index >= node_count`, or node is removed/tombstoned. |
+| `OutOfMemory` | `init`, `addNode`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted`, `debugValidate`, `neighborsMaterialized`, `inNeighborsMaterialized`, `bfs`, `dfs`, `hasCycle`, `NeighborIterator.materialize`, `GraphBuilder.freeze` | Allocator exhausted. Graph unchanged. |
+| `DegreeLimitReached` | `addEdge` | Adding the edge would exceed `MAX_DEGREE_PER_SIDE` on the forward or reverse side. Graph unchanged. |
+| `BlockLimitReached` | `addEdge`, `GraphBuilder.freeze` | Building the new layout would exceed `MAX_BLOCKS_PER_SIDE` / `u16` representable block count for one side. Graph unchanged. |
+| `InvalidNode` | All queries taking `NodeId` (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted`) | `id.index >= node_count`, or node is removed/tombstoned. |
 | `EdgeAlreadyExists` | `addEdge` | Duplicate edge in non-multigraph mode. |
 | `CorruptGraph` | `validate`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Structural invariant violated, or a mutating/repair API detected published state that cannot satisfy the RFC invariants. |
 | `ConcurrentMutation` | `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Contended writer/repair operation detected; caller should retry later. |
-| `UnsupportedOperation` | multigraph ops (Phase 3) | Feature not yet in current phase. |
+| `UnsupportedOperation` | multigraph ops (Phase 3); `GraphBuilder.addNode` / `addEdge` / `freeze` after a successful `freeze()` | Feature not yet in current phase, or builder is already inert after ownership transfer. |
 | `RepairRequired` | `addEdge`, `removeEdge` (if sync repair disabled) | Hard amplification bound would be violated. Call `repairNode` or `repairBudgeted`. |
 | `GraphBusy` | `deinitChecked`; any `GraphError`-returning API racing with `deinitChecked`; read APIs when reader-token capacity is exhausted | The graph is busy or closing. `deinitChecked` returns it when active readers/writers/repairers still exist. Other fallible APIs may return it when teardown has atomically closed the graph to new work, or when the implementation cannot mint another tracked reader token at that moment. |
 
@@ -338,6 +346,13 @@ returns `null` and `materialize()` returns the remaining empty slice.
 `deinit`).  On `error.GraphBusy` the handle remains valid and the caller may
 retry later.
 
+**`deinit` semantics:** `deinit()` is intentionally unchecked at the type level,
+but it is still a contract-checked API. If called while public calls, writers,
+repairers, or tracked reader overflow are still active, the implementation MUST
+panic in any build mode with a diagnostic message containing the active call,
+writer, repairer, and overflow counts. Callers that need a recoverable result
+must use `deinitChecked()` instead.
+
 **Teardown coordination:** `deinitChecked` first closes the graph to new calls,
 then checks whether any readers / writers / repairers are still active.  While
 that close is in effect:
@@ -349,17 +364,20 @@ that close is in effect:
 This keeps teardown safe without introducing locks into normal read / write
 paths.
 
+The success path of `deinitChecked()` delegates to `deinit()`, so it inherits
+the same panic contract if an impossible post-close active-user state were ever
+to be observed.
+
 **`materialize` semantics:** `NeighborIterator.materialize(allocator)`
 drains the remaining items into a caller-owned slice.  It **does not**
 destroy the iterator — `deinit()` is still required.  The iterator is
 exhausted after the call (`next()` returns `null`).
 
-> The internal `query.NeighborIterator` (used by tests via `graph_mod`) has
-> *consuming* helpers `materializeConsuming` / `materializeExactConsuming`
-> that call `defer self.deinit()`.  The public
-> wrapper removes this behaviour deliberately so that callers control RCU
-> guard lifetime explicitly.  New code should use the public iterator when
-> non‑consuming semantics are desired.
+> `NeighborIterator` is the canonical iterator type used by both the public API
+> and the query implementation. It exposes non-consuming `materialize()` for the
+> public contract, while internal code may opt into the consuming helpers
+> `materializeConsuming` / `materializeExactConsuming` when it wants
+> materialization to end the RCU guard lifetime as part of the helper.
 
 ### 4.5 Core Functions
 
@@ -429,7 +447,14 @@ pub const GraphBuilder = opaque {
 `freeze()` transfers ownership: the builder becomes inert and the caller
 owns the returned `*Graph`.  The resulting graph is a normal mutable `Graph`
 with compact initial layout, zero repair debt, and edges pre-sorted within
-each block.
+each block. After a successful `freeze()`, further calls to `addNode`,
+`addEdge`, or `freeze()` itself MUST return `error.UnsupportedOperation`.
+
+`freeze()` is zero-copy: it plans per-node degrees and block counts, performs
+all fallible capacity reservation up front, and only then commits the published
+adjacency layout. Therefore `error.BlockLimitReached` or `error.OutOfMemory`
+leave the builder reusable and the public graph state unchanged, although
+internal reserved capacity MAY remain allocated.
 
 ### 4.8 API Guarantees
 
@@ -716,10 +741,23 @@ pub const Violation = union(enum) {
     block_double_owned:           struct { block: u32 },
     block_orphaned_in_free_list:  struct { block: u32 },
     repair_debt_invalid_node:     struct { entry: u32 },
+    removed_node_has_outgoing:    struct { node: u32 },
+    removed_node_has_reverse_residual: struct { node: u32, degree_rev: u22 },
+    removed_node_marked_for_repair: struct { node: u32 },
+    forward_tombstone_missing_repair_flag: struct { node: u32 },
     edge_count_mismatch:          struct { expected: u64, actual: u64 },
     retired_block_reachable:      struct { block: u32, node: u32 },
+    forward_reverse_count_mismatch: struct { forward_total: u64, reverse_total: u64 },
+    unreachable_forward_block:    struct { block: u32 },
+    unreachable_reverse_block:    struct { block: u32 },
+    unreachable_group:            struct { group: u32 },
+    block_count_group_mismatch:   struct { node: u32, declared: u16, actual: u16 },
 };
 ```
+
+The public `Violation` type is intentionally richer than the minimum logical
+contract: it also exposes structural tombstone, reachability, and ownership
+diagnostics needed to validate the current RB-CSR implementation in depth.
 
 ### 7.2 Checks
 
@@ -803,7 +841,7 @@ Pages follow the header in order: NodeBuffer pages, EdgeBlockFwd pages, EdgeBloc
 
 | Limitation | Value | Why |
 |---|---|---|
-| Max degree per side per node | 4,194,239 (`u22`; `block_count: u16 × 64`) | `PublishedMeta.degree_fwd` / `degree_rev` are `u22`; `block_count_*` fields are `u16`. See `constants.MAX_DEGREE_PER_SIDE`. |
+| Max degree per side per node | 4,194,240 (`u22`; `block_count: u16 × 64`) | `PublishedMeta.degree_fwd` / `degree_rev` are `u22`; `block_count_*` fields are `u16`. See `constants.MAX_DEGREE_PER_SIDE`. |
 | Max block groups per node | 4 (`MAX_GROUPS_PER_NODE`) | Prevents group fragmentation runaway. Nodes with more than 4 groups require repair. |
 | Supernodes (> 4.19M edges in one direction) | Not supported in Phase 1/2 | Would require a wider block-count field or a structural redesign. Accepted as an architecture trade-off for locality and compactness. |
 
@@ -863,6 +901,8 @@ the existing repair/debt infrastructure — no separate removal pipeline.
 - **Synchronous guarantees** (must hold when `removeNode` returns):
   - The target node is marked `removed`.
   - Its forward-adjacency descriptor is cleared (zero blocks, zero groups).
+  - The target node's published `degree_rev` is `0` on return, even if its
+    reverse-side structural tombstones have not yet been compacted.
   - Every live predecessor that held an edge to the target has its
     `degree_fwd` decremented and `needs_repair_fwd` set via CAS on
     `published_meta` — **without** requiring `fwd_claim` on the predecessor.
@@ -873,6 +913,9 @@ the existing repair/debt infrastructure — no separate removal pipeline.
 - **Debt intentionally left behind:**
   - Tombstoned forward entries on predecessors (they still contain the
     removed destination; the degree and flag already reflect this).
+  - Reverse-side structural tombstones on the removed node itself. These are
+    no longer part of the public logical graph, but may persist physically
+    until `repairBudgeted` or `repairNode` compacts them away.
   - These are discovered by `repairBudgeted` via the `needs_repair_fwd`
     flag set during the publish loop — without a full-graph scan.
   - The caller is **not required** to call `repairBudgeted` after

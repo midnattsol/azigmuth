@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const internal = @import("../graph.zig");
-const public_iterator = @import("public_iterator.zig");
 
 pub const Graph = opaque {
     /// Allocates and returns a heap-allocated `*Graph`.  The caller owns the
@@ -31,9 +30,13 @@ pub const Graph = opaque {
     }
 
     /// Destroys the graph handle unconditionally.  All page-backed storage,
-    /// repair queues, and the handle itself are freed.  Must not be called while
-    /// writers, readers, or repairers are active — use `deinitChecked()` for a
-    /// safe teardown check.
+    /// repair queues, and the handle itself are freed.
+    ///
+    /// Must not be called while writers, readers, or repairers are active — use
+    /// `deinitChecked()` for a safe teardown check instead. If called while the
+    /// graph still has active users, this panics in any build mode with a
+    /// diagnostic that includes the active call, writer, repairer, and reader
+    /// overflow counts.
     pub fn deinit(self: *Graph) void {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         const alloc = g.graph.allocator;
@@ -45,6 +48,10 @@ pub const Graph = opaque {
     /// repairer is still active.  On success the handle is consumed just like
     /// `deinit()`.  On `GraphBusy` the handle remains valid — the caller may
     /// drain active operations and retry.
+    ///
+    /// The success path delegates to `deinit()`, so it inherits the same panic
+    /// contract if an impossible post-close active-user state were ever to be
+    /// observed.
     pub fn deinitChecked(self: *Graph) internal.DeinitError!void {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         const alloc = g.graph.allocator;
@@ -82,14 +89,14 @@ pub const Graph = opaque {
         return g.debugValidate(allocator);
     }
 
-    pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!public_iterator.NeighborIterator {
+    pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.NeighborIterator {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return public_iterator.NeighborIterator.initFromInternal(try g.neighbors(node));
+        return g.neighbors(node);
     }
 
-    pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!public_iterator.NeighborIterator {
+    pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.NeighborIterator {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return public_iterator.NeighborIterator.initFromInternal(try g.inNeighbors(node));
+        return g.inNeighbors(node);
     }
 
     /// Convenience: materializes all outgoing neighbors into a slice.

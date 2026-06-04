@@ -9,6 +9,7 @@ const adjacency = @import("adjacency.zig");
 const mutation = @import("mutation.zig");
 const repair = @import("maintenance/repair.zig");
 const graph = @import("graph.zig");
+const query = @import("query.zig");
 
 pub const constants_mod = constants;
 pub const types_mod = types;
@@ -17,6 +18,7 @@ pub const page_ops_mod = page_ops;
 pub const adjacency_mod = adjacency;
 pub const mutation_common_mod = @import("mutation/common.zig");
 pub const repair_mod = repair;
+pub const query_mod = query;
 pub const bfs_mod = @import("algorithms/bfs.zig");
 pub const dfs_mod = @import("algorithms/dfs.zig");
 pub const cycle_mod = @import("algorithms/cycle.zig");
@@ -27,3 +29,6 @@ pub const GraphCore = graph_core.GraphCore;
 
 pub const Graph = graph.Graph;
 pub const GraphBuilder = @import("internal/builder.zig").GraphBuilder;
+pub const snapshotDegree = query.snapshotDegree;
+pub const materializeConsuming = query.materializeConsuming;
+pub const materializeExactConsuming = query.materializeExactConsuming;

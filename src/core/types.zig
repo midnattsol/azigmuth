@@ -8,6 +8,8 @@ pub const NodeId = struct { index: u32 };
 
 pub const GraphError = error{
     OutOfMemory,
+    DegreeLimitReached,
+    BlockLimitReached,
     InvalidNode,
     EdgeAlreadyExists,
     CorruptGraph,

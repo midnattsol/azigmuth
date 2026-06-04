@@ -144,7 +144,7 @@ fn applyPreparedAppendSideTracked(
         return;
     }
 
-    if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.OutOfMemory;
+    if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
 
     var block_list: std.ArrayList(u32) = .empty;
     defer block_list.deinit(graph.allocator);
@@ -296,8 +296,8 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
         return error.EdgeAlreadyExists;
     }
 
-    if (source_meta.degree_fwd >= constants.MAX_DEGREE_PER_SIDE) return error.OutOfMemory;
-    if (destination_meta.degree_rev >= constants.MAX_DEGREE_PER_SIDE) return error.OutOfMemory;
+    if (source_meta.degree_fwd >= constants.MAX_DEGREE_PER_SIDE) return error.DegreeLimitReached;
+    if (destination_meta.degree_rev >= constants.MAX_DEGREE_PER_SIDE) return error.DegreeLimitReached;
 
     var scratch = common.MutationScratch{};
     defer scratch.deinit(graph.allocator);

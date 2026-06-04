@@ -28,21 +28,21 @@ pub fn build(b: *std.Build) void {
 
     // ---- test helper modules ----
     const publish_mod = b.createModule(.{
-        .root_source_file = b.path("tests/helpers/publishing.zig"),
+        .root_source_file = b.path("tests/internal/helpers/publishing.zig"),
         .target = target,
         .optimize = optimize,
     });
     publish_mod.addImport("graph_mod", graph_mod);
 
     const graph_helpers_mod = b.createModule(.{
-        .root_source_file = b.path("tests/helpers/graph.zig"),
+        .root_source_file = b.path("tests/internal/helpers/graph.zig"),
         .target = target,
         .optimize = optimize,
     });
     graph_helpers_mod.addImport("graph_mod", graph_mod);
 
     const neighbors_mod = b.createModule(.{
-        .root_source_file = b.path("tests/helpers/neighbors.zig"),
+        .root_source_file = b.path("tests/internal/helpers/neighbors.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     addTestFiles(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
 
     const stress_step = b.step("stress", "Run long-running stress tests");
-    addTestFile(b, stress_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, "rcu/stress.zig");
+    addStressFiles(b, stress_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
 }
 
 fn addTestFile(
@@ -87,25 +87,13 @@ fn addTestFile(
 }
 
 fn testNeedsInternals(test_path: []const u8) bool {
-    const whitebox_prefixes = [_][]const u8{
-        "helpers/",
-        "internal/",
-        "mutation/",
-        "storage/",
-        "rcu/",
-        "repair/",
-        "validation/",
-        "oom/",
-        "remove_node/",
-        "fuzz/",
-        "concurrent/",
-    };
+    return std.mem.startsWith(u8, test_path, "internal/");
+}
 
-    for (whitebox_prefixes) |prefix| {
-        if (std.mem.startsWith(u8, test_path, prefix)) return true;
-    }
-
-    return false;
+fn isStressTest(test_path: []const u8) bool {
+    return std.mem.eql(u8, std.Io.Dir.path.basename(test_path), "stress.zig") or
+        std.mem.endsWith(u8, test_path, "_stress.zig") or
+        std.mem.endsWith(u8, test_path, "_long.zig");
 }
 
 fn addTestFiles(
@@ -135,7 +123,43 @@ fn addTestFiles(
 
         if (entry.kind != .file) continue;
         if (!std.mem.eql(u8, std.Io.Dir.path.extension(entry.basename), ".zig")) continue;
+        if (std.mem.startsWith(u8, entry.path, "internal/helpers/")) continue;
+        if (isStressTest(entry.path)) continue;
 
         addTestFile(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, entry.path);
+    }
+}
+
+fn addStressFiles(
+    b: *std.Build,
+    stress_step: *std.Build.Step,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    graph_mod: *std.Build.Module,
+    graphz_mod: *std.Build.Module,
+    publish_mod: *std.Build.Module,
+    graph_helpers_mod: *std.Build.Module,
+    neighbors_mod: *std.Build.Module,
+) void {
+    const tests_dir_path = b.pathFromRoot("tests");
+    var tests_dir = std.Io.Dir.cwd().openDir(b.graph.io, tests_dir_path, .{ .iterate = true }) catch |err| {
+        std.debug.panic("failed to open '{s}': {}", .{ tests_dir_path, err });
+    };
+    defer tests_dir.close(b.graph.io);
+
+    var walker = tests_dir.walk(b.allocator) catch @panic("failed to walk tests directory");
+    defer walker.deinit();
+
+    while (true) {
+        const entry = walker.next(b.graph.io) catch |err| {
+            std.debug.panic("failed to walk '{s}': {}", .{ tests_dir_path, err });
+        } orelse break;
+
+        if (entry.kind != .file) continue;
+        if (!std.mem.eql(u8, std.Io.Dir.path.extension(entry.basename), ".zig")) continue;
+        if (std.mem.startsWith(u8, entry.path, "internal/helpers/")) continue;
+        if (!isStressTest(entry.path)) continue;
+
+        addTestFile(b, stress_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, entry.path);
     }
 }

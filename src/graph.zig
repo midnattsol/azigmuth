@@ -105,7 +105,17 @@ pub const Graph = struct {
     }
 
     pub fn deinit(self: *Graph) void {
-        std.debug.assert(!hasActiveReadersOrWriters(&self.graph));
+        if (hasActiveReadersOrWriters(&self.graph)) {
+            std.debug.panic(
+                "Graph.deinit called while active: calls={d}, writers={d}, repairers={d}, overflow={d}",
+                .{
+                    self.graph.activeCallCount(),
+                    self.graph.active_writers.load(.acquire),
+                    self.graph.active_repairers.load(.acquire),
+                    self.graph.reader_epoch_overflow.load(.acquire),
+                },
+            );
+        }
 
         const alloc = self.graph.allocator;
         freeAtomicPages(types.NodeBuffer, alloc, self.graph.node_pages_pages[0..], constants.NODES_PER_PAGE);

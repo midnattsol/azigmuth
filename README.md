@@ -8,11 +8,11 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 - sorted fixed-size edge blocks with dense occupancy masks
 - local repair and validation
 - tombstone-based node deletion (Phase 2) with debt/repair cleanup
-- a `GraphBuilder` convenience wrapper for bulk construction
+- a `GraphBuilder` bulk-construction handle
 
 ## Design limits
 
-- Max degree per side per node: **4,194,239** (u22 block_count × 64 edges).
+- Max degree per side per node: **4,194,240** (`65,535 * 64` edges).
 - Max block groups per node: **4** (`MAX_GROUPS_PER_NODE`).
 - Supernodes (> 4.19M edges in one direction) are not supported in the
   current storage format — accepted architecture trade-off.
@@ -60,7 +60,10 @@ defer graph.deinit();
 
 `addEdge` rejects out-of-range node IDs and duplicate edges.  `freeze()` on
 an empty builder succeeds and returns a valid zero-node `Graph`.  After
-`freeze()` the builder is inert — only `deinit()` is valid.
+`freeze()` the builder is inert: `addNode()`, `addEdge()`, and `freeze()`
+return `error.UnsupportedOperation`, while `deinit()` remains valid.  If
+`freeze()` fails, the builder stays reusable; any reserved internal capacity is
+an implementation detail.
 
 ## Teardown
 
@@ -74,6 +77,10 @@ an empty builder succeeds and returns a valid zero-node `Graph`.  After
   defaults during that brief closing window.
 
 ## Materialize
+
+`NeighborIterator` is returned by value, allocates nothing on creation, and is
+the canonical iterator type used directly by the public API. `materialize()`
+drains the iterator without consuming it, so `deinit()` is still required.
 
 ```zig
 var it = try g.neighbors(node);
