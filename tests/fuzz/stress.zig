@@ -2,11 +2,11 @@
 //! after each step.  Catches accumulative structural degradation.
 
 const std = @import("std");
-const graph_mod = @import("graph_mod");
+const graphz = @import("graphz");
 
 const testing = std.testing;
 
-fn expectNoStructuralViolations(violations: []const graph_mod.Violation) !void {
+fn expectNoStructuralViolations(violations: []const graphz.Violation) !void {
     for (violations) |v| {
         switch (v) {
             .block_double_owned,
@@ -28,7 +28,7 @@ fn expectNoStructuralViolations(violations: []const graph_mod.Violation) !void {
 }
 
 test "fuzz: sequential add/remove/repair with validate after each step" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     var state: u64 = 0xDEADBEEF_CAFE1234;
@@ -47,7 +47,7 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
                 const from: u32 = @intCast((state >> 4) % node_limit);
                 const to: u32 = @intCast(((state >> 16) ^ next_xor) % node_limit);
                 if (from != to) {
-                    _ = graph.addEdge(.{ .index = from }, .{ .index = to }, 0, 0) catch {};
+                    _ = graph.addEdge(.{ .index = from }, .{ .index = to }, 0, .{}) catch {};
                 }
             },
             1 => {
@@ -84,7 +84,7 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
 }
 
 test "fuzz: sequential hot-node add/remove with periodic validate" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     for (0..20) |_| _ = try graph.addNode();
@@ -96,10 +96,10 @@ test "fuzz: sequential hot-node add/remove with periodic validate" {
         const b: u32 = @intCast(1 + (state % 19));
         if (a != b) {
             switch (step % 3) {
-                0 => _ = graph.addEdge(.{ .index = a }, .{ .index = b }, 0, 0) catch {},
+                0 => _ = graph.addEdge(.{ .index = a }, .{ .index = b }, 0, .{}) catch {},
                 1 => _ = graph.removeEdge(.{ .index = a }, .{ .index = b }) catch {},
                 2 => _ = {
-                    _ = graph.addEdge(.{ .index = a }, .{ .index = b }, 0, 0) catch {};
+                    _ = graph.addEdge(.{ .index = a }, .{ .index = b }, 0, .{}) catch {};
                     _ = graph.removeEdge(.{ .index = a }, .{ .index = b }) catch {};
                 },
                 else => unreachable,
@@ -119,19 +119,19 @@ test "fuzz: sequential hot-node add/remove with periodic validate" {
 test "fuzz: OOM injection on addEdge/removeEdge/removeNode leaves stable graph" {
     for (0..16) |failure_offset| {
         var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
-        var graph = try graph_mod.Graph.init(failing_allocator.allocator());
+        var graph = try graphz.Graph.init(failing_allocator.allocator());
         defer graph.deinit();
 
         const a = try graph.addNode();
         const b = try graph.addNode();
         const c = try graph.addNode();
-        try graph.addEdge(a, b, 0, 0);
-        try graph.addEdge(a, c, 0, 0);
+        try graph.addEdge(a, b, 0, .{});
+        try graph.addEdge(a, c, 0, .{});
 
         failing_allocator.fail_index = failing_allocator.alloc_index + failure_offset;
 
         // Try a mutation that may or may not succeed.
-        const result = graph.addEdge(b, c, 0, 0);
+        const result = graph.addEdge(b, c, 0, .{});
         if (result) |_| {
             try testing.expectEqual(@as(u64, 3), graph.edgeCount());
         } else |err| {
@@ -146,7 +146,7 @@ test "fuzz: OOM injection on addEdge/removeEdge/removeNode leaves stable graph" 
 }
 
 test "fuzz: stress addEdge on same pair 100 times with interleaved repair" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -154,7 +154,7 @@ test "fuzz: stress addEdge on same pair 100 times with interleaved repair" {
 
     for (0..100) |_| {
         // Add edge (may fail on duplicate).
-        _ = graph.addEdge(a, b, 0, 0) catch {};
+        _ = graph.addEdge(a, b, 0, .{}) catch {};
         // Remove edge.
         _ = graph.removeEdge(a, b) catch {};
 

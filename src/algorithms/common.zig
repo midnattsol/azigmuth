@@ -18,5 +18,5 @@ pub fn neighborIteratorOrNull(graph: *const graph_core.GraphCore, node: types.No
 
 pub fn materializeNeighborsOrEmpty(graph: *const graph_core.GraphCore, node: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
     var iter = try neighborIteratorOrNull(graph, node) orelse return allocator.alloc(types.NodeId, 0);
-    return iter.materialize(allocator);
+    return iter.materializeConsuming(allocator);
 }

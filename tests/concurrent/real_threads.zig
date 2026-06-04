@@ -227,7 +227,7 @@ test "concurrent: reader sees a sorted, valid snapshot under a continuous write 
     try testing.expectEqual(@as(usize, 0), violations.len);
 
     var final_neighbors = try graph.neighbors(source);
-    const final_list = try final_neighbors.materialize(allocator);
+    const final_list = try final_neighbors.materializeConsuming(allocator);
     defer allocator.free(final_list);
     var i: usize = 1;
     while (i < final_list.len) : (i += 1) {

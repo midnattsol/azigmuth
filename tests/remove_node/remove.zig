@@ -35,7 +35,7 @@ test "removeNode: public API invalidates removed node and hides tombstoned incom
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     var neighbors_b = try graph.neighbors(b);
-    const b_slice = try neighbors_b.materialize(testing.allocator);
+    const b_slice = try neighbors_b.materializeConsuming(testing.allocator);
     defer testing.allocator.free(b_slice);
     try testing.expectEqual(@as(usize, 0), b_slice.len);
 }

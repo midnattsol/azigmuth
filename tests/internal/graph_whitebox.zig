@@ -72,7 +72,7 @@ test "graph: neighbors and inNeighbors iterate expected nodes" {
 
     var neighbors_it = try graph.neighbors(a);
     defer neighbors_it.deinit();
-    const neighbors_slice = try neighbors_it.materialize(testing.allocator);
+    const neighbors_slice = try neighbors_it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbors_slice);
 
     try testing.expectEqual(@as(usize, 2), neighbors_slice.len);
@@ -81,7 +81,7 @@ test "graph: neighbors and inNeighbors iterate expected nodes" {
 
     var in_neighbors_it = try graph.inNeighbors(c);
     defer in_neighbors_it.deinit();
-    const in_neighbors_slice = try in_neighbors_it.materialize(testing.allocator);
+    const in_neighbors_slice = try in_neighbors_it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(in_neighbors_slice);
 
     try testing.expectEqual(@as(usize, 1), in_neighbors_slice.len);
@@ -138,13 +138,13 @@ test "graph: self-edge appears in both neighbors and inNeighbors" {
 
     var out_it = try graph.neighbors(n);
     defer out_it.deinit();
-    const out_slice = try out_it.materialize(testing.allocator);
+    const out_slice = try out_it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(out_slice);
     try testing.expectEqual(n.index, out_slice[0].index);
 
     var in_it = try graph.inNeighbors(n);
     defer in_it.deinit();
-    const in_slice = try in_it.materialize(testing.allocator);
+    const in_slice = try in_it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(in_slice);
     try testing.expectEqual(n.index, in_slice[0].index);
 }
@@ -166,7 +166,7 @@ test "graph: multiple blocks trigger group creation and still iterate" {
 
     var it = try graph.neighbors(src);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
 
     try testing.expectEqual(@as(usize, target_count), slice.len);
@@ -193,7 +193,7 @@ test "graph: removeEdge existing edge returns true and updates state" {
     try testing.expectEqual(@as(u64, 2), graph.edgeCount());
     var it = try graph.neighbors(a);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, 1), slice.len);
     try testing.expectEqual(b.index, slice[0].index);
@@ -241,7 +241,7 @@ test "graph: removeEdge from multi-block node decreases degree" {
     try testing.expectEqual(@as(u64, target_count - 1), graph.edgeCount());
     var it = try graph.neighbors(src);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, target_count - 1), slice.len);
 }
@@ -264,7 +264,7 @@ test "graph: removeEdge from first block in multi-block node" {
     try testing.expectEqual(@as(u64, target_count - 1), graph.edgeCount());
     var it = try graph.neighbors(src);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, target_count - 1), slice.len);
     try testing.expect(slice[0].index != targets[0].index);
@@ -291,7 +291,7 @@ test "graph: removeEdge multiple edges from multi-block node" {
     try testing.expectEqual(@as(u64, target_count - 3), graph.edgeCount());
     var it = try graph.neighbors(src);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, target_count - 3), slice.len);
     for (1..slice.len) |j| {
@@ -350,7 +350,7 @@ test "graph: removeEdge preserves unrelated incoming and outgoing adjacency" {
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(a));
     var it_a = try graph.neighbors(a);
     defer it_a.deinit();
-    const fwd_a = try it_a.materialize(testing.allocator);
+    const fwd_a = try it_a.materializeConsuming(testing.allocator);
     defer testing.allocator.free(fwd_a);
     try testing.expectEqual(@as(usize, 1), fwd_a.len);
     try testing.expectEqual(c.index, fwd_a[0].index);
@@ -359,7 +359,7 @@ test "graph: removeEdge preserves unrelated incoming and outgoing adjacency" {
     try testing.expectEqual(@as(usize, 1), try graph.inDegree(a));
     var it_a_rev = try graph.inNeighbors(a);
     defer it_a_rev.deinit();
-    const rev_a = try it_a_rev.materialize(testing.allocator);
+    const rev_a = try it_a_rev.materializeConsuming(testing.allocator);
     defer testing.allocator.free(rev_a);
     try testing.expectEqual(@as(usize, 1), rev_a.len);
     try testing.expectEqual(d.index, rev_a[0].index);
@@ -368,7 +368,7 @@ test "graph: removeEdge preserves unrelated incoming and outgoing adjacency" {
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(b));
     var it_b = try graph.neighbors(b);
     defer it_b.deinit();
-    const fwd_b = try it_b.materialize(testing.allocator);
+    const fwd_b = try it_b.materializeConsuming(testing.allocator);
     defer testing.allocator.free(fwd_b);
     try testing.expectEqual(@as(usize, 1), fwd_b.len);
     try testing.expectEqual(e.index, fwd_b[0].index);
@@ -406,7 +406,7 @@ test "graph: removeEdge preserves destination forward adjacency and remaining re
     try testing.expectEqual(@as(usize, 2), try graph.outDegree(b));
     var it_b = try graph.neighbors(b);
     defer it_b.deinit();
-    const fwd_b = try it_b.materialize(testing.allocator);
+    const fwd_b = try it_b.materializeConsuming(testing.allocator);
     defer testing.allocator.free(fwd_b);
     try testing.expectEqual(@as(usize, 2), fwd_b.len);
 
@@ -414,7 +414,7 @@ test "graph: removeEdge preserves destination forward adjacency and remaining re
     try testing.expectEqual(@as(usize, 1), try graph.inDegree(c));
     var it_c_rev = try graph.inNeighbors(c);
     defer it_c_rev.deinit();
-    const rev_c = try it_c_rev.materialize(testing.allocator);
+    const rev_c = try it_c_rev.materializeConsuming(testing.allocator);
     defer testing.allocator.free(rev_c);
     try testing.expectEqual(@as(usize, 1), rev_c.len);
     try testing.expectEqual(x.index, rev_c[0].index);
@@ -442,7 +442,7 @@ test "graph: removeEdge preserves self-edge and unrelated incoming edge" {
 
     var it_n = try graph.neighbors(n);
     defer it_n.deinit();
-    const fwd_n = try it_n.materialize(testing.allocator);
+    const fwd_n = try it_n.materializeConsuming(testing.allocator);
     defer testing.allocator.free(fwd_n);
     try testing.expectEqual(@as(usize, 1), fwd_n.len);
     try testing.expectEqual(n.index, fwd_n[0].index);
@@ -450,7 +450,7 @@ test "graph: removeEdge preserves self-edge and unrelated incoming edge" {
     // Reverse adjacency must include the self-loop source and Y.
     var it_n_rev = try graph.inNeighbors(n);
     defer it_n_rev.deinit();
-    const rev_n = try it_n_rev.materialize(testing.allocator);
+    const rev_n = try it_n_rev.materializeConsuming(testing.allocator);
     defer testing.allocator.free(rev_n);
     try testing.expectEqual(@as(usize, 2), rev_n.len);
     try testing.expectEqual(n.index, rev_n[0].index);
@@ -521,7 +521,7 @@ test "graph: copy-on-write tail replacement preserves grouped adjacency" {
 
     var it = try graph.neighbors(src);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, 70), slice.len);
 
@@ -581,7 +581,7 @@ test "graph: repairNode compacts under-full adjacent blocks" {
 
     var it = try graph.neighbors(src);
     defer it.deinit();
-    const slice = try it.materialize(testing.allocator);
+    const slice = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, 83), slice.len);
     for (1..slice.len) |j| {

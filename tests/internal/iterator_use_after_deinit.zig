@@ -43,6 +43,26 @@ test "iterator: snapshotDegree() after deinit() returns 0 and is safe" {
     try testing.expectEqual(@as(usize, 0), it.snapshotDegree());
 }
 
+test "iterator copy: snapshotDegree() after sibling deinit() returns 0 and is safe" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+
+    var it = try graph.neighbors(source);
+    var copied = it;
+
+    try testing.expectEqual(@as(usize, 1), copied.snapshotDegree());
+    it.deinit();
+
+    // A copied iterator must not keep reading graph storage after the shared
+    // reader token has been closed by another copy.
+    try testing.expectEqual(@as(usize, 0), copied.snapshotDegree());
+    try testing.expect(copied.next() == null);
+}
+
 test "iterator: double deinit() is harmless" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

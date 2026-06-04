@@ -52,7 +52,7 @@ test "degree parity: outDegree matches materialized neighbor count after many ad
     }
 
     var it = try graph.neighbors(src);
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
 
     try testing.expectEqual(@as(usize, count), materialized.len);
@@ -73,7 +73,7 @@ test "degree parity: inDegree matches materialized neighbor count after many add
     }
 
     var it = try graph.inNeighbors(hub);
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
 
     try testing.expectEqual(@as(usize, count), materialized.len);
@@ -98,7 +98,7 @@ test "degree parity: after mixed add/remove, outDegree stays consistent" {
     }
 
     var it = try graph.neighbors(src);
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
 
     try testing.expectEqual(materialized.len, try graph.outDegree(src));
@@ -121,7 +121,7 @@ test "degree parity: after mixed add/remove, inDegree stays consistent" {
     }
 
     var it = try graph.inNeighbors(hub);
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
 
     try testing.expectEqual(materialized.len, try graph.inDegree(hub));

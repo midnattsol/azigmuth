@@ -8,7 +8,7 @@ pub fn expectOutNeighbors(
     expected_indexes: []const u32,
 ) !void {
     var iterator = try graph.neighbors(node);
-    const actual_neighbors = try iterator.materialize(allocator);
+    const actual_neighbors = try iterator.materializeConsuming(allocator);
     defer allocator.free(actual_neighbors);
 
     try std.testing.expectEqual(expected_indexes.len, actual_neighbors.len);
@@ -24,7 +24,7 @@ pub fn expectInNeighbors(
     expected_indexes: []const u32,
 ) !void {
     var iterator = try graph.inNeighbors(node);
-    const actual_neighbors = try iterator.materialize(allocator);
+    const actual_neighbors = try iterator.materializeConsuming(allocator);
     defer allocator.free(actual_neighbors);
 
     try std.testing.expectEqual(expected_indexes.len, actual_neighbors.len);

@@ -142,7 +142,7 @@ fn degreeObserverLoop(ctx: *DegreeObserverCtx) void {
         // mixed-version view across the predecessor and removed target.
         if (target_alive and out_deg == 0) {
             var iter = ctx.graph.neighbors(ctx.predecessor) catch continue;
-            const materialized = iter.materialize(std.heap.page_allocator) catch continue;
+            const materialized = iter.materializeConsuming(std.heap.page_allocator) catch continue;
             defer std.heap.page_allocator.free(materialized);
             for (materialized) |neighbor| {
                 if (neighbor.index == ctx.target.index) {

@@ -19,14 +19,11 @@
 const std = @import("std");
 const internal = @import("../graph.zig");
 const public_iterator = @import("public_iterator.zig");
-const bfs_internal = @import("../algorithms/bfs.zig");
-const dfs_internal = @import("../algorithms/dfs.zig");
-const cycle_internal = @import("../algorithms/cycle.zig");
 
 pub const Graph = opaque {
     /// Allocates and returns a heap-allocated `*Graph`.  The caller owns the
     /// returned pointer and must call `deinit()` or `deinitChecked()` when done.
-    pub fn init(allocator: std.mem.Allocator) !*Graph {
+    pub fn init(allocator: std.mem.Allocator) internal.GraphError!*Graph {
         const g = try allocator.create(internal.Graph);
         errdefer allocator.destroy(g);
         g.* = try internal.Graph.init(allocator);
@@ -55,7 +52,7 @@ pub const Graph = opaque {
         alloc.destroy(g);
     }
 
-    pub fn addNode(self: *Graph) !internal.NodeId {
+    pub fn addNode(self: *Graph) internal.GraphError!internal.NodeId {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         return g.addNode();
     }
@@ -87,12 +84,12 @@ pub const Graph = opaque {
 
     pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!public_iterator.NeighborIterator {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return .{ .inner = try g.neighbors(node) };
+        return public_iterator.NeighborIterator.initFromInternal(try g.neighbors(node));
     }
 
     pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!public_iterator.NeighborIterator {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return .{ .inner = try g.inNeighbors(node) };
+        return public_iterator.NeighborIterator.initFromInternal(try g.inNeighbors(node));
     }
 
     /// Convenience: materializes all outgoing neighbors into a slice.
@@ -150,16 +147,16 @@ pub const Graph = opaque {
 
     pub fn bfs(self: *const Graph, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return bfs_internal.bfs(&g.graph, start, allocator);
+        return g.bfs(start, allocator);
     }
 
     pub fn dfs(self: *const Graph, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return dfs_internal.dfs(&g.graph, start, allocator);
+        return g.dfs(start, allocator);
     }
 
     pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!bool {
         const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return cycle_internal.hasCycle(&g.graph, allocator);
+        return g.hasCycle(allocator);
     }
 };

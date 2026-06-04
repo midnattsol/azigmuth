@@ -1,5 +1,5 @@
 const std = @import("std");
-const graph_mod = @import("graph_mod");
+const graphz = @import("graphz");
 const testing = std.testing;
 
 fn shrinkAndReplay(
@@ -15,10 +15,10 @@ fn shrinkAndReplay(
         var i: usize = 1;
         while (i < candidate.len) {
             const reduced = candidate[0..i];
-            var graph = try graph_mod.Graph.init(allocator);
+            var graph = try graphz.Graph.init(allocator);
             errdefer graph.deinit();
 
-            var nodes: [16]graph_mod.NodeId = undefined;
+            var nodes: [16]graphz.NodeId = undefined;
             var j: usize = 0;
             while (j < initial_nodes and j < 16) : (j += 1) {
                 nodes[j] = try graph.addNode();
@@ -32,7 +32,7 @@ fn shrinkAndReplay(
                 if (graph.hasNode(nodes[src_idx]) and graph.hasNode(nodes[dst_idx])) {
                     switch (op.kind) {
                         .add => {
-                            if (graph.addEdge(nodes[src_idx], nodes[dst_idx], op.rel, op.flags)) |_| {} else |_| {
+                            if (graph.addEdge(nodes[src_idx], nodes[dst_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
@@ -70,10 +70,10 @@ fn shrinkAndReplay(
         if (!removed_any) break;
     }
 
-    var graph2 = try graph_mod.Graph.init(allocator);
+    var graph2 = try graphz.Graph.init(allocator);
     defer graph2.deinit();
 
-    var nodes2: [16]graph_mod.NodeId = undefined;
+    var nodes2: [16]graphz.NodeId = undefined;
     var k: usize = 0;
     while (k < initial_nodes and k < 16) : (k += 1) {
         nodes2[k] = try graph2.addNode();
@@ -86,7 +86,7 @@ fn shrinkAndReplay(
         if (graph2.hasNode(nodes2[src_idx]) and graph2.hasNode(nodes2[dst_idx])) {
             switch (op.kind) {
                 .add => {
-                    if (graph2.addEdge(nodes2[src_idx], nodes2[dst_idx], op.rel, op.flags)) |_| {} else |_| break;
+                    if (graph2.addEdge(nodes2[src_idx], nodes2[dst_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| break;
                 },
                 .remove => {
                     if (graph2.removeEdge(nodes2[src_idx], nodes2[dst_idx])) |_| {} else |_| break;
@@ -138,10 +138,10 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
         };
     }
 
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |idx| {
         nodes[idx] = try graph.addNode();
     }
@@ -151,7 +151,7 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
 
         switch (op.kind) {
             .add => {
-                _ = graph.addEdge(nodes[op.src], nodes[op.dst], op.rel, op.flags) catch {};
+                _ = graph.addEdge(nodes[op.src], nodes[op.dst], op.rel, @bitCast(op.flags)) catch {};
             },
             .remove => {
                 _ = graph.removeEdge(nodes[op.src], nodes[op.dst]) catch {};
@@ -176,10 +176,10 @@ test "property_fuzz: dense random graph with removals maintains consistency" {
     const initial_edges: usize = 200;
     const remove_ops: usize = 100;
 
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     var i: usize = 0;
@@ -187,7 +187,7 @@ test "property_fuzz: dense random graph with removals maintains consistency" {
         const src = random.int(u8) % node_count;
         const dst = random.int(u8) % node_count;
         if (src != dst) {
-            _ = graph.addEdge(nodes[src], nodes[dst], 0, 0) catch {};
+            _ = graph.addEdge(nodes[src], nodes[dst], 0, .{}) catch {};
         }
     }
 
@@ -220,16 +220,16 @@ test "property_fuzz: removing all edges leaves clean graph" {
     _ = rng.random();
 
     const node_count: usize = 10;
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
         for (0..node_count) |j| {
             if (i != j) {
-                _ = graph.addEdge(nodes[i], nodes[j], 0, 0) catch {};
+                _ = graph.addEdge(nodes[i], nodes[j], 0, .{}) catch {};
             }
         }
     }
@@ -257,7 +257,7 @@ test "property_fuzz: alternate add and remove on same pair converges" {
     var rng = std.Random.DefaultPrng.init(7777);
     var random = rng.random();
 
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -269,7 +269,7 @@ test "property_fuzz: alternate add and remove on same pair converges" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         if (random.boolean()) {
-            _ = graph.addEdge(source, destination, 0, 0) catch {};
+            _ = graph.addEdge(source, destination, 0, .{}) catch {};
             model_expected = true;
         } else {
             const was_present = graph.removeEdge(source, destination) catch false;
@@ -291,16 +291,16 @@ test "property_fuzz: property that outDegree equals neighbors count" {
     const random = rng.random();
 
     const node_count: usize = 15;
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
         for (0..node_count) |j| {
             if (i != j and random.boolean()) {
-                _ = graph.addEdge(nodes[i], nodes[j], 0, 0) catch {};
+                _ = graph.addEdge(nodes[i], nodes[j], 0, .{}) catch {};
             }
         }
     }
@@ -324,16 +324,16 @@ test "property_fuzz: property that inDegree equals inNeighbors count" {
     const random = rng.random();
 
     const node_count: usize = 15;
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
         for (0..node_count) |j| {
             if (i != j and random.boolean()) {
-                _ = graph.addEdge(nodes[i], nodes[j], 0, 0) catch {};
+                _ = graph.addEdge(nodes[i], nodes[j], 0, .{}) catch {};
             }
         }
     }
@@ -353,13 +353,13 @@ test "property_fuzz: property that inDegree equals inNeighbors count" {
 }
 
 test "property_fuzz: addEdge removes self-edge correctness" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        _ = graph.addEdge(node, node, 0, 0) catch {};
+        _ = graph.addEdge(node, node, 0, .{}) catch {};
     }
     try graph.validate();
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(node));
@@ -375,10 +375,10 @@ test "property_fuzz: random sequence with repair maintains validity" {
     const random = rng.random();
 
     const node_count: usize = 12;
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     var i: usize = 0;
@@ -386,7 +386,7 @@ test "property_fuzz: random sequence with repair maintains validity" {
         const src = random.int(u8) % node_count;
         const dst = random.int(u8) % node_count;
         if (src != dst) {
-            _ = graph.addEdge(nodes[src], nodes[dst], 0, 0) catch {};
+            _ = graph.addEdge(nodes[src], nodes[dst], 0, .{}) catch {};
         }
     }
 
@@ -400,11 +400,11 @@ test "property_fuzz: random sequence with repair maintains validity" {
 }
 
 test "property_fuzz: removeNode followed by addNode reuses slots correctly" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const initial = try graph.addNode();
-    try graph.addEdge(initial, initial, 0, 0);
+    try graph.addEdge(initial, initial, 0, .{});
 
     try graph.removeNode(initial);
     try graph.validate();
@@ -413,7 +413,7 @@ test "property_fuzz: removeNode followed by addNode reuses slots correctly" {
     try testing.expect(!graph.hasNode(initial));
     try testing.expect(graph.hasNode(new_node));
 
-    try graph.addEdge(new_node, new_node, 0, 0);
+    try graph.addEdge(new_node, new_node, 0, .{});
     try graph.validate();
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 }
@@ -422,15 +422,15 @@ test "property_fuzz: large sequential add then random remove maintains consisten
     var rng = std.Random.DefaultPrng.init(4444);
     var random = rng.random();
 
-    var source = try graph_mod.Graph.init(testing.allocator);
+    var source = try graphz.Graph.init(testing.allocator);
     defer source.deinit();
     const source_node = try source.addNode();
     const target_count: usize = 100;
-    var targets: [target_count]graph_mod.NodeId = undefined;
+    var targets: [target_count]graphz.NodeId = undefined;
     for (0..target_count) |i| targets[i] = try source.addNode();
 
     for (0..target_count) |i| {
-        try source.addEdge(source_node, targets[i], 0, 0);
+        try source.addEdge(source_node, targets[i], 0, .{});
     }
 
     try source.validate();

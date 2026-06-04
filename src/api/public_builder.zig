@@ -15,16 +15,17 @@
 
 const std = @import("std");
 const internal = @import("../graph.zig");
+const internal_builder = @import("../internal/builder.zig");
 const public_graph = @import("public_graph.zig");
 
 pub const GraphBuilder = opaque {
     /// Creates a new builder backed by `allocator`.  The caller owns the
     /// returned `*GraphBuilder` and must call `deinit()` when done, regardless
     /// of whether `freeze()` was called.
-    pub fn init(allocator: std.mem.Allocator) !*GraphBuilder {
-        const b = try allocator.create(internal.GraphBuilder);
+    pub fn init(allocator: std.mem.Allocator) internal.GraphError!*GraphBuilder {
+        const b = try allocator.create(internal_builder.GraphBuilder);
         errdefer allocator.destroy(b);
-        b.* = try internal.GraphBuilder.init(allocator);
+        b.* = try internal_builder.GraphBuilder.init(allocator);
         return @ptrCast(b);
     }
 
@@ -33,19 +34,19 @@ pub const GraphBuilder = opaque {
     /// even after a successful `freeze()` — the builder handle is always owned
     /// by the caller.
     pub fn deinit(self: *GraphBuilder) void {
-        const b: *internal.GraphBuilder = @ptrCast(@alignCast(self));
+        const b: *internal_builder.GraphBuilder = @ptrCast(@alignCast(self));
         const alloc = b.graph.graph.allocator;
         b.deinit();
         alloc.destroy(b);
     }
 
-    pub fn addNode(self: *GraphBuilder) !internal.NodeId {
-        const b: *internal.GraphBuilder = @ptrCast(@alignCast(self));
+    pub fn addNode(self: *GraphBuilder) internal.GraphError!internal.NodeId {
+        const b: *internal_builder.GraphBuilder = @ptrCast(@alignCast(self));
         return b.addNode();
     }
 
     pub fn addEdge(self: *GraphBuilder, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!void {
-        const b: *internal.GraphBuilder = @ptrCast(@alignCast(self));
+        const b: *internal_builder.GraphBuilder = @ptrCast(@alignCast(self));
         return b.addEdge(source, destination, relation, @bitCast(flags));
     }
 
@@ -54,10 +55,11 @@ pub const GraphBuilder = opaque {
     /// this call — only `deinit()` remains valid.  The returned `*Graph` is a
     /// normal mutable `Graph` with its own independent lifetime.
     pub fn freeze(self: *GraphBuilder) internal.GraphError!*public_graph.Graph {
-        const b: *internal.GraphBuilder = @ptrCast(@alignCast(self));
-        const frozen = try b.freeze();
-        const alloc = frozen.graph.allocator;
+        const b: *internal_builder.GraphBuilder = @ptrCast(@alignCast(self));
+        const alloc = b.graph.graph.allocator;
         const g = try alloc.create(internal.Graph);
+        errdefer alloc.destroy(g);
+        const frozen = try b.freeze();
         g.* = frozen;
         return @ptrCast(g);
     }

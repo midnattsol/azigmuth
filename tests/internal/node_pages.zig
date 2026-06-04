@@ -50,13 +50,13 @@ test "node pages: a node that lives in the second page still answers neighbors c
     try graph.addEdge(source, cross_page_target, 0, 0);
 
     var iterator = try graph.neighbors(source);
-    const list = try iterator.materialize(testing.allocator);
+    const list = try iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(list);
     try testing.expectEqual(@as(usize, 1), list.len);
     try testing.expectEqual(cross_page_target.index, list[0].index);
 
     var incoming = try graph.inNeighbors(cross_page_target);
-    const incoming_list = try incoming.materialize(testing.allocator);
+    const incoming_list = try incoming.materializeConsuming(testing.allocator);
     defer testing.allocator.free(incoming_list);
     try testing.expectEqual(@as(usize, 1), incoming_list.len);
     try testing.expectEqual(source.index, incoming_list[0].index);

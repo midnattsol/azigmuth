@@ -18,7 +18,7 @@ test "iterator: materializeExact with capacity larger than snapshotDegree uses s
     }
 
     var it = try graph.neighbors(source);
-    const result = try it.materializeExact(testing.allocator, 100);
+    const result = try it.materializeExactConsuming(testing.allocator, 100);
     defer testing.allocator.free(result);
 
     try testing.expectEqual(@as(usize, 5), result.len);
@@ -33,7 +33,7 @@ test "iterator: materializeExact with capacity of 0 still returns correct neighb
     try graph.addEdge(source, target, 0, 0);
 
     var it = try graph.neighbors(source);
-    const result = try it.materializeExact(testing.allocator, 0);
+    const result = try it.materializeExactConsuming(testing.allocator, 0);
     defer testing.allocator.free(result);
 
     try testing.expectEqual(@as(usize, 1), result.len);
@@ -55,7 +55,7 @@ test "iterator: snapshotDegree matches materialize length for forward neighbors"
     defer it.deinit();
 
     try testing.expectEqual(@as(usize, 10), it.snapshotDegree());
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
     try testing.expectEqual(@as(usize, 10), materialized.len);
 }
@@ -75,7 +75,7 @@ test "iterator: snapshotDegree matches materialize length for inNeighbors" {
     defer it.deinit();
 
     try testing.expectEqual(@as(usize, 10), it.snapshotDegree());
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
     try testing.expectEqual(@as(usize, 10), materialized.len);
 }
@@ -129,7 +129,7 @@ test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency re
 
     try testing.expectEqual(@as(usize, 130), it.snapshotDegree());
 
-    const materialized = try it.materialize(testing.allocator);
+    const materialized = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(materialized);
     try testing.expectEqual(@as(usize, 130), materialized.len);
 }

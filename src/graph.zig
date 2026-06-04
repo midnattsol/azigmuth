@@ -12,42 +12,19 @@ const query = @import("query.zig");
 const repair = @import("maintenance/repair.zig");
 const validate_mod = @import("maintenance/validate.zig");
 const node_validity = @import("core/node_validity.zig");
+const bfs_mod = @import("algorithms/bfs.zig");
+const dfs_mod = @import("algorithms/dfs.zig");
+const cycle_mod = @import("algorithms/cycle.zig");
 
-// ── Re-exports for test access ──────────────────────────────────────────
-pub const constants_mod = constants;
-pub const types_mod = types;
-pub const graph_core_mod = graph_core;
-pub const page_ops_mod = page_ops;
-pub const adjacency_mod = adjacency;
-pub const rcu_mod = rcu;
-pub const mutation_mod = mutation;
-pub const mutation_common_mod = @import("mutation/common.zig");
-pub const repair_mod = repair;
-pub const node_validity_mod = node_validity;
-pub const bfs_mod = @import("algorithms/bfs.zig");
-pub const dfs_mod = @import("algorithms/dfs.zig");
-pub const cycle_mod = @import("algorithms/cycle.zig");
-
-// ── Re-exports ───────────────────────────────────────────────────────────
+// ── Internal API used by public wrappers ─────────────────────────────────
 pub const NodeId = types.NodeId;
 pub const GraphError = types.GraphError;
 pub const DeinitError = error{ GraphBusy };
 pub const NodeFlags = types.NodeFlags;
 pub const EdgeFlags = types.EdgeFlags;
 pub const Edge = types.Edge;
-pub const NodeAdj = types.NodeAdj;
-pub const NodeBuffer = types.NodeBuffer;
-pub const EdgeBlockFwd = types.EdgeBlockFwd;
-pub const EdgeBlockRev = types.EdgeBlockRev;
-pub const EdgeBlockGroup = types.EdgeBlockGroup;
-pub const RetiredBlock = types.RetiredBlock;
 pub const Violation = types.Violation;
 pub const NeighborIterator = query.NeighborIterator;
-
-pub const NODES_PER_PAGE = constants.NODES_PER_PAGE;
-pub const EDGE_BLOCKS_PER_PAGE = constants.EDGE_BLOCKS_PER_PAGE;
-pub const EDGE_GROUPS_PER_PAGE = constants.EDGE_GROUPS_PER_PAGE;
-pub const GraphCore = graph_core.GraphCore;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -298,6 +275,24 @@ pub const Graph = struct {
         return query.inDegree(&self.graph, node);
     }
 
+    pub fn bfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
+        return bfs_mod.bfs(&self.graph, start, allocator);
+    }
+
+    pub fn dfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
+        return dfs_mod.dfs(&self.graph, start, allocator);
+    }
+
+    pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) GraphError!bool {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
+        return cycle_mod.hasCycle(&self.graph, allocator);
+    }
+
     // ── Repair API ────────────────────────────────────────────────────
 
     pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
@@ -333,4 +328,4 @@ pub const Graph = struct {
     }
 };
 
-pub const GraphBuilder = @import("api/builder.zig").GraphBuilder;
+pub const GraphBuilder = @import("internal/builder.zig").GraphBuilder;

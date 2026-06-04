@@ -1,4 +1,5 @@
-//! Batch graph construction — build a graph from sorted edge batches, then freeze into the CSR representation.
+//! Internal batch graph construction engine used by the public opaque
+//! `GraphBuilder` wrapper and white-box tests.
 
 const std = @import("std");
 const constants = @import("../core/constants.zig");
@@ -9,16 +10,6 @@ const graph_mod = @import("../graph.zig");
 const Graph = graph_mod.Graph;
 const GraphError = types.GraphError;
 
-// ── Batch construction ────────────────────────────────────────────────
-
-/// Builds a Graph from dynamic node/edge additions, then `freeze()`s it
-/// into the read-optimized CSR representation.
-///
-/// Each node receives a monotonic `NodeId`. Edges are added one at a time
-/// and validated eagerly (duplicate edges are rejected).
-///
-/// Call `freeze()` to obtain the final `Graph`. After freezing, the builder
-/// must NOT be used again; `deinit()` only releases builder scratch storage.
 const BuilderEdge = struct {
     source: u32,
     destination: u32,
@@ -46,7 +37,6 @@ pub const GraphBuilder = struct {
     edge_keys: std.AutoHashMap(u64, void),
     frozen: bool = false,
 
-    /// Creates a new builder backed by `allocator`.
     pub fn init(allocator: std.mem.Allocator) !GraphBuilder {
         var graph = try Graph.init(allocator);
         errdefer graph.deinit();
@@ -56,7 +46,6 @@ pub const GraphBuilder = struct {
         };
     }
 
-    /// Frees builder scratch resources and, if not frozen, the graph itself.
     pub fn deinit(self: *GraphBuilder) void {
         const allocator = self.graph.graph.allocator;
         self.edges.deinit(allocator);
@@ -64,15 +53,11 @@ pub const GraphBuilder = struct {
         if (!self.frozen) self.graph.deinit();
     }
 
-    /// Allocates a new node and returns its `NodeId`.
     pub fn addNode(self: *GraphBuilder) !types.NodeId {
         if (self.frozen) return error.UnsupportedOperation;
         return self.graph.addNode();
     }
 
-    /// Adds a directed edge `source → destination` with the given relation
-    /// label and edge flags. Returns `error.EdgeAlreadyExists` if an identical
-    /// edge already exists in the build graph.
     pub fn addEdge(self: *GraphBuilder, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
         if (self.frozen) return error.UnsupportedOperation;
         if (!self.graph.hasNode(source) or !self.graph.hasNode(destination)) return error.InvalidNode;
@@ -254,9 +239,6 @@ pub const GraphBuilder = struct {
         }
     }
 
-    /// Transfers ownership of the constructed graph to the caller.
-    /// The caller is responsible for calling `graph.deinit()` on the returned
-    /// value. The builder becomes inert after this call.
     pub fn freeze(self: *GraphBuilder) !Graph {
         if (self.frozen) return error.UnsupportedOperation;
 

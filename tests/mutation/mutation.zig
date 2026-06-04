@@ -101,7 +101,7 @@ test "mutation: reverse adjacency grows and iterates across multiple blocks" {
     try testing.expectEqual(source_count, try graph.inDegree(destination));
 
     var iterator = try graph.inNeighbors(destination);
-    const incoming_sources = try iterator.materialize(testing.allocator);
+    const incoming_sources = try iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(incoming_sources);
 
     try neighbors.expectNeighborSet(incoming_sources, &sources, graph.nodeCount(), testing.allocator);
@@ -129,7 +129,7 @@ test "mutation: removeEdge from grouped reverse adjacency preserves other incomi
     try testing.expectEqual(source_count - 1, try graph.inDegree(destination));
 
     var iterator = try graph.inNeighbors(destination);
-    const incoming_sources = try iterator.materialize(testing.allocator);
+    const incoming_sources = try iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(incoming_sources);
 
     try neighbors.expectNodeAbsent(incoming_sources, sources[0]);

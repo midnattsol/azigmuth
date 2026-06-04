@@ -107,7 +107,7 @@ test "contract: removeNode tolerates unrelated predecessor forward mutation" {
     var mutator_thread = try std.Thread.spawn(.{}, forwardMutatorInLoop, .{&mut_ctx});
 
     var wait: usize = 0;
-    while (rm_ctx.successes.load(.acquire) == 0 and wait < SpinBudget) : (wait += 1) {
+    while ((rm_ctx.successes.load(.acquire) == 0 or mut_ctx.mutations.load(.acquire) == 0) and wait < SpinBudget) : (wait += 1) {
         std.atomic.spinLoopHint();
     }
     stop.store(true, .release);

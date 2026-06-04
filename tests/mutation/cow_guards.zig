@@ -73,7 +73,7 @@ test "cow guard: addEdge self-edge does not mutate published blocks in-place" {
     _ = node_buffer.loadPublishedMeta();
 
     var it = try graph.neighbors(node);
-    const neighbors = try it.materialize(testing.allocator);
+    const neighbors = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 1), neighbors.len);

@@ -1,5 +1,5 @@
 const std = @import("std");
-const graph_mod = @import("graph_mod");
+const graphz = @import("graphz");
 
 const testing = std.testing;
 
@@ -17,7 +17,7 @@ const RandomStream = struct {
 };
 
 fn expectGraphMatchesModel(
-    graph: *const graph_mod.Graph,
+    graph: *const graphz.Graph,
     comptime node_count: usize,
     model: *const [node_count][node_count]bool,
     expected_edge_count: u64,
@@ -36,6 +36,7 @@ fn expectGraphMatchesModel(
         try testing.expectEqual(expected_in_degree, try graph.inDegree(.{ .index = @intCast(source_index) }));
 
         var iterator = try graph.neighbors(.{ .index = @intCast(source_index) });
+        defer iterator.deinit();
         const neighbors = try iterator.materialize(testing.allocator);
         defer testing.allocator.free(neighbors);
         try testing.expectEqual(expected_out_degree, neighbors.len);
@@ -47,7 +48,7 @@ fn expectGraphMatchesModel(
 
 test "fuzz: random single-block mutations match a reference matrix" {
     const node_count = 24;
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     for (0..node_count) |_| {
@@ -61,14 +62,14 @@ test "fuzz: random single-block mutations match a reference matrix" {
     for (0..350) |step| {
         const source_index = random.bounded(node_count);
         const target_index = random.bounded(node_count);
-        const source = graph_mod.NodeId{ .index = source_index };
-        const target = graph_mod.NodeId{ .index = target_index };
+        const source = graphz.NodeId{ .index = source_index };
+        const target = graphz.NodeId{ .index = target_index };
 
         if (random.bounded(2) == 0) {
             if (model[source_index][target_index]) {
-                try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(source, target, 0, 0));
+                try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(source, target, 0, .{}));
             } else {
-                try graph.addEdge(source, target, 0, 0);
+                try graph.addEdge(source, target, 0, .{});
                 model[source_index][target_index] = true;
                 expected_edge_count += 1;
             }
@@ -87,7 +88,7 @@ test "fuzz: random single-block mutations match a reference matrix" {
         }
     }
 
-    try expectGraphMatchesModel(&graph, node_count, &model, expected_edge_count);
+    try expectGraphMatchesModel(graph, node_count, &model, expected_edge_count);
 
     // Full structural validation at the end.
     const violations = try graph.debugValidate(testing.allocator);
@@ -97,11 +98,11 @@ test "fuzz: random single-block mutations match a reference matrix" {
 
 test "fuzz: random hub mutations preserve model state across multi-block adjacency" {
     const target_count = 100;
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var targets: [target_count]graph_mod.NodeId = undefined;
+    var targets: [target_count]graphz.NodeId = undefined;
     for (0..target_count) |target_index| {
         targets[target_index] = try graph.addNode();
     }
@@ -116,9 +117,9 @@ test "fuzz: random hub mutations preserve model state across multi-block adjacen
 
         if (random.bounded(2) == 0) {
             if (model[target_offset]) {
-                try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(source, target, 0, 0));
+                try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(source, target, 0, .{}));
             } else {
-                try graph.addEdge(source, target, 0, 0);
+                try graph.addEdge(source, target, 0, .{});
                 model[target_offset] = true;
                 expected_edge_count += 1;
             }

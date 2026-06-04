@@ -113,6 +113,29 @@ test "contract: double deinit on iterator is harmless" {
     iter.deinit();
 }
 
+test "contract: copied iterator is invalidated when sibling deinits" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const first_destination = try graph.addNode();
+    const second_destination = try graph.addNode();
+    try graph.addEdge(source, first_destination, 0, .{});
+    try graph.addEdge(source, second_destination, 0, .{});
+
+    var iter = try graph.neighbors(source);
+    var copied = iter;
+
+    try testing.expect(copied.next() != null);
+    iter.deinit();
+
+    try testing.expect(copied.next() == null);
+    const remaining = try copied.materialize(testing.allocator);
+    defer testing.allocator.free(remaining);
+    try testing.expectEqual(@as(usize, 0), remaining.len);
+    copied.deinit();
+}
+
 // ── Edge mutations ─────────────────────────────────────────────────────────
 
 test "contract: addEdge with non-zero relation and flags" {
@@ -581,6 +604,20 @@ test "contract: builder freeze on empty builder succeeds" {
 
     try testing.expectEqual(@as(usize, 0), graph.nodeCount());
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+    try graph.validate();
+}
+
+test "contract: builder freeze OutOfMemory leaves builder usable" {
+    var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
+    var builder = try graphz.GraphBuilder.init(failing_allocator.allocator());
+    defer builder.deinit();
+
+    failing_allocator.fail_index = failing_allocator.alloc_index;
+    try testing.expectError(error.OutOfMemory, builder.freeze());
+
+    failing_allocator.fail_index = std.math.maxInt(usize);
+    var graph = try builder.freeze();
+    defer graph.deinit();
     try graph.validate();
 }
 

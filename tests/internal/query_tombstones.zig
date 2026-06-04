@@ -18,7 +18,7 @@ test "tombstones: neighbors skips removed destination nodes" {
     try graph.validate();
 
     var it = try graph.neighbors(source);
-    const neighbors = try it.materialize(testing.allocator);
+    const neighbors = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 2), neighbors.len);
@@ -42,7 +42,7 @@ test "tombstones: inNeighbors skips removed source nodes" {
     try graph.validate();
 
     var it = try graph.inNeighbors(target);
-    const incoming = try it.materialize(testing.allocator);
+    const incoming = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(incoming);
 
     try testing.expectEqual(@as(usize, 2), incoming.len);
@@ -99,7 +99,7 @@ test "tombstones: neighbors iterates past multiple consecutive removed nodes" {
     try graph.validate();
 
     var it = try graph.neighbors(source);
-    const neighbors = try it.materialize(testing.allocator);
+    const neighbors = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 7), neighbors.len);
@@ -120,7 +120,7 @@ test "tombstones: inNeighbors iterates past multiple consecutive removed sources
     try graph.validate();
 
     var it = try graph.inNeighbors(target);
-    const incoming = try it.materialize(testing.allocator);
+    const incoming = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(incoming);
 
     try testing.expectEqual(@as(usize, 7), incoming.len);
@@ -230,12 +230,12 @@ test "tombstones: validate correctly counts visible edges only" {
     try graph.validate();
 
     var it_a = try graph.neighbors(a);
-    const a_neighbors = try it_a.materialize(testing.allocator);
+    const a_neighbors = try it_a.materializeConsuming(testing.allocator);
     defer testing.allocator.free(a_neighbors);
     try testing.expectEqual(@as(usize, 0), a_neighbors.len);
 
     var it_c = try graph.inNeighbors(c);
-    const c_incoming = try it_c.materialize(testing.allocator);
+    const c_incoming = try it_c.materializeConsuming(testing.allocator);
     defer testing.allocator.free(c_incoming);
     try testing.expectEqual(@as(usize, 0), c_incoming.len);
 }
@@ -254,7 +254,7 @@ test "tombstones: neighbors returns empty when all destinations are removed" {
     try graph.removeNode(b);
 
     var it = try graph.neighbors(source);
-    const neighbors = try it.materialize(testing.allocator);
+    const neighbors = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbors);
     try testing.expectEqual(@as(usize, 0), neighbors.len);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
@@ -274,7 +274,7 @@ test "tombstones: inNeighbors returns empty when all sources are removed" {
     try graph.removeNode(b);
 
     var it = try graph.inNeighbors(target);
-    const incoming = try it.materialize(testing.allocator);
+    const incoming = try it.materializeConsuming(testing.allocator);
     defer testing.allocator.free(incoming);
     try testing.expectEqual(@as(usize, 0), incoming.len);
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(target));

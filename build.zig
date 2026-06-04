@@ -20,8 +20,8 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&lib_check.step);
 
     // ---- test: single module provides all test access ----
-    const graph_mod = b.addModule("graph_mod", .{
-        .root_source_file = b.path("src/graph.zig"),
+    const graph_mod = b.createModule(.{
+        .root_source_file = b.path("src/graph_mod.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -72,15 +72,40 @@ fn addTestFile(
         .target = target,
         .optimize = optimize,
     });
-    test_mod.addImport("graph_mod", graph_mod);
     test_mod.addImport("graphz", graphz_mod);
-    test_mod.addImport("publish", publish_mod);
-    test_mod.addImport("graph_helpers", graph_helpers_mod);
-    test_mod.addImport("neighbors", neighbors_mod);
+
+    if (testNeedsInternals(test_path)) {
+        test_mod.addImport("graph_mod", graph_mod);
+        test_mod.addImport("publish", publish_mod);
+        test_mod.addImport("graph_helpers", graph_helpers_mod);
+        test_mod.addImport("neighbors", neighbors_mod);
+    }
 
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
     test_step.dependOn(&run_tests.step);
+}
+
+fn testNeedsInternals(test_path: []const u8) bool {
+    const whitebox_prefixes = [_][]const u8{
+        "helpers/",
+        "internal/",
+        "mutation/",
+        "storage/",
+        "rcu/",
+        "repair/",
+        "validation/",
+        "oom/",
+        "remove_node/",
+        "fuzz/",
+        "concurrent/",
+    };
+
+    for (whitebox_prefixes) |prefix| {
+        if (std.mem.startsWith(u8, test_path, prefix)) return true;
+    }
+
+    return false;
 }
 
 fn addTestFiles(

@@ -2,19 +2,19 @@
 //! node removal, tombstone visibility, and repair compaction.
 
 const std = @import("std");
-const graph_mod = @import("graph_mod");
+const graphz = @import("graphz");
 
 const testing = std.testing;
 
 test "tombstone regression: removeNode clears outgoing from all destinations" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
-    var destinations: [6]graph_mod.NodeId = undefined;
+    var destinations: [6]graphz.NodeId = undefined;
     for (0..destinations.len) |i| {
         destinations[i] = try graph.addNode();
-        try graph.addEdge(hub, destinations[i], 0, 0);
+        try graph.addEdge(hub, destinations[i], 0, .{});
     }
 
     try graph.removeNode(hub);
@@ -29,14 +29,14 @@ test "tombstone regression: removeNode clears outgoing from all destinations" {
 }
 
 test "tombstone regression: removeNode leaves invisible incoming tombstones" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
-    var sources: [6]graph_mod.NodeId = undefined;
+    var sources: [6]graphz.NodeId = undefined;
     for (0..sources.len) |i| {
         sources[i] = try graph.addNode();
-        try graph.addEdge(sources[i], target, 0, 0);
+        try graph.addEdge(sources[i], target, 0, .{});
     }
 
     try graph.removeNode(target);
@@ -52,15 +52,15 @@ test "tombstone regression: removeNode leaves invisible incoming tombstones" {
 }
 
 test "tombstone regression: removeNode self-edge works correctly" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
     const other = try graph.addNode();
 
-    try graph.addEdge(node, node, 0, 0);
-    try graph.addEdge(node, other, 0, 0);
-    try graph.addEdge(other, node, 0, 0);
+    try graph.addEdge(node, node, 0, .{});
+    try graph.addEdge(node, other, 0, .{});
+    try graph.addEdge(other, node, 0, .{});
 
     try graph.removeNode(node);
 
@@ -73,15 +73,15 @@ test "tombstone regression: removeNode self-edge works correctly" {
 }
 
 test "tombstone regression: removeNode with incoming from already-removed nodes" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
     const b = try graph.addNode();
     const c = try graph.addNode();
 
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(c, b, 0, 0);
+    try graph.addEdge(a, b, 0, .{});
+    try graph.addEdge(c, b, 0, .{});
 
     // Remove A first — this clears A's forward and B's reverse for A.
     try graph.removeNode(a);
@@ -100,14 +100,14 @@ test "tombstone regression: removeNode with incoming from already-removed nodes"
 }
 
 test "tombstone compaction: removeNode + repairBudgeted eliminates structural tombstones" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
-    var sources: [4]graph_mod.NodeId = undefined;
+    var sources: [4]graphz.NodeId = undefined;
     for (0..sources.len) |i| {
         sources[i] = try graph.addNode();
-        try graph.addEdge(sources[i], target, 0, 0);
+        try graph.addEdge(sources[i], target, 0, .{});
     }
 
     try graph.removeNode(target);
@@ -129,16 +129,16 @@ test "tombstone compaction: removeNode + repairBudgeted eliminates structural to
 }
 
 test "tombstone stress: removeNode on hub with many incoming and outgoing" {
-    var graph = try graph_mod.Graph.init(testing.allocator);
+    var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
     const peer_count: usize = 15;
-    var peers: [peer_count]graph_mod.NodeId = undefined;
+    var peers: [peer_count]graphz.NodeId = undefined;
     for (0..peer_count) |i| {
         peers[i] = try graph.addNode();
-        try graph.addEdge(hub, peers[i], 0, 0);
-        try graph.addEdge(peers[i], hub, 0, 0);
+        try graph.addEdge(hub, peers[i], 0, .{});
+        try graph.addEdge(peers[i], hub, 0, .{});
     }
 
     try graph.validate();

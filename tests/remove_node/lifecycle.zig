@@ -92,7 +92,7 @@ test "repairNode: consolidates a fragmented reverse adjacency into a contiguous 
     try testing.expectEqual(@as(usize, source_count - remove_indices.len), try graph.inDegree(target));
 
     var snapshot = try graph.inNeighbors(target);
-    const neighbor_list = try snapshot.materialize(allocator);
+    const neighbor_list = try snapshot.materializeConsuming(allocator);
     defer allocator.free(neighbor_list);
     try testing.expectEqual(@as(usize, source_count - remove_indices.len), neighbor_list.len);
     for (neighbor_list) |neighbor| {
@@ -128,7 +128,7 @@ test "block capacity: 64th edge keeps a single block, 65th triggers a second blo
     try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
 
     var iterator = try graph.neighbors(source);
-    const neighbor_list = try iterator.materialize(testing.allocator);
+    const neighbor_list = try iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbor_list);
     try testing.expectEqual(@as(usize, 65), neighbor_list.len);
     var i: usize = 1;

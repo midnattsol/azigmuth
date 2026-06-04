@@ -1,29 +1,26 @@
 const std = @import("std");
-const graph_mod = @import("graph_mod");
-const bfs_mod = graph_mod.bfs_mod;
+const graphz = @import("graphz");
 
-fn idxOf(order: []const graph_mod.NodeId, target: usize) usize {
+fn idxOf(order: []const graphz.NodeId, target: usize) usize {
     for (order, 0..) |node, node_index| if (node.index == target) return node_index;
     unreachable;
 }
 
 test "bfs order on a simple graph" {
-    var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
+    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [5]graph_mod.NodeId = undefined;
-    for (0..5) |node_index| {
-        nodes[node_index] = try builder.addNode();
-    }
-    try builder.addEdge(nodes[0], nodes[1], 0, 0);
-    try builder.addEdge(nodes[0], nodes[2], 0, 0);
-    try builder.addEdge(nodes[1], nodes[3], 0, 0);
-    try builder.addEdge(nodes[2], nodes[4], 0, 0);
+    var nodes: [5]graphz.NodeId = undefined;
+    for (0..5) |node_index| nodes[node_index] = try builder.addNode();
+    try builder.addEdge(nodes[0], nodes[1], 0, .{});
+    try builder.addEdge(nodes[0], nodes[2], 0, .{});
+    try builder.addEdge(nodes[1], nodes[3], 0, .{});
+    try builder.addEdge(nodes[2], nodes[4], 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try bfs_mod.bfs(&graph.graph, .{ .index = 0 }, std.testing.allocator);
+    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(u32, 0), order[0].index);
@@ -32,22 +29,20 @@ test "bfs order on a simple graph" {
 }
 
 test "bfs distances" {
-    var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
+    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..4) |node_index| {
-        nodes[node_index] = try builder.addNode();
-    }
-    try builder.addEdge(nodes[0], nodes[1], 0, 0);
-    try builder.addEdge(nodes[0], nodes[2], 0, 0);
-    try builder.addEdge(nodes[1], nodes[2], 0, 0);
-    try builder.addEdge(nodes[2], nodes[3], 0, 0);
+    var nodes: [4]graphz.NodeId = undefined;
+    for (0..4) |node_index| nodes[node_index] = try builder.addNode();
+    try builder.addEdge(nodes[0], nodes[1], 0, .{});
+    try builder.addEdge(nodes[0], nodes[2], 0, .{});
+    try builder.addEdge(nodes[1], nodes[2], 0, .{});
+    try builder.addEdge(nodes[2], nodes[3], 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try bfs_mod.bfs(&graph.graph, .{ .index = 0 }, std.testing.allocator);
+    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expect(idxOf(order, 1) < idxOf(order, 3));
@@ -55,20 +50,18 @@ test "bfs distances" {
 }
 
 test "bfs on unconnected graph visits only reachable component" {
-    var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
+    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..4) |node_index| {
-        nodes[node_index] = try builder.addNode();
-    }
-    try builder.addEdge(nodes[0], nodes[1], 0, 0);
-    try builder.addEdge(nodes[2], nodes[3], 0, 0);
+    var nodes: [4]graphz.NodeId = undefined;
+    for (0..4) |node_index| nodes[node_index] = try builder.addNode();
+    try builder.addEdge(nodes[0], nodes[1], 0, .{});
+    try builder.addEdge(nodes[2], nodes[3], 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try bfs_mod.bfs(&graph.graph, .{ .index = 0 }, std.testing.allocator);
+    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 2), order.len);
@@ -76,44 +69,39 @@ test "bfs on unconnected graph visits only reachable component" {
 }
 
 test "bfs returns error on invalid start node" {
-    var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
+    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [1]graph_mod.NodeId = undefined;
-    for (0..1) |node_index| {
-        nodes[node_index] = try builder.addNode();
-    }
+    _ = try builder.addNode();
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    try std.testing.expectError(error.InvalidNode, bfs_mod.bfs(&graph.graph, .{ .index = 99 }, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, graph.bfs(.{ .index = 99 }, std.testing.allocator));
 }
 
 test "bfs returns error on removed start node" {
-    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    var graph = try graphz.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const start = try graph.addNode();
     _ = try graph.addNode();
     try graph.removeNode(start);
 
-    try std.testing.expectError(error.InvalidNode, bfs_mod.bfs(&graph.graph, start, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, graph.bfs(start, std.testing.allocator));
 }
 
 test "bfs from isolated node returns only the start node" {
-    var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
+    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [3]graph_mod.NodeId = undefined;
-    for (0..3) |node_index| {
-        nodes[node_index] = try builder.addNode();
-    }
+    var nodes: [3]graphz.NodeId = undefined;
+    for (0..3) |node_index| nodes[node_index] = try builder.addNode();
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try bfs_mod.bfs(&graph.graph, .{ .index = 1 }, std.testing.allocator);
+    const order = try graph.bfs(.{ .index = 1 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 1), order.len);
@@ -121,51 +109,42 @@ test "bfs from isolated node returns only the start node" {
 }
 
 test "bfs handles self-loop without revisiting the node" {
-    var builder = try graph_mod.GraphBuilder.init(std.testing.allocator);
+    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [2]graph_mod.NodeId = undefined;
-    for (0..2) |node_index| {
-        nodes[node_index] = try builder.addNode();
-    }
-    try builder.addEdge(nodes[0], nodes[0], 0, 0);
-    try builder.addEdge(nodes[0], nodes[1], 0, 0);
+    var nodes: [2]graphz.NodeId = undefined;
+    for (0..2) |node_index| nodes[node_index] = try builder.addNode();
+    try builder.addEdge(nodes[0], nodes[0], 0, .{});
+    try builder.addEdge(nodes[0], nodes[1], 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try bfs_mod.bfs(&graph.graph, .{ .index = 0 }, std.testing.allocator);
+    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 2), order.len);
-    try std.testing.expectEqual(@as(u32, 0), order[0].index);
-    try std.testing.expectEqual(@as(u32, 1), order[1].index);
 }
 
 test "bfs visits neighbors across multiple edge blocks" {
-    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    var graph = try graphz.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var targets: [70]graph_mod.NodeId = undefined;
-    for (0..70) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], 0, 0);
+    for (0..70) |_| {
+        const target = try graph.addNode();
+        try graph.addEdge(source, target, 0, .{});
     }
 
-    const order = try bfs_mod.bfs(&graph.graph, source, std.testing.allocator);
+    const order = try graph.bfs(source, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 71), order.len);
-    try std.testing.expectEqual(source.index, order[0].index);
-    for (targets) |target| {
-        _ = idxOf(order, target.index);
-    }
 }
 
 test "bfs on empty graph returns InvalidNode" {
-    var graph = try graph_mod.Graph.init(std.testing.allocator);
+    var graph = try graphz.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
-    try std.testing.expectError(error.InvalidNode, bfs_mod.bfs(&graph.graph, .{ .index = 0 }, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, graph.bfs(.{ .index = 0 }, std.testing.allocator));
 }

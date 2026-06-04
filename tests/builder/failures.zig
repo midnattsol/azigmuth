@@ -1,9 +1,9 @@
 const std = @import("std");
-const graph_mod = @import("graph_mod");
+const graphz = @import("graphz");
 const testing = std.testing;
 
 test "graph_builder: freeze on empty graph works" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     var g = try b.freeze();
@@ -11,16 +11,16 @@ test "graph_builder: freeze on empty graph works" {
 }
 
 test "graph_builder: freeze after adding nodes and edges works" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
     const b_node = try b.addNode();
     const c = try b.addNode();
 
-    try b.addEdge(a, b_node, 0, 0);
-    try b.addEdge(b_node, c, 0, 0);
-    try b.addEdge(a, c, 0, 0);
+    try b.addEdge(a, b_node, 0, .{});
+    try b.addEdge(b_node, c, 0, .{});
+    try b.addEdge(a, c, 0, .{});
 
     var g = try b.freeze();
     defer g.deinit();
@@ -31,27 +31,27 @@ test "graph_builder: freeze after adding nodes and edges works" {
 }
 
 test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
     const b_node = try b.addNode();
 
-    try b.addEdge(a, b_node, 0, 0);
-    try testing.expectError(error.EdgeAlreadyExists, b.addEdge(a, b_node, 0, 0));
+    try b.addEdge(a, b_node, 0, .{});
+    try testing.expectError(error.EdgeAlreadyExists, b.addEdge(a, b_node, 0, .{}));
 }
 
 test "graph_builder: addEdge to non-existent node returns InvalidNode" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
-    try testing.expectError(error.InvalidNode, b.addEdge(a, .{ .index = 999 }, 0, 0));
-    try testing.expectError(error.InvalidNode, b.addEdge(.{ .index = 999 }, a, 0, 0));
+    try testing.expectError(error.InvalidNode, b.addEdge(a, .{ .index = 999 }, 0, .{}));
+    try testing.expectError(error.InvalidNode, b.addEdge(.{ .index = 999 }, a, 0, .{}));
 }
 
 test "graph_builder: freeze twice returns UnsupportedOperation" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -61,7 +61,7 @@ test "graph_builder: freeze twice returns UnsupportedOperation" {
 }
 
 test "graph_builder: addNode after freeze returns UnsupportedOperation" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -71,18 +71,18 @@ test "graph_builder: addNode after freeze returns UnsupportedOperation" {
 }
 
 test "graph_builder: addEdge after freeze returns UnsupportedOperation" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
     const b_node = try b.addNode();
     var g = try b.freeze();
     defer g.deinit();
-    try testing.expectError(error.UnsupportedOperation, b.addEdge(a, b_node, 0, 0));
+    try testing.expectError(error.UnsupportedOperation, b.addEdge(a, b_node, 0, .{}));
 }
 
 test "graph_builder: freeze with no edges returns valid graph" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -98,21 +98,22 @@ test "graph_builder: freeze with no edges returns valid graph" {
 }
 
 test "graph_builder: graph from freeze has correct adjacency" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
     const b_node = try b.addNode();
     const c = try b.addNode();
 
-    try b.addEdge(a, b_node, 1, 0);
-    try b.addEdge(a, c, 2, 0);
-    try b.addEdge(b_node, c, 3, 0);
+    try b.addEdge(a, b_node, 1, .{});
+    try b.addEdge(a, c, 2, .{});
+    try b.addEdge(b_node, c, 3, .{});
 
     var g = try b.freeze();
     defer g.deinit();
 
     var it = try g.neighbors(a);
+    defer it.deinit();
     const neighbors = try it.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
 
@@ -122,11 +123,11 @@ test "graph_builder: graph from freeze has correct adjacency" {
 }
 
 test "graph_builder: self-edge in builder works" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const node = try b.addNode();
-    try b.addEdge(node, node, 0, 0);
+    try b.addEdge(node, node, 0, .{});
 
     var g = try b.freeze();
     defer g.deinit();
@@ -137,16 +138,16 @@ test "graph_builder: self-edge in builder works" {
 }
 
 test "graph_builder: many edges added then freeze" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const node_count: usize = 10;
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try b.addNode();
 
     for (0..node_count) |i| {
         for (0..node_count) |j| {
-            if (i != j) try b.addEdge(nodes[i], nodes[j], 0, 0);
+            if (i != j) try b.addEdge(nodes[i], nodes[j], 0, .{});
         }
     }
 
@@ -158,7 +159,7 @@ test "graph_builder: many edges added then freeze" {
 }
 
 test "graph_builder: builder deinit without freeze frees graph" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -166,16 +167,16 @@ test "graph_builder: builder deinit without freeze frees graph" {
 }
 
 test "graph_builder: edge ordering sorted after freeze" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const source = try b.addNode();
-    var targets: [20]graph_mod.NodeId = undefined;
+    var targets: [20]graphz.NodeId = undefined;
     for (0..20) |i| targets[i] = try b.addNode();
 
     const insertion_order = [_]usize{ 15, 3, 8, 1, 19, 7, 12, 0, 5, 17, 2, 14, 9, 11, 6, 18, 4, 13, 16, 10 };
     for (insertion_order) |target_idx| {
-        try b.addEdge(source, targets[target_idx], 0, 0);
+        try b.addEdge(source, targets[target_idx], 0, .{});
     }
 
     var g = try b.freeze();
@@ -195,16 +196,16 @@ test "graph_builder: edge ordering sorted after freeze" {
 }
 
 test "graph_builder: reverse adjacency sorted after freeze" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const target = try b.addNode();
-    var sources: [20]graph_mod.NodeId = undefined;
+    var sources: [20]graphz.NodeId = undefined;
     for (0..20) |i| sources[i] = try b.addNode();
 
     const insertion_order = [_]usize{ 15, 3, 8, 1, 19, 7, 12, 0, 5, 17, 2, 14, 9, 11, 6, 18, 4, 13, 16, 10 };
     for (insertion_order) |src_idx| {
-        try b.addEdge(sources[src_idx], target, 0, 0);
+        try b.addEdge(sources[src_idx], target, 0, .{});
     }
 
     var g = try b.freeze();
@@ -224,16 +225,16 @@ test "graph_builder: reverse adjacency sorted after freeze" {
 }
 
 test "graph_builder: freeze produces graph that passes validate" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const node_count: usize = 15;
-    var nodes: [node_count]graph_mod.NodeId = undefined;
+    var nodes: [node_count]graphz.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try b.addNode();
 
     for (0..node_count) |i| {
         for (0..node_count) |j| {
-            if (i != j) try b.addEdge(nodes[i], nodes[j], 0, 0);
+            if (i != j) try b.addEdge(nodes[i], nodes[j], 0, .{});
         }
     }
 
@@ -248,14 +249,14 @@ test "graph_builder: freeze produces graph that passes validate" {
 }
 
 test "graph_builder: degree cache correct after freeze" {
-    var b = try graph_mod.GraphBuilder.init(testing.allocator);
+    var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const source = try b.addNode();
     const target_count: usize = 50;
-    var targets: [target_count]graph_mod.NodeId = undefined;
+    var targets: [target_count]graphz.NodeId = undefined;
     for (0..target_count) |i| targets[i] = try b.addNode();
-    for (0..target_count) |i| try b.addEdge(source, targets[i], 0, 0);
+    for (0..target_count) |i| try b.addEdge(source, targets[i], 0, .{});
 
     var g = try b.freeze();
     defer g.deinit();

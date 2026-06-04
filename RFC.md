@@ -297,16 +297,16 @@ pub const DeinitError = error{GraphBusy};
 
 | Error | May be returned by | Meaning |
 |-------|-------------------|---------|
-| `OutOfMemory` | `init`, `addNode`, `addEdge`, `repairNode`, `repairBudgeted`, `debugValidate`, `neighborsMaterialized`, `inNeighborsMaterialized`, `bfs`, `dfs`, `NeighborIterator.materialize` | Allocator exhausted. Graph unchanged. |
+| `OutOfMemory` | `init`, `addNode`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted`, `debugValidate`, `neighborsMaterialized`, `inNeighborsMaterialized`, `bfs`, `dfs`, `NeighborIterator.materialize` | Allocator exhausted. Graph unchanged. |
 | `InvalidNode` | All queries taking `NodeId` (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`, `hasNode`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`) | `id.index >= node_count`, or node is removed/tombstoned. |
 | `EdgeAlreadyExists` | `addEdge` | Duplicate edge in non-multigraph mode. |
-| `CorruptGraph` | `validate` | Structural invariant violated. |
+| `CorruptGraph` | `validate`, `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Structural invariant violated, or a mutating/repair API detected published state that cannot satisfy the RFC invariants. |
 | `ConcurrentMutation` | `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Contended writer/repair operation detected; caller should retry later. |
 | `UnsupportedOperation` | multigraph ops (Phase 3) | Feature not yet in current phase. |
 | `RepairRequired` | `addEdge`, `removeEdge` (if sync repair disabled) | Hard amplification bound would be violated. Call `repairNode` or `repairBudgeted`. |
-| `GraphBusy` | `deinitChecked`; any `GraphError`-returning API racing with `deinitChecked` | The graph is busy or closing. `deinitChecked` returns it when active readers/writers/repairers still exist. Other fallible APIs may return it when teardown has atomically closed the graph to new work. |
+| `GraphBusy` | `deinitChecked`; any `GraphError`-returning API racing with `deinitChecked`; read APIs when reader-token capacity is exhausted | The graph is busy or closing. `deinitChecked` returns it when active readers/writers/repairers still exist. Other fallible APIs may return it when teardown has atomically closed the graph to new work, or when the implementation cannot mint another tracked reader token at that moment. |
 
-`removeEdge` returns `bool`: `true` if the edge was found and removed, `false` if it did not exist. It does NOT return `error.EdgeNotFound`.
+`removeEdge` returns `bool`: `true` if the edge was found and removed, `false` if it did not exist. It does NOT return `error.EdgeNotFound`. It MAY still return `error.CorruptGraph` if the published forward/reverse state is internally inconsistent.
 
 ### 4.3 Public handle model
 
@@ -320,6 +320,10 @@ file `src/graph.zig` and all modules under `src/core/`, `src/mutation/`,
 `NeighborIterator` is returned **by value** — creating an iterator does not
 heap-allocate.  The iterator still holds an RCU reader token that must be
 released via `deinit()`.
+
+Copies of a `NeighborIterator` value alias the same logical reader guard.
+Calling `deinit()` on any copy invalidates the others; after that, `next()`
+returns `null` and `materialize()` returns the remaining empty slice.
 
 ### 4.4 Ownership and lifecycle
 
@@ -351,7 +355,8 @@ destroy the iterator — `deinit()` is still required.  The iterator is
 exhausted after the call (`next()` returns `null`).
 
 > The internal `query.NeighborIterator` (used by tests via `graph_mod`) has
-> a *consuming* `materialize` that calls `defer self.deinit()`.  The public
+> *consuming* helpers `materializeConsuming` / `materializeExactConsuming`
+> that call `defer self.deinit()`.  The public
 > wrapper removes this behaviour deliberately so that callers control RCU
 > guard lifetime explicitly.  New code should use the public iterator when
 > non‑consuming semantics are desired.
@@ -625,6 +630,10 @@ all readers that could have observed a retired block have exited.
 11. Return true.
 ```
 
+If the published forward edge exists but the corresponding reverse entry is
+missing, `removeEdge` MUST fail with `error.CorruptGraph` rather than silently
+repairing or partially publishing.
+
 ### 6.3 removeNode
 
 Implemented in Phase 2.
@@ -676,6 +685,9 @@ blocks privately, validate, then publish updated `NodeAdj` via RCU
 flip. Repair clears `needs_repair_*` only after the rebuilt layout
 again satisfies the run fragmentation and canonical representation
 rules for that side.
+
+If repair discovers impossible published state while traversing the current
+layout, it MAY fail with `error.CorruptGraph`.
 
 ### 6.5 Multigraph Mode
 

@@ -13,18 +13,32 @@ const std = @import("std");
 const internal = @import("../graph.zig");
 
 pub const NeighborIterator = struct {
-    inner: internal.NeighborIterator,
+    storage: [@sizeOf(internal.NeighborIterator)]u8 align(@alignOf(internal.NeighborIterator)),
+
+    pub fn initFromInternal(iterator: internal.NeighborIterator) NeighborIterator {
+        var out: NeighborIterator = undefined;
+        @memcpy(out.storage[0..], std.mem.asBytes(&iterator));
+        return out;
+    }
+
+    fn inner(self: *NeighborIterator) *internal.NeighborIterator {
+        return @ptrCast(@alignCast(&self.storage));
+    }
+
+    fn innerConst(self: *const NeighborIterator) *const internal.NeighborIterator {
+        return @ptrCast(@alignCast(&self.storage));
+    }
 
     /// Returns the next neighbor, or `null` if exhausted.  Removed nodes are
     /// automatically skipped.
     pub fn next(self: *NeighborIterator) ?internal.NodeId {
-        return self.inner.next();
+        return self.inner().next();
     }
 
     /// Releases the RCU reader token.  Does NOT free heap memory (the iterator
     /// is a value type).  Idempotent — safe to call multiple times.
     pub fn deinit(self: *NeighborIterator) void {
-        self.inner.deinit();
+        self.inner().deinit();
     }
 
     /// Drains remaining items into a caller-owned slice.  Allocates the result
@@ -34,9 +48,9 @@ pub const NeighborIterator = struct {
     /// `deinit()` is still required to release the RCU reader token.
     /// `materialize()` does **not** consume the iterator.
     pub fn materialize(self: *NeighborIterator, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        var out = try std.ArrayList(internal.NodeId).initCapacity(allocator, self.inner.snapshotDegree());
+        var out: std.ArrayList(internal.NodeId) = .empty;
         errdefer out.deinit(allocator);
-        while (self.inner.next()) |neighbor| {
+        while (self.inner().next()) |neighbor| {
             try out.append(allocator, neighbor);
         }
         return out.toOwnedSlice(allocator);

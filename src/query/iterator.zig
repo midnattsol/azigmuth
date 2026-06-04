@@ -90,6 +90,20 @@ pub const NeighborIterator = struct {
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
         if (!self.reader_active) return null;
+        if (!rcu.tryRetainReaderToken(self.reader_token)) {
+            self.reader_active = false;
+            return null;
+        }
+        defer {
+            switch (rcu.releaseRetainedReaderToken(self.reader_token)) {
+                .alive => {},
+                .closed => self.reader_active = false,
+                .finalize => {
+                    self.reader_active = false;
+                    rcu.finalizeReaderExit(@constCast(self.core), self.reader_token);
+                },
+            }
+        }
         while (true) {
             while (self.current_mask == 0) {
                 if (!self.loadNextNonEmptyMask()) return null;
@@ -113,12 +127,30 @@ pub const NeighborIterator = struct {
 
     pub fn deinit(self: *NeighborIterator) void {
         if (!self.reader_active) return;
-        rcu.readerExit(@constCast(self.core), self.reader_token);
+        switch (rcu.beginCloseReaderToken(self.reader_token)) {
+            .inactive => {},
+            .pending => {},
+            .finalize => rcu.finalizeReaderExit(@constCast(self.core), self.reader_token),
+        }
         self.reader_active = false;
     }
 
     pub fn snapshotDegree(self: *const NeighborIterator) usize {
         if (!self.reader_active) return 0;
+        if (!rcu.tryRetainReaderToken(self.reader_token)) {
+            @constCast(self).reader_active = false;
+            return 0;
+        }
+        defer {
+            switch (rcu.releaseRetainedReaderToken(self.reader_token)) {
+                .alive => {},
+                .closed => @constCast(self).reader_active = false,
+                .finalize => {
+                    @constCast(self).reader_active = false;
+                    rcu.finalizeReaderExit(@constCast(self.core), self.reader_token);
+                },
+            }
+        }
         return switch (self.direction) {
             .fwd => sumVisibleCount(self.core, self.node_adj_snapshot, .fwd),
             .rev => sumVisibleCount(self.core, self.node_adj_snapshot, .rev),
@@ -129,9 +161,8 @@ pub const NeighborIterator = struct {
     /// NOTE: this consumes the iterator (calls `defer self.deinit()`).
     /// The public `NeighborIterator.materialize` (src/api/public_iterator.zig)
     /// does NOT consume — callers must call `deinit()` afterwards.
-    /// Internal callers should prefer the public wrapper when non-consuming
-    /// semantics are needed.
-    pub fn materialize(self: *NeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
+    /// Internal callers must opt into the consuming behaviour explicitly.
+    pub fn materializeConsuming(self: *NeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
         defer self.deinit();
         var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.snapshotDegree());
         while (self.next()) |neighbor| {
@@ -140,7 +171,7 @@ pub const NeighborIterator = struct {
         return out.toOwnedSlice(allocator);
     }
 
-    pub fn materializeExact(self: *NeighborIterator, allocator: std.mem.Allocator, capacity: usize) ![]types.NodeId {
+    pub fn materializeExactConsuming(self: *NeighborIterator, allocator: std.mem.Allocator, capacity: usize) ![]types.NodeId {
         defer self.deinit();
         const snapshot_capacity = self.snapshotDegree();
         var out = try std.ArrayList(types.NodeId).initCapacity(allocator, @max(capacity, snapshot_capacity));

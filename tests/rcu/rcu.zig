@@ -50,14 +50,14 @@ test "rcu: iterator keeps old snapshot while source adjacency mutates" {
     try graph.addEdge(source, second_destination, 0, 0);
     try graph.validate();
 
-    const old_neighbors = try old_iterator.materialize(testing.allocator);
+    const old_neighbors = try old_iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(old_neighbors);
     try testing.expectEqual(@as(usize, 1), old_neighbors.len);
     try testing.expectEqual(first_destination.index, old_neighbors[0].index);
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 
     var new_iterator = try graph.neighbors(source);
-    const new_neighbors = try new_iterator.materialize(testing.allocator);
+    const new_neighbors = try new_iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(new_neighbors);
     try testing.expectEqual(@as(usize, 2), new_neighbors.len);
     try testing.expectEqual(first_destination.index, new_neighbors[0].index);
@@ -100,7 +100,7 @@ test "rcu: materialize releases reader guard" {
 
     var iterator = try graph.neighbors(source);
     try testing.expectEqual(@as(u32, 1), graph.graph.active_readers.load(.acquire));
-    const neighbors = try iterator.materialize(testing.allocator);
+    const neighbors = try iterator.materializeConsuming(testing.allocator);
     defer testing.allocator.free(neighbors);
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 }
