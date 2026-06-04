@@ -1,71 +1,177 @@
 //! RCU-style reader/writer synchronization and block retirement.
 
 const std = @import("std");
-const constants = @import("constants.zig");
-const graph_core = @import("graph_core.zig");
-const types = @import("types.zig");
-const page_ops = @import("page_ops.zig");
+const constants = @import("core/constants.zig");
+const graph_core = @import("core/graph_core.zig");
+const types = @import("core/types.zig");
+const page_ops = @import("storage/page_ops.zig");
 
 pub const NO_READER_SLOT: u32 = std.math.maxInt(u32);
 
-pub const ReaderToken = struct {
-    slot: u32,
-    epoch: u64,
+const MAX_TRACKED_OVERFLOW_READERS: usize = 256;
+const MAX_TOKEN_LIVENESS_SLOTS: usize = constants.MAX_READER_SLOTS + MAX_TRACKED_OVERFLOW_READERS;
+const TOKEN_CLOSING_BIT: u32 = 0x8000_0000;
+const TOKEN_ACTIVE_MASK: u32 = 0x7FFF_FFFF;
+
+const TokenLivenessSlot = struct {
+    id: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
-pub fn readerEnter(graph: *graph_core.GraphCore) ReaderToken {
-    const entry_epoch = graph.epoch.load(.acquire);
-    const encoded_epoch = entry_epoch +% 1;
+var token_liveness_slots: [MAX_TOKEN_LIVENESS_SLOTS]TokenLivenessSlot = [_]TokenLivenessSlot{.{}} ** MAX_TOKEN_LIVENESS_SLOTS;
+var next_reader_token_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
 
-    for (&graph.reader_epochs, 0..) |*slot, slot_index| {
-        if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
-            _ = graph.active_readers.fetchAdd(1, .monotonic);
-            return .{ .slot = @intCast(slot_index), .epoch = entry_epoch };
+pub const ReaderToken = struct {
+    slot: u32,
+    liveness_slot: u32,
+    epoch: u64,
+    id: u64,
+};
+
+fn nextReaderId() u64 {
+    while (true) {
+        const reader_id = next_reader_token_id.fetchAdd(1, .acq_rel);
+        if (reader_id != 0) return reader_id;
+    }
+}
+
+fn allocTrackedToken(slot: u32, epoch: u64) !ReaderToken {
+    const reader_id = nextReaderId();
+    for (&token_liveness_slots, 0..) |*token_slot, token_slot_index| {
+        if (token_slot.id.cmpxchgWeak(0, reader_id, .acq_rel, .acquire) == null) {
+            token_slot.state.store(0, .release);
+            return .{ .slot = slot, .liveness_slot = @intCast(token_slot_index), .epoch = epoch, .id = reader_id };
         }
     }
+    return error.GraphBusy;
+}
 
-    _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
-    _ = graph.active_readers.fetchAdd(1, .monotonic);
-    return .{ .slot = NO_READER_SLOT, .epoch = entry_epoch };
+fn releaseTrackedToken(token: ReaderToken) void {
+    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+    token_slot.state.store(0, .release);
+    token_slot.id.store(0, .release);
+}
+
+const CloseTokenResult = enum {
+    inactive,
+    pending,
+    finalize,
+};
+
+pub fn beginCloseReaderToken(token: ReaderToken) CloseTokenResult {
+    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+    while (true) {
+        if (token_slot.id.load(.acquire) != token.id) return .inactive;
+        const state = token_slot.state.load(.acquire);
+        if ((state & TOKEN_CLOSING_BIT) != 0) return .pending;
+        const desired = state | TOKEN_CLOSING_BIT;
+        if (token_slot.state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) {
+            return if ((state & TOKEN_ACTIVE_MASK) == 0) .finalize else .pending;
+        }
+    }
+}
+
+pub fn tryRetainReaderToken(token: ReaderToken) bool {
+    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+    while (true) {
+        if (token_slot.id.load(.acquire) != token.id) return false;
+        const state = token_slot.state.load(.acquire);
+        if ((state & TOKEN_CLOSING_BIT) != 0) return false;
+        const active = state & TOKEN_ACTIVE_MASK;
+        if (active == TOKEN_ACTIVE_MASK) return false;
+        if (token_slot.state.cmpxchgWeak(state, state + 1, .acq_rel, .acquire) == null) {
+            if (token_slot.id.load(.acquire) == token.id) return true;
+            _ = token_slot.state.fetchSub(1, .acq_rel);
+            return false;
+        }
+    }
+}
+
+const ReleaseTokenResult = enum {
+    alive,
+    closed,
+    finalize,
+};
+
+pub fn releaseRetainedReaderToken(token: ReaderToken) ReleaseTokenResult {
+    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+    while (true) {
+        if (token_slot.id.load(.acquire) != token.id) return .closed;
+        const state = token_slot.state.load(.acquire);
+        const active = state & TOKEN_ACTIVE_MASK;
+        std.debug.assert(active != 0);
+        const desired = (state & TOKEN_CLOSING_BIT) | (active - 1);
+        if (token_slot.state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) {
+            if ((desired & TOKEN_CLOSING_BIT) == 0) return .alive;
+            return if ((desired & TOKEN_ACTIVE_MASK) == 0) .finalize else .closed;
+        }
+    }
+}
+
+pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
+    if (graph.isClosing()) return error.GraphBusy;
+    while (true) {
+        const entry_epoch = graph.epoch.load(.acquire);
+        const encoded_epoch = entry_epoch +% 1;
+
+        for (&graph.reader_epochs, 0..) |*slot, slot_index| {
+            if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
+                if (graph.epoch.load(.acquire) != entry_epoch) {
+                    slot.store(0, .release);
+                    break;
+                }
+                // Double-check closing after acquiring the slot.
+                if (graph.isClosing()) {
+                    slot.store(0, .release);
+                    return error.GraphBusy;
+                }
+                const token = allocTrackedToken(@intCast(slot_index), entry_epoch) catch |err| {
+                    slot.store(0, .release);
+                    return err;
+                };
+                _ = graph.active_readers.fetchAdd(1, .monotonic);
+                return token;
+            }
+        } else {
+            if (graph.isClosing()) return error.GraphBusy;
+            const token = try allocTrackedToken(NO_READER_SLOT, entry_epoch);
+            _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
+            _ = graph.active_readers.fetchAdd(1, .monotonic);
+            return token;
+        }
+    }
 }
 
 pub fn readerExit(graph: *graph_core.GraphCore, token: ReaderToken) void {
+    switch (beginCloseReaderToken(token)) {
+        .inactive => {},
+        .pending => {},
+        .finalize => finalizeReaderExit(graph, token),
+    }
+}
+
+pub fn finalizeReaderExit(graph: *graph_core.GraphCore, token: ReaderToken) void {
     if (token.slot == NO_READER_SLOT) {
         _ = graph.reader_epoch_overflow.fetchSub(1, .acq_rel);
     } else {
         graph.reader_epochs[@intCast(token.slot)].store(0, .release);
     }
     _ = graph.active_readers.fetchSub(1, .monotonic);
+    releaseTrackedToken(token);
 }
 
-pub fn ensureRetireCapacity(graph: *graph_core.GraphCore, fwd_count: usize, rev_count: usize) !void {
-    _ = graph;
-    _ = fwd_count;
-    _ = rev_count;
-}
-
-fn appendDebugRetired(graph: *graph_core.GraphCore, list: *std.ArrayList(types.RetiredBlock), item: types.RetiredBlock) void {
-    if (!graph.debug_retired_enabled.load(.monotonic)) return;
-    while (true) {
-        const len = @atomicLoad(usize, &list.items.len, .acquire);
-        if (len >= list.capacity) return;
-        if (@cmpxchgWeak(usize, &list.items.len, len, len + 1, .acq_rel, .acquire) == null) {
-            list.items.ptr[len] = item;
-            return;
-        }
-    }
+pub fn readerTokenActive(token: ReaderToken) bool {
+    return token_liveness_slots[@intCast(token.liveness_slot)].id.load(.acquire) == token.id;
 }
 
 pub fn retireBlockFwd(graph: *graph_core.GraphCore, block_idx: u32) !void {
     const current_epoch = graph.epoch.load(.acquire);
     page_ops.retireBlock(graph, block_idx, current_epoch, .fwd);
-    appendDebugRetired(graph, &graph.retired_blocks_fwd, .{ .block = block_idx, .epoch = current_epoch });
 }
 
 pub fn retireBlockRev(graph: *graph_core.GraphCore, block_idx: u32) !void {
     const current_epoch = graph.epoch.load(.acquire);
     page_ops.retireBlock(graph, block_idx, current_epoch, .rev);
-    appendDebugRetired(graph, &graph.retired_blocks_rev, .{ .block = block_idx, .epoch = current_epoch });
 }
 
 pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
@@ -74,14 +180,11 @@ pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
 }
 
 pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
-    _ = graph.epoch.fetchAdd(1, .monotonic);
+    _ = graph.epoch.fetchAdd(1, .release);
 }
 
 fn safeReclaimEpoch(graph: *graph_core.GraphCore) ?u64 {
     if (graph.reader_epoch_overflow.load(.acquire) != 0) return null;
-
-    // Fast path: no readers active, no need to scan slots.
-    if (graph.active_readers.load(.acquire) == 0) return graph.epoch.load(.acquire) +% 1;
 
     var min_epoch: ?u64 = null;
     for (&graph.reader_epochs) |*slot| {
@@ -94,20 +197,9 @@ fn safeReclaimEpoch(graph: *graph_core.GraphCore) ?u64 {
     return min_epoch orelse graph.epoch.load(.acquire) +% 1;
 }
 
-fn pruneDebugRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: enum { fwd, rev }) void {
-    const list = if (side == .fwd) &graph.retired_blocks_fwd else &graph.retired_blocks_rev;
-    while (list.items.len > 0) {
-        if (list.items[0].epoch >= safe_epoch) break;
-        _ = list.orderedRemove(0);
-    }
-}
-
 pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     const safe_epoch = safeReclaimEpoch(graph) orelse return;
 
-    // Skip reclaim if safe_epoch has not advanced since the last pass.
-    // Without this, every mutation under a long reader would detach and
-    // re-push the entire retired stack — O(M²) accumulated cost.
     const last_safe_epoch = graph.last_reclaim_epoch.load(.monotonic);
     if (safe_epoch <= last_safe_epoch) return;
     graph.last_reclaim_epoch.store(safe_epoch, .monotonic);
@@ -115,17 +207,4 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     page_ops.reclaimRetired(graph, safe_epoch, .fwd);
     page_ops.reclaimRetired(graph, safe_epoch, .rev);
     page_ops.reclaimRetiredGroups(graph, safe_epoch);
-
-    if (graph.active_writers.load(.monotonic) == 0) {
-        if (graph.debug_retired_enabled.load(.monotonic)) {
-            pruneDebugRetired(graph, safe_epoch, .fwd);
-            pruneDebugRetired(graph, safe_epoch, .rev);
-        } else {
-            @atomicStore(usize, &graph.retired_blocks_fwd.items.len, 0, .release);
-            @atomicStore(usize, &graph.retired_blocks_rev.items.len, 0, .release);
-            graph.free_blocks_fwd.clearRetainingCapacity();
-            graph.free_blocks_rev.clearRetainingCapacity();
-            graph.free_groups.clearRetainingCapacity();
-        }
-    }
 }
