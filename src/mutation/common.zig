@@ -11,6 +11,7 @@ pub const tryClaimNodeSides = claims_mod.tryClaimNodeSides;
 pub const publishStagedFwd = claims_mod.publishStagedFwd;
 pub const publishStagedRev = claims_mod.publishStagedRev;
 pub const publishStagedBoth = claims_mod.publishStagedBoth;
+pub const publishBothDelta = claims_mod.publishBothDelta;
 pub const publishMetaFwdUpdated = claims_mod.publishMetaFwdUpdated;
 
 pub const MutationScratch = scratch_mod.MutationScratch;

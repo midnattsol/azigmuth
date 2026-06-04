@@ -9,6 +9,9 @@
 //!   - `deinitChecked()` consumes the handle only on success; on
 //!     `error.GraphBusy` the handle remains valid and can be retried later
 //!     (all active iterators or pending calls must release first).
+//!   - While `deinitChecked()` has atomically closed the graph to new work,
+//!     fallible APIs MAY return `error.GraphBusy`; non-fallible accessors
+//!     (`hasNode`, `nodeCount`, `edgeCount`) return safe defaults.
 //!   - All query methods (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`,
 //!     `bfs`, `dfs`, `hasCycle`, `validate`, `debugValidate`) are lock-free
 //!     readers and never block writers.

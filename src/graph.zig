@@ -64,7 +64,7 @@ pub const Graph = struct {
     // ── Lifecycle ─────────────────────────────────────────────────────
 
     fn hasActiveReadersOrWriters(core: *const graph_core.GraphCore) bool {
-        if (core.active_calls.load(.acquire) != 0) return true;
+        if (core.activeCallCount() != 0) return true;
         if (core.active_writers.load(.acquire) != 0) return true;
         if (core.active_repairers.load(.acquire) != 0) return true;
         if (core.reader_epoch_overflow.load(.acquire) != 0) return true;
@@ -74,20 +74,41 @@ pub const Graph = struct {
         return false;
     }
 
-    fn checkOpen(core: *const graph_core.GraphCore) GraphError!void {
-        if (core.closing.load(.acquire)) return error.GraphBusy;
+    fn beginCall(core: *graph_core.GraphCore) GraphError!void {
+        while (true) {
+            const state = core.callState();
+            if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return error.GraphBusy;
+            if ((state & graph_core.GraphCore.CALL_ACTIVE_MASK) == graph_core.GraphCore.CALL_ACTIVE_MASK) return error.GraphBusy;
+            const desired = state + 1;
+            if (core.call_state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) return;
+        }
     }
 
-    /// Begin a mutation call.  Ensures the graph is open and registers
-    /// the call in `active_calls`.  Double-checks `closing` after
-    /// incrementing to close the check-then-set race window.
-    fn beginMutation(core: *graph_core.GraphCore) GraphError!void {
-        if (core.closing.load(.acquire)) return error.GraphBusy;
-        _ = core.active_calls.fetchAdd(1, .acq_rel);
-        if (core.closing.load(.acquire)) {
-            _ = core.active_calls.fetchSub(1, .acq_rel);
-            return error.GraphBusy;
+    fn beginCallNoError(core: *graph_core.GraphCore) bool {
+        while (true) {
+            const state = core.callState();
+            if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return false;
+            if ((state & graph_core.GraphCore.CALL_ACTIVE_MASK) == graph_core.GraphCore.CALL_ACTIVE_MASK) return false;
+            const desired = state + 1;
+            if (core.call_state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) return true;
         }
+    }
+
+    fn endCall(core: *graph_core.GraphCore) void {
+        _ = core.call_state.fetchSub(1, .acq_rel);
+    }
+
+    fn tryClose(core: *graph_core.GraphCore) DeinitError!void {
+        while (true) {
+            const state = core.callState();
+            if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return error.GraphBusy;
+            const desired = state | graph_core.GraphCore.CALL_CLOSING_BIT;
+            if (core.call_state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) return;
+        }
+    }
+
+    fn clearClose(core: *graph_core.GraphCore) void {
+        _ = core.call_state.fetchAnd(graph_core.GraphCore.CALL_ACTIVE_MASK, .acq_rel);
     }
 
     pub fn init(allocator: std.mem.Allocator) !Graph {
@@ -123,20 +144,20 @@ pub const Graph = struct {
     }
 
     pub fn deinitChecked(self: *Graph) DeinitError!void {
-        self.graph.closing.store(true, .release);
+        try tryClose(&self.graph);
         if (hasActiveReadersOrWriters(&self.graph)) {
-            self.graph.closing.store(false, .release);
+            clearClose(&self.graph);
             return error.GraphBusy;
         }
         self.deinit();
-        // closing stays true — graph is now dead
+        // closing bit stays set in the dead handle until public wrapper frees it.
     }
 
     // ── Node API ──────────────────────────────────────────────────────
 
     pub fn addNode(self: *Graph) !types.NodeId {
-        try beginMutation(&self.graph);
-        defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
 
         while (true) {
             const index = self.graph.publishedNodeCount();
@@ -150,17 +171,20 @@ pub const Graph = struct {
     }
 
     pub fn nodeCount(self: *const Graph) usize {
-        if (self.graph.closing.load(.acquire)) return 0;
+        if (!beginCallNoError(@constCast(&self.graph))) return 0;
+        defer endCall(@constCast(&self.graph));
         return self.graph.publishedNodeCount();
     }
 
     pub fn edgeCount(self: *const Graph) u64 {
-        if (self.graph.closing.load(.acquire)) return 0;
+        if (!beginCallNoError(@constCast(&self.graph))) return 0;
+        defer endCall(@constCast(&self.graph));
         return self.graph.edge_count.load(.acquire);
     }
 
     pub fn hasNode(self: *const Graph, id: types.NodeId) bool {
-        if (self.graph.closing.load(.acquire)) return false;
+        if (!beginCallNoError(@constCast(&self.graph))) return false;
+        defer endCall(@constCast(&self.graph));
         return node_validity.isNodeLive(&self.graph, id);
     }
 
@@ -203,6 +227,8 @@ pub const Graph = struct {
     }
 
     pub fn publishedNodeAdj(self: *const Graph, node: types.NodeId) !types.NodeAdj {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return adjacency.publishedNodeAdj(&self.graph, node);
     }
 
@@ -235,64 +261,74 @@ pub const Graph = struct {
     // ── Validation ────────────────────────────────────────────────────
 
     pub fn validate(self: *const Graph) GraphError!void {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return validate_mod.validate(&self.graph);
     }
 
     pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) GraphError![]types.Violation {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return validate_mod.debugValidate(&self.graph, allocator);
     }
 
     // ── Query API ─────────────────────────────────────────────────────
 
     pub fn neighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return query.neighbors(&self.graph, node);
     }
 
     pub fn inNeighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return query.inNeighbors(&self.graph, node);
     }
 
     pub fn outDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
-        try checkOpen(&self.graph);
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return query.outDegree(&self.graph, node);
     }
 
     pub fn inDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
-        try checkOpen(&self.graph);
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
         return query.inDegree(&self.graph, node);
     }
 
     // ── Repair API ────────────────────────────────────────────────────
 
     pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
-        try beginMutation(&self.graph);
-        defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
         return repair.repairNode(&self.graph, node);
     }
 
     pub fn repairBudgeted(self: *Graph, max_nodes: usize) GraphError!usize {
-        try beginMutation(&self.graph);
-        defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
         return repair.repairBudgeted(&self.graph, max_nodes);
     }
 
     // ── Mutation ──────────────────────────────────────────────────────
 
     pub fn addEdge(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
-        try beginMutation(&self.graph);
-        defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
         return mutation.addEdge(&self.graph, source, destination, relation, flags);
     }
 
     pub fn removeEdge(self: *Graph, source: types.NodeId, destination: types.NodeId) GraphError!bool {
-        try beginMutation(&self.graph);
-        defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
         return mutation.removeEdge(&self.graph, source, destination);
     }
 
     pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!void {
-        try beginMutation(&self.graph);
-        defer _ = self.graph.active_calls.fetchSub(1, .acq_rel);
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
         return mutation.removeNode(&self.graph, node);
     }
 };

@@ -118,10 +118,9 @@ test "contract: removeNode tolerates unrelated predecessor forward mutation" {
     try testing.expectEqual(@as(u64, 1), rm_ctx.successes.load(.acquire));
     try testing.expect(mut_ctx.mutations.load(.acquire) > 0);
 
-    // removeNode succeeded while the predecessor was under concurrent
-    // mutation.  Under heavy concurrency validate may observe transient
-    // degree mismatches (RFC §7.3).  Structural invariants are covered
-    // by the non-concurrent contract test suite.
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
 test "contract: concurrent readers on disjoint nodes are lock-free" {

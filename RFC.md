@@ -289,6 +289,7 @@ pub const GraphError = error{
     ConcurrentMutation,    // writer/repair contention detected
     UnsupportedOperation,  // feature not yet in current phase
     RepairRequired,        // hard read bound would be violated
+    GraphBusy,             // graph is closing; new calls are rejected
 };
 
 pub const DeinitError = error{GraphBusy};
@@ -303,7 +304,7 @@ pub const DeinitError = error{GraphBusy};
 | `ConcurrentMutation` | `addEdge`, `removeEdge`, `removeNode`, `repairNode`, `repairBudgeted` | Contended writer/repair operation detected; caller should retry later. |
 | `UnsupportedOperation` | multigraph ops (Phase 3) | Feature not yet in current phase. |
 | `RepairRequired` | `addEdge`, `removeEdge` (if sync repair disabled) | Hard amplification bound would be violated. Call `repairNode` or `repairBudgeted`. |
-| `GraphBusy` | `deinitChecked` | Active readers, writers, or repairers still reference the graph. |
+| `GraphBusy` | `deinitChecked`; any `GraphError`-returning API racing with `deinitChecked` | The graph is busy or closing. `deinitChecked` returns it when active readers/writers/repairers still exist. Other fallible APIs may return it when teardown has atomically closed the graph to new work. |
 
 `removeEdge` returns `bool`: `true` if the edge was found and removed, `false` if it did not exist. It does NOT return `error.EdgeNotFound`.
 
@@ -332,6 +333,17 @@ released via `deinit()`.
 **`deinitChecked` semantics:** On success the handle is consumed (just like
 `deinit`).  On `error.GraphBusy` the handle remains valid and the caller may
 retry later.
+
+**Teardown coordination:** `deinitChecked` first closes the graph to new calls,
+then checks whether any readers / writers / repairers are still active.  While
+that close is in effect:
+- fallible APIs that return `GraphError!T` MAY fail fast with `error.GraphBusy`
+- non-fallible accessors (`hasNode`, `nodeCount`, `edgeCount`) MAY return a
+  safe default (`false` / `0` / `0`) rather than touch graph storage during
+  teardown
+
+This keeps teardown safe without introducing locks into normal read / write
+paths.
 
 **`materialize` semantics:** `NeighborIterator.materialize(allocator)`
 drains the remaining items into a caller-owned slice.  It **does not**

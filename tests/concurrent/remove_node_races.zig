@@ -113,12 +113,9 @@ test "concurrent: removeNode survives forward mutation on a predecessor being va
 
     try testing.expectEqual(@as(u64, 1), rm_ctx.successes.load(.acquire));
 
-    // Under heavy concurrent mutation, validate/debugValidate may observe
-    // transient degree mismatches between concurrent CAS writers
-    // (RFC §7.3).  The critical guarantee — removeNode does not need
-    // fwd_claim on the predecessor — is verified by the success of the
-    // removeNode call above while the mutator held the claim.
-    // Structural invariants are covered by the non-concurrent test suite.
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
 const DegreeObserverCtx = struct {

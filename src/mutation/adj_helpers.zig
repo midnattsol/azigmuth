@@ -273,13 +273,14 @@ pub fn publishRevAdj(
     new_rev_degree: u22,
 ) void {
     const meta = node.loadPublishedMeta();
+    const rev_delta: i23 = @intCast(@as(i64, @intCast(new_rev_degree)) - @as(i64, @intCast(meta.degree_rev)));
     node.stagingRev(meta).* = .{
         .first_block = adj.first_block_rev,
         .block_count = adj.block_count_rev,
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     };
-    _ = claims_mod.publishStagedRev(node, meta, adj.flags.needs_repair_rev, new_rev_degree);
+    _ = claims_mod.publishStagedRev(node, meta, adj.flags.needs_repair_rev, rev_delta);
 }
 
 pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group: u32, group_count: u16) void {

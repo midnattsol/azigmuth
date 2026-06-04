@@ -324,19 +324,16 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 
     scratch.disarm();
 
-    const new_source_degree: u22 = @as(u22, @intCast(source_meta.degree_fwd)) + 1;
-    const new_dest_degree: u22 = @as(u22, @intCast(destination_meta.degree_rev)) + 1;
-
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishStagedBoth(source_node, source_meta, merged_flags, new_source_degree, new_dest_degree);
+        _ = common.publishBothDelta(source_node, source_meta, merged_flags, 1, 1);
     } else {
         // publish reverse first, then forward (RFC §5.2)
-        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, new_dest_degree);
-        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, new_source_degree);
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, 1);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, 1);
     }
 
     if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
@@ -413,19 +410,17 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     if (source_meta.degree_fwd == 0) return error.CorruptGraph;
     if (destination_meta.degree_rev == 0) return error.CorruptGraph;
-    const new_source_degree: u22 = @as(u22, @intCast(source_meta.degree_fwd)) - 1;
-    const new_dest_degree: u22 = @as(u22, @intCast(destination_meta.degree_rev)) - 1;
 
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishStagedBoth(source_node, source_meta, merged_flags, new_source_degree, new_dest_degree);
+        _ = common.publishBothDelta(source_node, source_meta, merged_flags, -1, -1);
     } else {
         // publish reverse first, then forward (RFC §5.2)
-        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, new_dest_degree);
-        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, new_source_degree);
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, -1);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, -1);
     }
 
     try rcu.retireBlockFwd(graph, forward_build.old_block);

@@ -1,3 +1,4 @@
+const std = @import("std");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 
@@ -92,19 +93,21 @@ pub fn tryClaimNodeSides(node: *types.NodeBuffer, want_fwd: bool, want_rev: bool
     return claims;
 }
 
-pub fn publishStagedFwd(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u22) types.PublishedMeta {
+pub fn publishStagedFwd(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23) types.PublishedMeta {
     var expected = expected_meta;
     while (true) {
-        const desired = types.NodeBuffer.desiredMetaForPublishFwd(expected, needs_repair_fwd, new_degree_fwd);
+        const new_degree: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_fwd)) + delta));
+        const desired = types.NodeBuffer.desiredMetaForPublishFwd(expected, needs_repair_fwd, new_degree);
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
     }
 }
 
-pub fn publishStagedRev(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) types.PublishedMeta {
+pub fn publishStagedRev(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: i23) types.PublishedMeta {
     var expected = expected_meta;
     while (true) {
-        const desired = types.NodeBuffer.desiredMetaForPublishRev(expected, needs_repair_rev, new_degree_rev);
+        const new_degree: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_rev)) + delta));
+        const desired = types.NodeBuffer.desiredMetaForPublishRev(expected, needs_repair_rev, new_degree);
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
     }
@@ -119,10 +122,22 @@ pub fn publishStagedBoth(node: *types.NodeBuffer, expected_meta: types.Published
     }
 }
 
+pub fn publishBothDelta(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        const new_fwd: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_fwd)) + fwd_delta));
+        const new_rev: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_rev)) + rev_delta));
+        const desired = types.NodeBuffer.desiredMetaForPublishBoth(expected, flags, new_fwd, new_rev);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
+}
+
 /// CAS-only forward degree update — decrement by 1.
 pub fn publishMetaFwdUpdated(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool) types.PublishedMeta {
     var expected = expected_meta;
     while (true) {
+        std.debug.assert(expected.degree_fwd > 0);
         const new_degree: u22 = @as(u22, @intCast(@as(u64, expected.degree_fwd) - 1));
         const desired = types.NodeBuffer.desiredMetaForUpdateFwd(expected, needs_repair_fwd, new_degree);
         const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;

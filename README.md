@@ -62,6 +62,17 @@ defer graph.deinit();
 an empty builder succeeds and returns a valid zero-node `Graph`.  After
 `freeze()` the builder is inert — only `deinit()` is valid.
 
+## Teardown
+
+- `deinit()` is unconditional and requires the caller to ensure that no
+  readers, writers, or repairers are still active.
+- `deinitChecked()` is the safe teardown path.  It returns
+  `error.GraphBusy` when the graph still has active users.
+- While `deinitChecked()` is closing the graph to new work, fallible APIs may
+  also return `error.GraphBusy` instead of entering the graph.
+- Non-fallible accessors (`hasNode`, `nodeCount`, `edgeCount`) return safe
+  defaults during that brief closing window.
+
 ## Materialize
 
 ```zig

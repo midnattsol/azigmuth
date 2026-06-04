@@ -75,7 +75,11 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const setup = try buildWideRootGraph(&graph, 5000);
+    // BFS over 5K flat children can finish before the mutator thread gets CPU
+    // on busy runners, making the liveness assertion flaky.  Widen the graph
+    // enough that traversal is active long enough for at least one concurrent
+    // addNode/addEdge pair to land.
+    const setup = try buildWideRootGraph(&graph, 20_000);
     var start = StartFlag.init(false);
     var stop = StartFlag.init(false);
     var traversal_active = StartFlag.init(false);

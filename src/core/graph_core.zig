@@ -65,11 +65,14 @@ pub const GraphCore = struct {
     /// Single active repairBudgeted caller guard.
     active_repairers: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    /// Number of public mutating API calls currently executing.
-    /// Covers the entire call lifetime (before first graph access until after
-    /// last reclaim/retire), not just the writer section.  Checked by
-    /// deinit/deinitChecked to prevent use-after-free during teardown.
-    active_calls: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Public call state: low 31 bits count active public API calls, high bit
+    /// closes the graph to new callers during `deinitChecked`.
+    ///
+    /// This single atomic state closes the check-then-free race for both
+    /// mutations and lightweight reads: callers atomically increment the count
+    /// only when the closing bit is clear, and `deinitChecked` atomically sets
+    /// the closing bit before checking for active users.
+    call_state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Global live edge count — atomic for lock-free `edgeCount()`.
     edge_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -98,11 +101,20 @@ pub const GraphCore = struct {
     repair_scan_cursor_rev: u32 = 0,
     repair_scan_cursor_tombstone: u32 = 0,
 
-    /// Closes the graph to new calls.  Set by `deinitChecked` before checking
-    /// for active readers/writers and calling `deinit`.  Prevents the
-    /// check-then-free race by signalling new entrants to back off while
-    /// teardown is in progress.
-    closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    pub const CALL_CLOSING_BIT: u32 = 0x8000_0000;
+    pub const CALL_ACTIVE_MASK: u32 = 0x7FFF_FFFF;
+
+    pub inline fn callState(self: *const GraphCore) u32 {
+        return self.call_state.load(.acquire);
+    }
+
+    pub inline fn activeCallCount(self: *const GraphCore) u32 {
+        return self.callState() & CALL_ACTIVE_MASK;
+    }
+
+    pub inline fn isClosing(self: *const GraphCore) bool {
+        return (self.callState() & CALL_CLOSING_BIT) != 0;
+    }
 
     pub inline fn publishedNodeCount(self: *const GraphCore) u32 {
         return self.node_count.load(.acquire);
