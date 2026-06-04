@@ -1,5 +1,5 @@
-//! Root module for the Zigraph graph library.  Graph, GraphBuilder and
-//! NeighborIterator form the single public API surface; everything else in the
+//! Root module for the Zigraph graph library. `src/root.zig` defines the public
+//! API surface and re-exports the stable public types; everything else in the
 //! source tree is implementation detail not covered by the stability contract.
 //!
 //! Usage with Graph:
