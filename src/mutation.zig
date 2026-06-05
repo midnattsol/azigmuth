@@ -9,5 +9,7 @@ const edge = @import("mutation/edge.zig");
 const node = @import("mutation/node.zig");
 
 pub const addEdge = edge.addEdge;
+pub const addEdgeWithId = edge.addEdgeWithId;
 pub const removeEdge = edge.removeEdge;
+pub const removeEdgeWithId = edge.removeEdgeWithId;
 pub const removeNode = node.removeNode;

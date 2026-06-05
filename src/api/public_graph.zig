@@ -29,6 +29,15 @@ pub const Graph = opaque {
         return @ptrCast(g);
     }
 
+    /// Allocates and returns a heap-allocated `*Graph` with the given options.
+    /// Caller owns the pointer; must call `deinit()` or `deinitChecked()`.
+    pub fn initWithOptions(allocator: std.mem.Allocator, options: internal.GraphOptions) internal.GraphError!*Graph {
+        const g = try allocator.create(internal.Graph);
+        errdefer allocator.destroy(g);
+        g.* = try internal.Graph.initWithOptions(allocator, options);
+        return @ptrCast(g);
+    }
+
     /// Destroys the graph handle unconditionally.  All page-backed storage,
     /// repair queues, and the handle itself are freed.
     ///
@@ -125,6 +134,11 @@ pub const Graph = opaque {
         return g.inDegree(node);
     }
 
+    pub fn outEdges(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.OutEdgeIterator {
+        const g: *const internal.Graph = @ptrCast(@alignCast(self));
+        return g.outEdges(node);
+    }
+
     pub fn repairNode(self: *Graph, node: internal.NodeId) internal.GraphError!void {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         return g.repairNode(node);
@@ -140,9 +154,20 @@ pub const Graph = opaque {
         return g.addEdge(source, destination, relation, @bitCast(flags));
     }
 
+    /// Returns the assigned EdgeId.
+    pub fn addEdgeWithId(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!internal.EdgeId {
+        const g: *internal.Graph = @ptrCast(@alignCast(self));
+        return g.addEdgeWithId(source, destination, relation, @bitCast(flags));
+    }
+
     pub fn removeEdge(self: *Graph, source: internal.NodeId, destination: internal.NodeId) internal.GraphError!bool {
         const g: *internal.Graph = @ptrCast(@alignCast(self));
         return g.removeEdge(source, destination);
+    }
+
+    pub fn removeEdgeWithId(self: *Graph, source: internal.NodeId, destination: internal.NodeId, edge_id: internal.EdgeId) internal.GraphError!bool {
+        const g: *internal.Graph = @ptrCast(@alignCast(self));
+        return g.removeEdgeWithId(source, destination, edge_id);
     }
 
     pub fn removeNode(self: *Graph, node: internal.NodeId) internal.GraphError!void {

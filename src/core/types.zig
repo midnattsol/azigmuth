@@ -6,6 +6,25 @@ const std = @import("std");
 /// (page = index >> 8, slot = index & 255).
 pub const NodeId = struct { index: u32 };
 
+/// Opaque edge identifier, local to the source node (not global).
+/// 0 is reserved for "empty/unset".
+pub const EdgeId = struct { local: u32 };
+
+/// A public edge reference returned by edge-aware iterators.
+pub const EdgeRef = struct {
+    id: EdgeId,
+    destination: u32,
+    relation: u16,
+    flags: EdgeFlags,
+};
+
+/// Options passed at graph creation time.
+pub const GraphOptions = struct {
+    /// When true, multiple edges between the same (source,destination) pair
+    /// are allowed and `EdgeId` disambiguates them.
+    multigraph: bool = false,
+};
+
 pub const GraphError = error{
     OutOfMemory,
     DegreeLimitReached,
@@ -126,9 +145,16 @@ pub const NodeBuffer = extern struct {
     fwd_buffers: [2]SideAdj,
     rev_buffers: [2]SideAdj,
 
-    /// Reserved for future per-node versioning or writer-local scratch.
-    /// Exact logical degrees are authoritative in PublishedMeta, not here.
-    _reserved_local: u32 = 0,
+    /// Monotonic edge-id counter local to this node, used in multigraph mode.
+    /// 0 is reserved for "empty" slot; valid IDs start at 1.
+    next_local_edge_id: u32 = 1,
+
+    /// Allocates and returns the next edge ID local to this node.
+    pub fn nextEdgeId(self: *NodeBuffer) EdgeId {
+        const local = self.next_local_edge_id;
+        self.next_local_edge_id += 1;
+        return .{ .local = local };
+    }
 
     pub fn loadPublishedMeta(self: *const NodeBuffer) PublishedMeta {
         return @bitCast(self.published_meta.load(.acquire));
@@ -260,6 +286,14 @@ pub const EdgeBlockFwd = struct {
 pub const EdgeBlockRev = struct {
     mask: u64,
     sources: [64]u32,
+};
+
+// ── Forward edge ID sidecar ──────────────────────────────────────────
+
+/// Per-forward-block edge ID storage. Shares block_idx and lifecycle with
+/// the corresponding EdgeBlockFwd. 256 bytes.
+pub const EdgeBlockFwdIds = struct {
+    ids: [64]u32,
 };
 
 // ── Contiguous edge block group ──────────────────────────────────────

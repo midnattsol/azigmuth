@@ -242,10 +242,12 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         var seen: std.ArrayList(u32) = .empty;
         defer seen.deinit(graph.allocator);
         for (forward_destinations.items) |destination_index| {
-            for (seen.items) |s| {
-                if (s == destination_index) return error.CorruptGraph;
+            if (!graph.multigraph_enabled) {
+                for (seen.items) |s| {
+                    if (s == destination_index) return error.CorruptGraph;
+                }
+                try seen.append(graph.allocator, destination_index);
             }
-            try seen.append(graph.allocator, destination_index);
         }
     }
 
@@ -253,9 +255,10 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     defer reverse_sources.deinit(graph.allocator);
     try collectReverseSources(graph, node, &reverse_sources);
 
-    const had_self_edge = for (forward_destinations.items) |destination_index| {
-        if (destination_index == node.index) break true;
-    } else false;
+    var self_edge_count: u32 = 0;
+    for (forward_destinations.items) |destination_index| {
+        if (destination_index == node.index) self_edge_count += 1;
+    }
 
     // Validate incoming reverse completeness before any publish.
     // Reject invalid, removed, and duplicate sources.  Verify that every
@@ -273,15 +276,17 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
             if (source_index >= graph.publishedNodeCount()) return error.CorruptGraph;
             if (source_index == node.index) {
                 self_count += 1;
-                if (self_count > 1 or !had_self_edge) return error.CorruptGraph;
+                if (!graph.multigraph_enabled and (self_count > 1 or self_edge_count == 0)) return error.CorruptGraph;
                 continue;
             }
             if (!node_validity.isNodeLiveIndex(graph, source_index)) continue;
 
-            for (seen_incoming.items) |s| {
-                if (s == source_index) return error.CorruptGraph;
+            if (!graph.multigraph_enabled) {
+                for (seen_incoming.items) |s| {
+                    if (s == source_index) return error.CorruptGraph;
+                }
+                try seen_incoming.append(graph.allocator, source_index);
             }
-            try seen_incoming.append(graph.allocator, source_index);
 
             const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_index }).publishedAdj();
             if (!adjacency.hasEdgeInAdj(graph, source_fwd, node.index)) return error.CorruptGraph;
@@ -379,10 +384,17 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         }
     }
 
-    var removed_visible_edge_count: usize = if (had_self_edge) 1 else 0;
+    var removed_visible_edge_count: usize = self_edge_count;
     for (destination_updates.items) |update| {
         if (update.needs_reverse_retire and !update.published_adj_before.flags.removed) {
-            removed_visible_edge_count += 1;
+            removed_visible_edge_count += @as(usize, @intCast(adjacency.countForwardDestinationMatches(
+                graph,
+                source_adj_before.first_block_fwd,
+                source_adj_before.block_count_fwd,
+                source_adj_before.group_count_fwd,
+                source_adj_before.first_group_fwd,
+                update.node_index,
+            )));
         }
         if (update.decrement_visible_fwd and !update.published_adj_before.flags.removed) {
             removed_visible_edge_count += 1;
@@ -390,7 +402,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     }
 
     var source_staging_adj = source_adj_before;
-    if (had_self_edge) {
+    if (self_edge_count > 0) {
         var rb = try repair.prepareReverseWithoutSource(
             graph,
             source_adj_before.first_block_rev,
@@ -461,7 +473,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
         }
     }
     try common.retireSide(graph, source_adj_before, .fwd);
-    if (had_self_edge) {
+    if (self_edge_count > 0) {
         try common.retireSide(graph, source_adj_before, .rev);
     }
 

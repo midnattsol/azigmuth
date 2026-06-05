@@ -15,6 +15,7 @@ const BuilderEdge = struct {
     destination: u32,
     relation: u16,
     flags: u16,
+    edge_id: u32,
 
     fn key(source: types.NodeId, destination: types.NodeId) u64 {
         return (@as(u64, source.index) << 32) | @as(u64, destination.index);
@@ -22,7 +23,8 @@ const BuilderEdge = struct {
 
     fn lessForward(_: void, lhs: BuilderEdge, rhs: BuilderEdge) bool {
         if (lhs.source != rhs.source) return lhs.source < rhs.source;
-        return lhs.destination < rhs.destination;
+        if (lhs.destination != rhs.destination) return lhs.destination < rhs.destination;
+        return lhs.edge_id < rhs.edge_id;
     }
 
     fn lessReverse(_: void, lhs: BuilderEdge, rhs: BuilderEdge) bool {
@@ -75,9 +77,19 @@ pub const GraphBuilder = struct {
     edges: std.ArrayList(BuilderEdge) = .empty,
     edge_keys: std.AutoHashMap(u64, void),
     frozen: bool = false,
+    next_edge_id: u32 = 1,
 
     pub fn init(allocator: std.mem.Allocator) !GraphBuilder {
         var graph = try Graph.init(allocator);
+        errdefer graph.deinit();
+        return .{
+            .graph = graph,
+            .edge_keys = std.AutoHashMap(u64, void).init(allocator),
+        };
+    }
+
+    pub fn initWithOptions(allocator: std.mem.Allocator, options: types.GraphOptions) !GraphBuilder {
+        var graph = try Graph.initWithOptions(allocator, options);
         errdefer graph.deinit();
         return .{
             .graph = graph,
@@ -101,16 +113,22 @@ pub const GraphBuilder = struct {
         if (self.frozen) return error.UnsupportedOperation;
         if (!self.graph.hasNode(source) or !self.graph.hasNode(destination)) return error.InvalidNode;
 
-        const key = BuilderEdge.key(source, destination);
-        const entry = try self.edge_keys.getOrPut(key);
-        if (entry.found_existing) return error.EdgeAlreadyExists;
-        errdefer _ = self.edge_keys.remove(key);
+        if (!self.graph.graph.multigraph_enabled) {
+            const key = BuilderEdge.key(source, destination);
+            const entry = try self.edge_keys.getOrPut(key);
+            if (entry.found_existing) return error.EdgeAlreadyExists;
+            errdefer _ = self.edge_keys.remove(key);
+        }
+
+        const edge_id = self.next_edge_id;
+        self.next_edge_id += 1;
 
         try self.edges.append(self.graph.graph.allocator, .{
             .source = source.index,
             .destination = destination.index,
             .relation = relation,
             .flags = flags,
+            .edge_id = edge_id,
         });
     }
 
@@ -177,6 +195,9 @@ pub const GraphBuilder = struct {
             const block = page_ops.edgeBlockAt(&self.graph.graph, block_index, .fwd);
             block.* = std.mem.zeroes(types.EdgeBlockFwd);
 
+            const id_block = page_ops.edgeBlockFwdIdsAt(&self.graph.graph, block_index);
+            id_block.* = std.mem.zeroes(types.EdgeBlockFwdIds);
+
             const remaining = run.len - edge_index;
             const live = @min(remaining, 64);
             for (0..live) |slot| {
@@ -186,6 +207,7 @@ pub const GraphBuilder = struct {
                     .relation = edge.relation,
                     .flags = @bitCast(edge.flags),
                 };
+                id_block.ids[slot] = edge.edge_id;
             }
             block.mask = constants.denseMask(@intCast(live));
             edge_index += live;

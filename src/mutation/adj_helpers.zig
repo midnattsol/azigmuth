@@ -293,6 +293,48 @@ pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group: u32, group_co
     }
 }
 
+
+/// Searches forward adjacency for a specific (destination, edge_id) pair.
+pub fn findSlotInAdjById(
+    graph: *const graph_core.GraphCore,
+    first_block: u32,
+    block_count: u16,
+    group_count: u16,
+    first_group: u32,
+    destination_index: u32,
+    edge_id: u32,
+) ?AdjSlot {
+    if (block_count == 0) return null;
+
+    if (group_count == 0) {
+        for (first_block..first_block + block_count) |block_idx_usize| {
+            const block_idx: u32 = @intCast(block_idx_usize);
+            const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+            if (adjacency.searchForwardBlockById(block, id_block, destination_index, edge_id)) |slot| {
+                return .{ .block_idx = block_idx, .slot = slot };
+            }
+        }
+        return null;
+    }
+
+    var group_idx = first_group;
+    var visited: u16 = 0;
+    while (visited < group_count) : (visited += 1) {
+        if (group_idx == constants.END_OF_CHAIN) return null;
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx_usize| {
+            const block_idx: u32 = @intCast(block_idx_usize);
+            const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+            if (adjacency.searchForwardBlockById(block, id_block, destination_index, edge_id)) |slot| {
+                return .{ .block_idx = block_idx, .slot = slot };
+            }
+        }
+        group_idx = group.next;
+    }
+    return null;
+}
 pub fn findSlotInAdj(
     graph: *const graph_core.GraphCore,
     first_block: u32,

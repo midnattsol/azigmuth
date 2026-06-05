@@ -28,3 +28,4 @@ pub const publishBothAdj = adj_helpers_mod.publishBothAdj;
 pub const publishRevAdj = adj_helpers_mod.publishRevAdj;
 pub const retireGroupChain = adj_helpers_mod.retireGroupChain;
 pub const findSlotInAdj = adj_helpers_mod.findSlotInAdj;
+pub const findSlotInAdjById = adj_helpers_mod.findSlotInAdjById;

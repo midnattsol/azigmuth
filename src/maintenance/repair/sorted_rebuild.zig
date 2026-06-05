@@ -137,6 +137,8 @@ pub fn sortedRebuildForward(
 
         const dst_block = page_ops.edgeBlockAt(graph, out_block.?, .fwd);
         dst_block.edges[out_slot] = edge;
+        const src_id_block = page_ops.edgeBlockFwdIdsAtConst(graph, iter_ref.block_idx);
+        page_ops.edgeBlockFwdIdsAt(graph, out_block.?, ).ids[out_slot] = src_id_block.ids[iter_ref.pos];
         out_slot += 1;
         if (out_slot == 64) {
             const full_block = page_ops.edgeBlockAt(graph, out_block.?, .fwd);

@@ -67,7 +67,7 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
         for (0..live_count) |slot| {
             const key = block.edges[slot].destination;
             if (key >= node_count) return error.CorruptGraph;
-            if (slot > 0 and key <= prev) return error.CorruptGraph;
+            if (slot > 0 and (key < prev or (!graph.multigraph_enabled and key == prev))) return error.CorruptGraph;
             prev = key;
         }
         return live_count;
@@ -79,7 +79,7 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
         for (0..live_count) |slot| {
             const key = block.sources[slot];
             if (key >= node_count) return error.CorruptGraph;
-            if (slot > 0 and key <= prev) return error.CorruptGraph;
+            if (slot > 0 and (key < prev or (!graph.multigraph_enabled and key == prev))) return error.CorruptGraph;
             prev = key;
         }
         return live_count;

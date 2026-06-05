@@ -43,10 +43,16 @@ pub const Edge = graph.Edge;
 pub const EdgeFlags = graph.EdgeFlags;
 pub const NodeFlags = graph.NodeFlags;
 
+// ── Multigraph types ──────────────────────────────────────────────────
+pub const EdgeId = graph.EdgeId;
+pub const EdgeRef = graph.EdgeRef;
+pub const GraphOptions = graph.GraphOptions;
+
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;
 pub const GraphBuilder = public_builder.GraphBuilder;
 pub const NeighborIterator = public_iterator.NeighborIterator;
+pub const OutEdgeIterator = graph.OutEdgeIterator;
 pub const GraphError = graph.GraphError;
 pub const DeinitError = graph.DeinitError;
 pub const Violation = graph.Violation;

@@ -94,6 +94,7 @@ fn prepareAppendBlockSide(
                 return .{ .new_block = new_block, .tail_index = tail_index };
             }
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = tail_block.*;
+            page_ops.edgeBlockFwdIdsAt(graph, new_block).* = page_ops.edgeBlockFwdIdsAtConst(graph, tail_index).*;
         },
         .rev => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_index, .rev);
@@ -149,16 +150,19 @@ fn applyPreparedAppendSideTracked(
     var block_list: std.ArrayList(u32) = .empty;
     defer block_list.deinit(graph.allocator);
     try common.collectBlockList(
-        graph, side_adj.*,
-        prepared.old_block, prepared.new_block,
+        graph,
+        side_adj.*,
+        prepared.old_block,
+        prepared.new_block,
         if (prepared.old_block == null) prepared.new_block else null,
         &block_list,
     );
     try common.buildSideFromBlocks(side_adj, graph, block_list.items, scratch);
 }
 
-fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination: types.NodeId, relation: u16, flags: u16) !void {
+fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination: types.NodeId, relation: u16, flags: u16, edge_id: u32) !void {
     const forward_block = page_ops.edgeBlockAt(graph, block_index, .fwd);
+    const id_block = page_ops.edgeBlockFwdIdsAt(graph, block_index);
     const live = @popCount(forward_block.mask);
     var insertion_point: u7 = 0;
     var search_end: u7 = @intCast(live);
@@ -167,7 +171,13 @@ fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination
         if (forward_block.edges[probe].destination < destination.index) {
             insertion_point = probe + 1;
         } else if (forward_block.edges[probe].destination == destination.index) {
-            return error.EdgeAlreadyExists;
+            if (!graph.multigraph_enabled) return error.EdgeAlreadyExists;
+            // Multigraph: resolve by edge_id order (unique per source)
+            if (id_block.ids[probe] < edge_id) {
+                insertion_point = probe + 1;
+            } else {
+                search_end = probe;
+            }
         } else {
             search_end = probe;
         }
@@ -175,9 +185,11 @@ fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination
     var shift: u7 = @intCast(live);
     while (shift > insertion_point) {
         forward_block.edges[shift] = forward_block.edges[shift - 1];
+        id_block.ids[shift] = id_block.ids[shift - 1];
         shift -= 1;
     }
     forward_block.edges[insertion_point] = types.Edge{ .destination = destination.index, .relation = relation, .flags = @bitCast(flags) };
+    id_block.ids[insertion_point] = edge_id;
     forward_block.mask = constants.denseMask(@intCast(live + 1));
 }
 
@@ -237,9 +249,15 @@ fn applyRemovalPlanSide(
         .fwd => {
             const block_before = page_ops.edgeBlockAtConst(graph, old_block, .fwd);
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = block_before.*;
+            const ids_before = page_ops.edgeBlockFwdIdsAtConst(graph, old_block);
+            page_ops.edgeBlockFwdIdsAt(graph, new_block).* = ids_before.*;
             const block = page_ops.edgeBlockAt(graph, new_block, .fwd);
+            const id_block = page_ops.edgeBlockFwdIdsAt(graph, new_block);
             var shift: u7 = plan.found.slot;
-            while (shift < plan.live_before - 1) : (shift += 1) block.edges[shift] = block.edges[shift + 1];
+            while (shift < plan.live_before - 1) : (shift += 1) {
+                block.edges[shift] = block.edges[shift + 1];
+                id_block.ids[shift] = id_block.ids[shift + 1];
+            }
             block.mask = constants.denseMask(@intCast(new_live));
         },
         .rev => {
@@ -255,8 +273,10 @@ fn applyRemovalPlanSide(
     var block_list: std.ArrayList(u32) = .empty;
     defer block_list.deinit(graph.allocator);
     try common.collectBlockList(
-        graph, published_side.*,
-        old_block, if (new_live > 0) new_block else null,
+        graph,
+        published_side.*,
+        old_block,
+        if (new_live > 0) new_block else null,
         null,
         &block_list,
     );
@@ -265,8 +285,13 @@ fn applyRemovalPlanSide(
     return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
 }
 
-/// Adds a directed edge `source → destination` with a relation label and flags.
-pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !void {
+fn addEdgeImpl(
+    graph: *graph_core.GraphCore,
+    source: types.NodeId,
+    destination: types.NodeId,
+    relation: u16,
+    flags: u16,
+) !types.EdgeId {
     if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
 
     const source_node = page_ops.nodeAt(graph, source);
@@ -292,8 +317,10 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     const sfwd = source_node.stagingFwd(source_meta);
     const srev = destination_node.stagingRev(destination_meta);
 
-    if (adjacency.hasEdgeInSideAdj(graph, source_pub, destination.index)) {
-        return error.EdgeAlreadyExists;
+    if (!graph.multigraph_enabled) {
+        if (adjacency.hasEdgeInSideAdj(graph, source_pub, destination.index)) {
+            return error.EdgeAlreadyExists;
+        }
     }
 
     if (source_meta.degree_fwd >= constants.MAX_DEGREE_PER_SIDE) return error.DegreeLimitReached;
@@ -302,6 +329,8 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     var scratch = common.MutationScratch{};
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
+
+    const edge_id = source_node.nextEdgeId();
 
     const forward_prepared = try prepareAppendBlockSide(graph, sfwd, .fwd, &scratch);
     const reverse_prepared = try prepareAppendBlockSide(graph, srev, .rev, &scratch);
@@ -313,7 +342,7 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     const old_reverse_groups = OldGroupChain.captureSide(srev);
 
     try applyPreparedAppendSideTracked(graph, sfwd, forward_prepared, &scratch);
-    try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags);
+    try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags, edge_id.local);
     var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
     repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
 
@@ -345,6 +374,18 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
     rcu.bumpEpoch(graph);
     writer_guard.end();
     rcu.reclaimRetired(graph);
+
+    return edge_id;
+}
+
+/// Adds a directed edge `source → destination` with a relation label and flags.
+pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !void {
+    _ = try addEdgeImpl(graph, source, destination, relation, flags);
+}
+
+/// Adds a directed edge and returns its unique EdgeId.
+pub fn addEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !types.EdgeId {
+    return addEdgeImpl(graph, source, destination, relation, flags);
 }
 
 /// Removes the directed edge `source → destination` if it exists, returning `true`.
@@ -374,16 +415,69 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     const old_forward_groups = OldGroupChain.captureSide(&source_pubfwd);
     const old_reverse_groups = OldGroupChain.captureSide(&dest_pubrev);
 
+    if (graph.multigraph_enabled) {
+        const match_count = adjacency.countForwardDestinationMatches(
+            graph, source_pubfwd.first_block, source_pubfwd.block_count,
+            source_pubfwd.group_count, source_pubfwd.first_group,
+            destination.index,
+        );
+        if (match_count == 0) return false;
+        if (match_count > 1) {
+            source_node.copyPublishedToStagingFwd(source_meta);
+            destination_node.copyPublishedToStagingRev(destination_meta);
+            const sfwd2 = source_node.stagingFwd(source_meta);
+            const srev2 = destination_node.stagingRev(destination_meta);
+            var bulk_scratch = common.MutationScratch{};
+            defer bulk_scratch.deinit(graph.allocator);
+            defer bulk_scratch.cleanup(graph);
+            const fwd_result = try rebuildForwardRemoveAll(graph, &source_pubfwd, destination.index, &bulk_scratch);
+            sfwd2.* = fwd_result.new_side;
+            const rev_result = try rebuildReverseRemoveCount(graph, &dest_pubrev, source.index, match_count, &bulk_scratch);
+            srev2.* = rev_result;
+            var source_adj = nodeAdjForSide(sfwd2.*, source_flags, .fwd);
+            repair.updateRepairDebt(graph, &source_adj, source.index, .fwd);
+            var dest_adj = nodeAdjForSide(srev2.*, destination_flags, .rev);
+            repair.updateRepairDebt(graph, &dest_adj, destination.index, .rev);
+            bulk_scratch.disarm();
+            if (source.index == destination.index) {
+                var merged = source_adj.flags;
+                merged.needs_repair_rev = dest_adj.flags.needs_repair_rev;
+                merged.removed = false;
+                _ = common.publishBothDelta(source_node, source_meta, merged, -@as(i23, @intCast(match_count)), -@as(i23, @intCast(match_count)));
+            } else {
+                _ = common.publishStagedRev(destination_node, destination_meta, dest_adj.flags.needs_repair_rev, -@as(i23, @intCast(match_count)));
+                _ = common.publishStagedFwd(source_node, source_meta, source_adj.flags.needs_repair_fwd, -@as(i23, @intCast(match_count)));
+            }
+            try common.retireSide(graph, nodeAdjForSide(source_pubfwd, source_flags, .fwd), .fwd);
+            try common.retireSide(graph, nodeAdjForSide(dest_pubrev, destination_flags, .rev), .rev);
+            old_forward_groups.retire(graph);
+            old_reverse_groups.retire(graph);
+            _ = graph.edge_count.fetchSub(match_count, .release);
+            rcu.bumpEpoch(graph);
+            writer_guard.end();
+            rcu.reclaimRetired(graph);
+            return true;
+        }
+    }
+
     const forward_found = common.findSlotInAdj(
-        graph, source_pubfwd.first_block, source_pubfwd.block_count,
-        source_pubfwd.group_count, source_pubfwd.first_group,
-        destination.index, .fwd,
+        graph,
+        source_pubfwd.first_block,
+        source_pubfwd.block_count,
+        source_pubfwd.group_count,
+        source_pubfwd.first_group,
+        destination.index,
+        .fwd,
     ) orelse return false;
 
     const reverse_found = common.findSlotInAdj(
-        graph, dest_pubrev.first_block, dest_pubrev.block_count,
-        dest_pubrev.group_count, dest_pubrev.first_group,
-        source.index, .rev,
+        graph,
+        dest_pubrev.first_block,
+        dest_pubrev.block_count,
+        dest_pubrev.group_count,
+        dest_pubrev.first_group,
+        source.index,
+        .rev,
     ) orelse return error.CorruptGraph;
 
     const forward_plan = try planRemovalSide(graph, &source_pubfwd, forward_found, .fwd);
@@ -437,4 +531,259 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     rcu.reclaimRetired(graph);
 
     return true;
+}
+
+/// Removes a specific edge identified by its EdgeId. Returns true if found and removed.
+pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) !bool {
+    if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
+
+    const source_node = page_ops.nodeAt(graph, source);
+    const destination_node = page_ops.nodeAt(graph, destination);
+
+    var claims = try common.tryClaimAdjacencies(source_node, destination_node, source.index, destination.index);
+    defer claims.release();
+
+    const source_meta = source_node.loadPublishedMeta();
+    const destination_meta = destination_node.loadPublishedMeta();
+    const source_flags = source_meta.flags();
+    const destination_flags = destination_meta.flags();
+    if (source_meta.removed or destination_meta.removed) {
+        return error.InvalidNode;
+    }
+
+    var writer_guard = common.beginWriter(graph);
+    defer writer_guard.end();
+
+    const source_pubfwd = source_node.publishedFwdFromMeta(source_meta);
+    const dest_pubrev = destination_node.publishedRevFromMeta(destination_meta);
+
+    const old_forward_groups = OldGroupChain.captureSide(&source_pubfwd);
+    const old_reverse_groups = OldGroupChain.captureSide(&dest_pubrev);
+
+    const forward_found = common.findSlotInAdjById(
+        graph, source_pubfwd.first_block, source_pubfwd.block_count,
+        source_pubfwd.group_count, source_pubfwd.first_group,
+        destination.index, edge_id.local,
+    ) orelse return false;
+
+    const reverse_found = common.findSlotInAdj(
+        graph, dest_pubrev.first_block, dest_pubrev.block_count,
+        dest_pubrev.group_count, dest_pubrev.first_group,
+        source.index, .rev,
+    ) orelse return error.CorruptGraph;
+
+    const forward_plan = try planRemovalSide(graph, &source_pubfwd, forward_found, .fwd);
+    const reverse_plan = try planRemovalSide(graph, &dest_pubrev, reverse_found, .rev);
+
+    source_node.copyPublishedToStagingFwd(source_meta);
+    destination_node.copyPublishedToStagingRev(destination_meta);
+    const sfwd = source_node.stagingFwd(source_meta);
+    const srev = destination_node.stagingRev(destination_meta);
+
+    var allocs = common.MutationScratch{};
+    defer allocs.deinit(graph.allocator);
+    defer allocs.cleanup(graph);
+
+    const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd, &allocs);
+    const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev, &allocs);
+    var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
+    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
+
+    var destination_publish_adj = nodeAdjForSide(srev.*, destination_flags, .rev);
+    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
+
+    allocs.disarm();
+
+    if (source_meta.degree_fwd == 0) return error.CorruptGraph;
+    if (destination_meta.degree_rev == 0) return error.CorruptGraph;
+
+    if (source.index == destination.index) {
+        std.debug.assert(@as(u64, @bitCast(source_meta)) == @as(u64, @bitCast(destination_meta)));
+        var merged_flags = source_publish_adj.flags;
+        merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
+        merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
+        _ = common.publishBothDelta(source_node, source_meta, merged_flags, -1, -1);
+    } else {
+        _ = common.publishStagedRev(destination_node, destination_meta, destination_publish_adj.flags.needs_repair_rev, -1);
+        _ = common.publishStagedFwd(source_node, source_meta, source_publish_adj.flags.needs_repair_fwd, -1);
+    }
+
+    try rcu.retireBlockFwd(graph, forward_build.old_block);
+    try rcu.retireBlockRev(graph, reverse_build.old_block);
+    if (forward_build.new_live == 0) try rcu.retireBlockFwd(graph, forward_build.new_block);
+    if (reverse_build.new_live == 0) try rcu.retireBlockRev(graph, reverse_build.new_block);
+
+    old_forward_groups.retire(graph);
+    old_reverse_groups.retire(graph);
+
+    _ = graph.edge_count.fetchSub(1, .release);
+    rcu.bumpEpoch(graph);
+    writer_guard.end();
+    rcu.reclaimRetired(graph);
+
+    return true;
+}
+
+/// Rebuilds a forward side adjacency, removing all edges to `destination_index`.
+/// Returns the new SideAdj and the number of edges removed.
+fn rebuildForwardRemoveAll(
+    graph: *graph_core.GraphCore,
+    published_side: *const types.SideAdj,
+    destination_index: u32,
+    scratch: *common.MutationScratch,
+) !struct { new_side: types.SideAdj, removed: u32 } {
+    var block_list: std.ArrayList(u32) = .empty;
+    defer block_list.deinit(graph.allocator);
+    var total_removed: u32 = 0;
+
+    if (published_side.group_count == 0) {
+        const first = published_side.first_block;
+        for (first..first + published_side.block_count) |block_idx| {
+            total_removed += try copyBlockWithoutDestination(
+                graph, @intCast(block_idx), destination_index, scratch, &block_list,
+            );
+        }
+    } else {
+        var group_idx = published_side.first_group;
+        var visited: u16 = 0;
+        while (visited < published_side.group_count) : (visited += 1) {
+            if (group_idx == constants.END_OF_CHAIN) break;
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
+                total_removed += try copyBlockWithoutDestination(
+                    graph, @intCast(block_idx), destination_index, scratch, &block_list,
+                );
+            }
+            group_idx = group.next;
+        }
+    }
+
+    var new_side: types.SideAdj = undefined;
+    try common.buildSideFromBlocks(&new_side, graph, block_list.items, scratch);
+    return .{ .new_side = new_side, .removed = total_removed };
+}
+
+/// COW-copies a forward block, stripping all edges to `destination_index`.
+/// Returns number of edges removed from this block. Appends to `block_list`
+/// if the resulting block is non-empty.
+fn copyBlockWithoutDestination(
+    graph: *graph_core.GraphCore,
+    block_idx: u32,
+    destination_index: u32,
+    scratch: *common.MutationScratch,
+    block_list: *std.ArrayList(u32),
+) !u32 {
+    const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+    const old_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+    const live = @popCount(old_block.mask);
+    if (live == 0) return 0;
+
+    var removed: u32 = 0;
+    for (0..live) |slot| {
+        if (old_block.edges[slot].destination == destination_index) removed += 1;
+    }
+    if (removed == 0) {
+        try block_list.append(graph.allocator, block_idx);
+        return 0;
+    }
+
+    const new_block_idx = try scratch.allocBlock(graph, .fwd);
+    const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .fwd);
+    const new_ids = page_ops.edgeBlockFwdIdsAt(graph, new_block_idx);
+    var write: u7 = 0;
+    for (0..live) |slot| {
+        if (old_block.edges[slot].destination != destination_index) {
+            new_block.edges[write] = old_block.edges[slot];
+            new_ids.ids[write] = old_ids.ids[slot];
+            write += 1;
+        }
+    }
+    new_block.mask = constants.denseMask(write);
+    try block_list.append(graph.allocator, new_block_idx);
+    return removed;
+}
+
+/// Rebuilds a reverse side adjacency, removing `remove_count` occurrences
+/// of `source_index`. Returns the new SideAdj.
+fn rebuildReverseRemoveCount(
+    graph: *graph_core.GraphCore,
+    published_side: *const types.SideAdj,
+    source_index: u32,
+    remove_count: u32,
+    scratch: *common.MutationScratch,
+) !types.SideAdj {
+    var block_list: std.ArrayList(u32) = .empty;
+    defer block_list.deinit(graph.allocator);
+    var remaining = remove_count;
+
+    if (published_side.group_count == 0) {
+        const first = published_side.first_block;
+        for (first..first + published_side.block_count) |block_idx| {
+            remaining = try copyReverseBlockRemoveSource(
+                graph, @intCast(block_idx), source_index, remaining, scratch, &block_list,
+            );
+        }
+    } else {
+        var group_idx = published_side.first_group;
+        var visited: u16 = 0;
+        while (visited < published_side.group_count) : (visited += 1) {
+            if (group_idx == constants.END_OF_CHAIN or remaining == 0) break;
+            const group = page_ops.groupAtConst(graph, group_idx);
+            for (group.start..group.start + group.count) |block_idx| {
+                remaining = try copyReverseBlockRemoveSource(
+                    graph, @intCast(block_idx), source_index, remaining, scratch, &block_list,
+                );
+                if (remaining == 0) break;
+            }
+            group_idx = group.next;
+        }
+    }
+
+    if (remaining > 0) return error.CorruptGraph;
+
+    var new_side: types.SideAdj = undefined;
+    try common.buildSideFromBlocks(&new_side, graph, block_list.items, scratch);
+    return new_side;
+}
+
+fn copyReverseBlockRemoveSource(
+    graph: *graph_core.GraphCore,
+    block_idx: u32,
+    source_index: u32,
+    remove_count: u32,
+    scratch: *common.MutationScratch,
+    block_list: *std.ArrayList(u32),
+) !u32 {
+    const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
+    const live = @popCount(old_block.mask);
+    if (live == 0) return remove_count;
+
+    var in_block: u32 = 0;
+    for (0..live) |slot| {
+        if (old_block.sources[slot] == source_index) in_block += 1;
+    }
+    if (in_block == 0) {
+        try block_list.append(graph.allocator, block_idx);
+        return remove_count;
+    }
+
+    const take = @min(in_block, remove_count);
+    const new_live: u7 = @intCast(live - take);
+    if (new_live == 0) return remove_count - take;
+
+    const new_block_idx = try scratch.allocBlock(graph, .rev);
+    const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .rev);
+    var write: u7 = 0;
+    var skipped: u32 = 0;
+    for (0..live) |slot| {
+        if (old_block.sources[slot] == source_index and skipped < take) {
+            skipped += 1;
+        } else {
+            new_block.sources[write] = old_block.sources[slot];
+            write += 1;
+        }
+    }
+    new_block.mask = constants.denseMask(write);
+    try block_list.append(graph.allocator, new_block_idx);
+    return remove_count - take;
 }

@@ -15,16 +15,21 @@ const node_validity = @import("core/node_validity.zig");
 const bfs_mod = @import("algorithms/bfs.zig");
 const dfs_mod = @import("algorithms/dfs.zig");
 const cycle_mod = @import("algorithms/cycle.zig");
+const out_edge_iter = @import("out_edge_iterator.zig");
 
 // ── Internal API used by public wrappers ─────────────────────────────────
 pub const NodeId = types.NodeId;
 pub const GraphError = types.GraphError;
-pub const DeinitError = error{ GraphBusy };
+pub const DeinitError = error{GraphBusy};
 pub const NodeFlags = types.NodeFlags;
 pub const EdgeFlags = types.EdgeFlags;
 pub const Edge = types.Edge;
 pub const Violation = types.Violation;
 pub const NeighborIterator = query.NeighborIterator;
+pub const OutEdgeIterator = out_edge_iter.OutEdgeIterator;
+pub const EdgeId = types.EdgeId;
+pub const EdgeRef = types.EdgeRef;
+pub const GraphOptions = types.GraphOptions;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -88,13 +93,17 @@ pub const Graph = struct {
         _ = core.call_state.fetchAnd(graph_core.GraphCore.CALL_ACTIVE_MASK, .acq_rel);
     }
 
-    pub fn init(allocator: std.mem.Allocator) !Graph {
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        options: types.GraphOptions,
+    ) !Graph {
         const first_page = try allocator.alloc(types.NodeBuffer, constants.NODES_PER_PAGE);
         errdefer allocator.free(first_page);
         @memset(first_page, std.mem.zeroes(types.NodeBuffer));
 
         var state_value = graph_core.GraphCore{
             .allocator = allocator,
+            .multigraph_enabled = options.multigraph,
             .repair_fwd = .empty,
             .repair_rev = .empty,
         };
@@ -102,6 +111,10 @@ pub const Graph = struct {
         state_value.node_pages_pages[0].store(@intFromPtr(first_page.ptr), .release);
 
         return .{ .graph = state_value };
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !Graph {
+        return initWithOptions(allocator, .{});
     }
 
     pub fn deinit(self: *Graph) void {
@@ -122,6 +135,7 @@ pub const Graph = struct {
         freeAtomicPages(types.EdgeBlockFwd, alloc, self.graph.edge_blocks_fwd_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockRev, alloc, self.graph.edge_blocks_rev_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockGroup, alloc, self.graph.edge_block_group_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
+        freeAtomicPages(types.EdgeBlockFwdIds, alloc, self.graph.edge_blocks_fwd_id_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_fwd_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_rev_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_block_group_meta_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
@@ -285,6 +299,12 @@ pub const Graph = struct {
         return query.inDegree(&self.graph, node);
     }
 
+    pub fn outEdges(self: *const Graph, node: types.NodeId) GraphError!out_edge_iter.OutEdgeIterator {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
+        return out_edge_iter.outEdges(&self.graph, node);
+    }
+
     pub fn bfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
         try beginCall(@constCast(&self.graph));
         defer endCall(@constCast(&self.graph));
@@ -325,10 +345,22 @@ pub const Graph = struct {
         return mutation.addEdge(&self.graph, source, destination, relation, flags);
     }
 
+    pub fn addEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!types.EdgeId {
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
+        return mutation.addEdgeWithId(&self.graph, source, destination, relation, flags);
+    }
+
     pub fn removeEdge(self: *Graph, source: types.NodeId, destination: types.NodeId) GraphError!bool {
         try beginCall(&self.graph);
         defer endCall(&self.graph);
         return mutation.removeEdge(&self.graph, source, destination);
+    }
+
+    pub fn removeEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) GraphError!bool {
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
+        return mutation.removeEdgeWithId(&self.graph, source, destination, edge_id);
     }
 
     pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!void {

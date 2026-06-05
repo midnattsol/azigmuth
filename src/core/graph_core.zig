@@ -9,6 +9,10 @@ const types = @import("types.zig");
 pub const GraphCore = struct {
     allocator: std.mem.Allocator,
 
+    /// Enables multigraph mode: multiple edges between the same (source,destination)
+    /// pair are allowed, and `EdgeId` disambiguates them.
+    multigraph_enabled: bool = false,
+
     /// Atomically-published node pages for lock-free node lookup during
     /// concurrent reads and `addNode` growth.
     node_pages_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
@@ -22,6 +26,11 @@ pub const GraphCore = struct {
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_BLOCK_PAGES,
     edge_block_group_pages: [constants.MAX_EDGE_GROUP_PAGES]std.atomic.Value(usize) =
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_GROUP_PAGES,
+
+    /// Per-forward-block edge ID sidecar pages. Same block_idx and lifecycle
+    /// as edge_blocks_fwd_pages.
+    edge_blocks_fwd_id_pages: [constants.MAX_EDGE_BLOCK_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_BLOCK_PAGES,
 
     /// Per-group metadata pages for lock-free retired/free stacks.
     edge_block_group_meta_pages: [constants.MAX_EDGE_GROUP_PAGES]std.atomic.Value(usize) =

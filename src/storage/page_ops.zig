@@ -249,6 +249,18 @@ pub fn edgeBlockFwdAtConst(graph: *const graph_core.GraphCore, block_index: u32)
     return &page[slotOf(block_index, constants.EDGE_BLOCKS_PER_PAGE)];
 }
 
+pub fn edgeBlockFwdIdsAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwdIds {
+    const page_index = pageOf(block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    const page = loadPageMut(types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return &page[slotOf(block_index, constants.EDGE_BLOCKS_PER_PAGE)];
+}
+
+pub fn edgeBlockFwdIdsAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwdIds {
+    const page_index = pageOf(block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    const page = loadPage(types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return &page[slotOf(block_index, constants.EDGE_BLOCKS_PER_PAGE)];
+}
+
 pub fn edgeBlockRevAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockRev {
     const page_index = pageOf(block_index, constants.EDGE_BLOCKS_PER_PAGE);
     const page = loadPageMut(types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
@@ -300,6 +312,7 @@ fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSid
         switch (side) {
             .fwd => {
                 _ = try ensurePage(graph, types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+                _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
                 _ = try ensureMetaPage(graph, graph.edge_blocks_fwd_meta_pages[0..], page_index);
                 if (@cmpxchgWeak(u32, &graph.block_fwd_count, block_index, block_index + 1, .acq_rel, .acquire) == null) return block_index;
             },
@@ -323,6 +336,7 @@ pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u
         switch (side) {
             .fwd => {
                 _ = try ensurePage(graph, types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+                _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
                 _ = try ensureMetaPage(graph, graph.edge_blocks_fwd_meta_pages[0..], page_index);
             },
             .rev => {
@@ -339,6 +353,9 @@ pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide
             .fwd => types.EdgeBlockFwd,
             .rev => types.EdgeBlockRev,
         });
+        if (side == .fwd) {
+            edgeBlockFwdIdsAt(graph, block_index).* = std.mem.zeroes(types.EdgeBlockFwdIds);
+        }
         return block_index;
     }
 

@@ -31,6 +31,14 @@ pub const GraphBuilder = opaque {
         return @ptrCast(b);
     }
 
+    /// Creates a new builder with the given options.
+    pub fn initWithOptions(allocator: std.mem.Allocator, options: internal.GraphOptions) internal.GraphError!*GraphBuilder {
+        const b = try allocator.create(internal_builder.GraphBuilder);
+        errdefer allocator.destroy(b);
+        b.* = try internal_builder.GraphBuilder.initWithOptions(allocator, options);
+        return @ptrCast(b);
+    }
+
     /// Frees builder scratch resources and the heap handle.  If `freeze()` was
     /// not called, the internal working graph is also released.  Must be called
     /// even after a successful `freeze()` — the builder handle is always owned

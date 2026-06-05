@@ -100,7 +100,8 @@ pub fn prepareReverseWithoutSource(
     allocator: std.mem.Allocator,
 ) !sorted_rebuild.SortedRebuildResult {
     const matches = try countReverseSourceMatches(graph, first_block, block_count, group_count, first_group, source_index);
-    if (matches != 1) return error.CorruptGraph;
+    if (!graph.multigraph_enabled and matches != 1) return error.CorruptGraph;
+    if (matches == 0) return error.CorruptGraph;
     return sorted_rebuild.sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, source_index, allocator);
 }
 
