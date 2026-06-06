@@ -7,6 +7,13 @@ const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../rcu.zig");
 const adjacency_mod = @import("../../adjacency.zig");
 const node_validity = @import("../../core/node_validity.zig");
+
+fn validateDebtQueue(queue: []const u32, node_count: u32) !void {
+    for (queue) |node_index| {
+        if (node_index >= node_count) return error.CorruptGraph;
+    }
+}
+
 pub fn validateOwnedBlockFast(
     graph: *const graph_core.GraphCore,
     owned_blocks: []u64,
@@ -93,10 +100,6 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
     }
 }
 pub fn validateRepairDebtFast(graph: *const graph_core.GraphCore, node_count: u32) !void {
-    for (graph.repair_fwd.items) |node_index| {
-        if (node_index >= node_count) return error.CorruptGraph;
-    }
-    for (graph.repair_rev.items) |node_index| {
-        if (node_index >= node_count) return error.CorruptGraph;
-    }
+    try validateDebtQueue(graph.repair_fwd.items, node_count);
+    try validateDebtQueue(graph.repair_rev.items, node_count);
 }

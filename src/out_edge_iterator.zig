@@ -7,6 +7,7 @@ const std = @import("std");
 const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
+const iterator_common = @import("iterator_common.zig");
 const types = @import("core/types.zig");
 const page_ops = @import("storage/page_ops.zig");
 const rcu = @import("rcu.zig");
@@ -36,26 +37,7 @@ pub const OutEdgeIterator = struct {
     group_count_bound: u16 = 0,
 
     fn advanceToNextGroup(self: *OutEdgeIterator) bool {
-        if (self.contiguous_mode) return false;
-        if (self.current_group_index == constants.END_OF_CHAIN) return false;
-
-        const current = page_ops.groupAtConst(self.core, self.current_group_index);
-        if (current.next == constants.END_OF_CHAIN) {
-            self.current_group_index = constants.END_OF_CHAIN;
-            return false;
-        }
-
-        self.current_group_index = current.next;
-        self.groups_visited += 1;
-        if (self.groups_visited >= self.group_count_bound) {
-            self.current_group_index = constants.END_OF_CHAIN;
-            return false;
-        }
-
-        const next_group = page_ops.groupAtConst(self.core, self.current_group_index);
-        self.current_block_index = next_group.start;
-        self.blocks_remaining = next_group.count;
-        return true;
+        return iterator_common.advanceToNextGroup(self, self.core);
     }
 
     fn loadNextNonEmptyMask(self: *OutEdgeIterator) bool {
@@ -78,13 +60,7 @@ pub const OutEdgeIterator = struct {
     }
 
     fn destinationRemoved(self: *OutEdgeIterator, destination_index: u32) bool {
-        const page_index = page_ops.pageOf(destination_index, constants.NODES_PER_PAGE);
-        if (self.cached_node_page == null or self.cached_node_page_index != page_index) {
-            self.cached_node_page = page_ops.nodePageAtConst(self.core, page_index);
-            self.cached_node_page_index = page_index;
-        }
-        const slot_index = page_ops.slotOf(destination_index, constants.NODES_PER_PAGE);
-        return self.cached_node_page.?[slot_index].loadPublishedMeta().removed;
+        return iterator_common.candidateRemoved(self, self.core, destination_index);
     }
 
     /// Returns the next outgoing edge with its identity, or null when exhausted.
@@ -119,48 +95,16 @@ pub const OutEdgeIterator = struct {
     }
 
     pub fn deinit(self: *OutEdgeIterator) void {
-        if (!self.reader_active) return;
-        switch (rcu.beginCloseReaderToken(self.reader_token)) {
-            .inactive => {},
-            .pending => {},
-            .finalize => rcu.finalizeReaderExit(@constCast(self.core), self.reader_token),
-        }
-        self.reader_active = false;
+        iterator_common.deinitReader(self, self.core);
     }
 };
 
-fn buildIteratorState(node_adj: types.NodeAdj) struct {
-    contiguous_mode: bool,
-    current_block_index: u32,
-    blocks_remaining: u32,
-    current_group_index: u32,
-} {
-    const block_count: u32 = node_adj.block_count_fwd;
-    const group_count: u32 = node_adj.group_count_fwd;
-
-    if (block_count == 0) {
-        return .{
-            .contiguous_mode = true,
-            .current_block_index = 0,
-            .blocks_remaining = 0,
-            .current_group_index = constants.END_OF_CHAIN,
-        };
-    }
-
-    if (group_count == 0) {
-        return .{
-            .contiguous_mode = true,
-            .current_block_index = node_adj.first_block_fwd,
-            .blocks_remaining = block_count,
-            .current_group_index = constants.END_OF_CHAIN,
-        };
-    }
-
+fn forwardSideAdj(node_adj: types.NodeAdj) types.SideAdj {
     return .{
-        .contiguous_mode = false,
-        .current_block_index = 0,
-        .blocks_remaining = 0,
-        .current_group_index = node_adj.first_group_fwd,
+        .first_block = node_adj.first_block_fwd,
+        .block_count = node_adj.block_count_fwd,
+        .group_count = node_adj.group_count_fwd,
+        .first_group = node_adj.first_group_fwd,
     };
 }
 
@@ -177,7 +121,7 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
     try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .fwd);
 
-    const initial = buildIteratorState(node_adj_snapshot);
+    const initial = iterator_common.buildTraversalState(forwardSideAdj(node_adj_snapshot));
 
     var iterator = OutEdgeIterator{
         .core = graph,
@@ -193,11 +137,7 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .group_count_bound = node_adj_snapshot.group_count_fwd,
     };
 
-    if (!iterator.contiguous_mode and iterator.current_group_index != constants.END_OF_CHAIN) {
-        const first_group = page_ops.groupAtConst(graph, iterator.current_group_index);
-        iterator.current_block_index = first_group.start;
-        iterator.blocks_remaining = first_group.count;
-    }
+    iterator_common.primeGroupedTraversal(&iterator, graph);
 
     return iterator;
 }

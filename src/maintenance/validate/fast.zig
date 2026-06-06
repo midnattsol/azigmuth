@@ -13,7 +13,6 @@ const sums = @import("sums.zig");
 const stacks = @import("stacks.zig");
 const ownership = @import("ownership.zig");
 const consistency = @import("consistency.zig");
-const violations = @import("violations.zig");
 
 pub fn validate(graph: *const graph_core.GraphCore) !void {
     const reader_token = try common.readerEnter(graph);
@@ -80,7 +79,7 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
             if (@as(usize, meta.degree_rev) != rev_visible) {
                 return error.CorruptGraph;
             }
-            if (!adjacency.flags.needs_repair_fwd and violations.forwardHasTombstone(graph, adjacency)) {
+            if (!adjacency.flags.needs_repair_fwd and common.forwardHasTombstone(graph, adjacency)) {
                 return error.CorruptGraph;
             }
         }

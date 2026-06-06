@@ -79,9 +79,24 @@ pub const GraphBuilder = struct {
     frozen: bool = false,
     next_edge_id: u32 = 1,
 
-    pub fn init(allocator: std.mem.Allocator) !GraphBuilder {
-        var graph = try Graph.init(allocator);
+    fn initGraph(allocator: std.mem.Allocator, options: ?types.GraphOptions) !Graph {
+        var graph = if (options) |graph_options|
+            try Graph.initWithOptions(allocator, graph_options)
+        else
+            try Graph.init(allocator);
         errdefer graph.deinit();
+        return graph;
+    }
+
+    fn setContiguousSide(side: *types.SideAdj, first_block: u32, block_count: u16) void {
+        side.first_block = first_block;
+        side.block_count = block_count;
+        side.group_count = 0;
+        side.first_group = 0;
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !GraphBuilder {
+        const graph = try initGraph(allocator, null);
         return .{
             .graph = graph,
             .edge_keys = std.AutoHashMap(u64, void).init(allocator),
@@ -89,8 +104,7 @@ pub const GraphBuilder = struct {
     }
 
     pub fn initWithOptions(allocator: std.mem.Allocator, options: types.GraphOptions) !GraphBuilder {
-        var graph = try Graph.initWithOptions(allocator, options);
-        errdefer graph.deinit();
+        const graph = try initGraph(allocator, options);
         return .{
             .graph = graph,
             .edge_keys = std.AutoHashMap(u64, void).init(allocator),
@@ -225,10 +239,7 @@ pub const GraphBuilder = struct {
         if (self.graph.graph.multigraph_enabled) {
             node_buffer.next_local_edge_id.store(max_edge_id + 1, .monotonic);
         }
-        node_buffer.fwd_buffers[0].first_block = first_block;
-        node_buffer.fwd_buffers[0].block_count = block_count;
-        node_buffer.fwd_buffers[0].group_count = 0;
-        node_buffer.fwd_buffers[0].first_group = 0;
+        setContiguousSide(&node_buffer.fwd_buffers[0], first_block, block_count);
     }
 
     fn publishForwardAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_fwd: u32) void {
@@ -271,10 +282,7 @@ pub const GraphBuilder = struct {
             }
 
             const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
-            node_buffer.rev_buffers[0].first_block = next_block_index;
-            node_buffer.rev_buffers[0].block_count = block_count;
-            node_buffer.rev_buffers[0].group_count = 0;
-            node_buffer.rev_buffers[0].first_group = 0;
+            setContiguousSide(&node_buffer.rev_buffers[0], next_block_index, block_count);
             next_block_index += block_count;
         }
 

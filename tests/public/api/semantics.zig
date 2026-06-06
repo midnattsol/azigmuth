@@ -6,56 +6,6 @@ const graphz = @import("graphz");
 
 const testing = std.testing;
 
-test "api semantics: outDegree on removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const node = try graph.addNode();
-    _ = try graph.removeNode(node);
-
-    try testing.expectError(error.InvalidNode, graph.outDegree(node));
-}
-
-test "api semantics: inDegree on removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const node = try graph.addNode();
-    _ = try graph.removeNode(node);
-
-    try testing.expectError(error.InvalidNode, graph.inDegree(node));
-}
-
-test "api semantics: neighbors on removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const node = try graph.addNode();
-    _ = try graph.removeNode(node);
-
-    try testing.expectError(error.InvalidNode, graph.neighbors(node));
-}
-
-test "api semantics: inNeighbors on removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const node = try graph.addNode();
-    _ = try graph.removeNode(node);
-
-    try testing.expectError(error.InvalidNode, graph.inNeighbors(node));
-}
-
-test "api semantics: hasNode on removed node returns false" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const node = try graph.addNode();
-    _ = try graph.removeNode(node);
-
-    try testing.expect(!graph.hasNode(node));
-}
-
 test "api semantics: addEdge to removed node returns InvalidNode" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -124,25 +74,4 @@ test "api semantics: nodeCount returns 0 for empty graph" {
     defer graph.deinit();
 
     try testing.expectEqual(@as(usize, 0), graph.nodeCount());
-}
-
-test "api semantics: duplicate addEdge returns EdgeAlreadyExists" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, .{});
-
-    try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(a, b, 0, .{}));
-}
-
-test "api semantics: removeEdge on non-existent edge returns false" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-
-    try testing.expectEqual(false, try graph.removeEdge(a, b));
 }

@@ -38,6 +38,14 @@ pub fn main() !void {
         std.debug.print("neighbor: {}\n", .{neighbor.index});
     }
 
+    const removal = try g.removeNode(b);
+    std.debug.print("removed visible edges: {}\n", .{removal.removed_visible_edges});
+
+    const stats = try g.debtStats();
+    std.debug.print("fwd repair debt nodes: {}\n", .{stats.nodes_with_repair_fwd});
+
+    _ = try g.flushRepairs();
+
     try g.validate();
 }
 ```
@@ -75,6 +83,47 @@ an implementation detail.
   also return `error.GraphBusy` instead of entering the graph.
 - Non-fallible accessors (`hasNode`, `nodeCount`, `edgeCount`) return safe
   defaults during that brief closing window.
+- Heavy maintenance is explicit. If you want a clean quiescent graph before
+  shutdown, call `flushRepairs()` before `deinitChecked()`.
+
+## RemoveNode And Repair
+
+`removeNode()` is logically complete when it returns, but it may leave
+structural repair debt behind for live predecessors. The return value
+`NodeRemovalSummary` reports that aftermath so embeddings can decide whether to
+repair now or later.
+
+```zig
+const summary = try g.removeNode(node);
+if (summary.left_forward_repair_debt) {
+    _ = try g.repairBudgeted(summary.related_live_nodes_touched);
+}
+```
+
+For a stronger quiescent cleanup pass, use `flushRepairs()`:
+
+```zig
+const flush = try g.flushRepairs();
+std.debug.print("repaired={} remaining_fwd={}\n", .{
+    flush.repaired_nodes,
+    flush.remaining_repair_fwd,
+});
+```
+
+## Debt Stats
+
+`debtStats()` exposes raw engine observability so embeddings can choose their
+own maintenance policy.
+
+```zig
+const debt = try g.debtStats();
+std.debug.print("live={} removed={} queued_fwd={} tombstone_fwd={}\n", .{
+    debt.live_nodes,
+    debt.removed_nodes,
+    debt.queued_repair_fwd,
+    debt.estimated_tombstone_fwd_nodes,
+});
+```
 
 ## Materialize
 

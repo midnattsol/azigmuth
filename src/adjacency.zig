@@ -80,38 +80,25 @@ pub fn validateSideAdjLayout(graph: *const graph_core.GraphCore, side_adj: types
     if (total_blocks != side_adj.block_count) return error.CorruptGraph;
 }
 
-pub fn validateNodeAdjLayout(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comptime side: AdjSide) !void {
-    const side_adj = switch (side) {
-        .fwd => types.SideAdj{
+pub fn sideAdjOfNode(node_adj: types.NodeAdj, comptime side: AdjSide) types.SideAdj {
+    return switch (side) {
+        .fwd => .{
             .first_block = node_adj.first_block_fwd,
             .block_count = node_adj.block_count_fwd,
             .group_count = node_adj.group_count_fwd,
             .first_group = node_adj.first_group_fwd,
         },
-        .rev => types.SideAdj{
+        .rev => .{
             .first_block = node_adj.first_block_rev,
             .block_count = node_adj.block_count_rev,
             .group_count = node_adj.group_count_rev,
             .first_group = node_adj.first_group_rev,
         },
     };
-    try validateSideAdjLayoutForSide(graph, side_adj, side);
 }
 
-fn groupCount(node_adj: *const types.NodeAdj, comptime dir: AdjSide) u16 {
-    return if (dir == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
-}
-
-fn firstGroup(node_adj: *const types.NodeAdj, comptime dir: AdjSide) u32 {
-    return if (dir == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
-}
-
-fn setFirstGroup(node_adj: *types.NodeAdj, comptime dir: AdjSide, group_index: u32) void {
-    if (dir == .fwd) {
-        node_adj.first_group_fwd = group_index;
-    } else {
-        node_adj.first_group_rev = group_index;
-    }
+pub fn validateNodeAdjLayout(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comptime side: AdjSide) !void {
+    try validateSideAdjLayoutForSide(graph, sideAdjOfNode(node_adj, side), side);
 }
 
 // ── SideAdj helpers (per-side publication model) ──────────────────────
@@ -134,19 +121,6 @@ pub fn tailBlockIndexSideChecked(graph: *graph_core.GraphCore, side_adj: *const 
 
 pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) ?u32 {
     return tailBlockIndexSideChecked(graph, side_adj) catch null;
-}
-
-pub fn extendTailGroupSide(graph: *graph_core.GraphCore, side_adj: *types.SideAdj) void {
-    var group_index = side_adj.first_group;
-    var visited: u16 = 0;
-    while (visited < side_adj.group_count) : (visited += 1) {
-        const group = page_ops.groupAt(graph, group_index);
-        if (group.next == constants.END_OF_CHAIN) {
-            group.count += 1;
-            break;
-        }
-        group_index = group.next;
-    }
 }
 
 pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, target: u32) !bool {
@@ -245,54 +219,8 @@ fn hasEdgeInForwardRun(graph: *const graph_core.GraphCore, start: u32, count: u1
     return false;
 }
 
-fn forwardAdjRangesMonotonic(
-    graph: *const graph_core.GraphCore,
-    first_block: u32,
-    block_count: u16,
-    group_count: u16,
-    first_group: u32,
-) bool {
-    if (group_count == 0) return forwardRunRangesMonotonic(graph, first_block, block_count);
-
-    var prev_last: ?u32 = null;
-    var group_index = first_group;
-    var visited: u16 = 0;
-    while (visited < group_count) : (visited += 1) {
-        const group = page_ops.groupAtConst(graph, group_index);
-        for (group.start..group.start + group.count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            if (live == 0) continue;
-
-            const first_edge = block.edges[0].destination;
-            const last_edge = block.edges[live - 1].destination;
-            if (prev_last) |previous| {
-                if (previous > first_edge) return false;
-            }
-            prev_last = last_edge;
-        }
-        group_index = group.next;
-    }
-    return true;
-}
-
 pub fn hasEdgeInAdjChecked(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, target: u32) !bool {
-    const block_count = node_adj.block_count_fwd;
-    if (block_count == 0) return false;
-    try validateNodeAdjLayout(graph, node_adj, .fwd);
-
-    if (node_adj.group_count_fwd == 0) {
-        return hasEdgeInForwardRun(graph, node_adj.first_block_fwd, block_count, target);
-    }
-
-    var group_index = node_adj.first_group_fwd;
-    var visited: u16 = 0;
-    while (visited < node_adj.group_count_fwd) : (visited += 1) {
-        const group = page_ops.groupAtConst(graph, group_index);
-        if (hasEdgeInForwardRun(graph, group.start, group.count, target)) return true;
-        group_index = group.next;
-    }
-    return false;
+    return hasEdgeInSideAdjChecked(graph, sideAdjOfNode(node_adj, .fwd), target);
 }
 
 pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, target: u32) bool {
@@ -525,17 +453,6 @@ pub fn findForwardSlotByIdInRun(
     return null;
 }
 
-
-/// Searches a forward block for a specific (destination, edge_id) pair.
-/// Returns the slot index or null.
-pub fn searchForwardBlockById(
-    block: *const types.EdgeBlockFwd,
-    id_block: *const types.EdgeBlockFwdIds,
-    destination_index: u32,
-    edge_id: u32,
-) ?u7 {
-    return searchForwardBlockSlotById(block, id_block, destination_index, edge_id);
-}
 pub fn publishedNodeAdj(graph: *const graph_core.GraphCore, node: types.NodeId) !types.NodeAdj {
     try node_validity.ensureLiveNode(graph, node);
     const node_buffer = page_ops.nodeAtConst(graph, node);

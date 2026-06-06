@@ -150,7 +150,7 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             }
             // RFC §6.3, §A.26: live predecessor with forward tombstone MUST
             // have needs_repair_fwd set.
-            if (!adjacency.flags.needs_repair_fwd and v.forwardHasTombstone(graph, adjacency)) {
+            if (!adjacency.flags.needs_repair_fwd and common.forwardHasTombstone(graph, adjacency)) {
                 try list.append(allocator, .{ .forward_tombstone_missing_repair_flag = .{ .node = node_id } });
             }
         }

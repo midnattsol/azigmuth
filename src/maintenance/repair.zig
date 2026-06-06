@@ -10,8 +10,10 @@ pub const updateRepairDebtSide = debt.updateRepairDebtSide;
 
 pub const sortedRebuildForward = rebuild.sortedRebuildForward;
 pub const sortedRebuildReverse = rebuild.sortedRebuildReverse;
-pub const countReverseSourceMatches = rebuild.countReverseSourceMatches;
-pub const prepareReverseWithoutSource = rebuild.prepareReverseWithoutSource;
+pub const rebuildForwardLive = rebuild.rebuildForwardLive;
+pub const rebuildReverseDrop = rebuild.rebuildReverseDrop;
+pub const countReverseMatches = rebuild.countReverseMatches;
+pub const prepareReverseDrop = rebuild.prepareReverseDrop;
 
 pub const repairNodeSide = scheduler.repairNodeSide;
 pub const repairNode = scheduler.repairNode;

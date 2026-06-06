@@ -7,8 +7,24 @@ const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency.zig");
 const rcu = @import("../../rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
+const side_adj = @import("../../side_adj.zig");
 const mutation_common = @import("../../mutation/common.zig");
 const debt_mod = @import("debt.zig");
+
+const ReverseSourceMatchCount = struct {
+    source_idx: u32,
+    total: usize = 0,
+};
+
+fn countReverseSourceMatch(
+    graph: *const graph_core.GraphCore,
+    count: *ReverseSourceMatchCount,
+    block_idx: u32,
+    slot: u7,
+) !void {
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
+    if (block.sources[slot] == count.source_idx) count.total += 1;
+}
 pub const ForwardTombstoneCompaction = struct {
     staging_adj: types.NodeAdj,
     live_after: usize,
@@ -20,9 +36,9 @@ pub const ReverseTombstoneCompaction = struct {
     live_after: usize,
 };
 
-pub fn rebuildForwardWithoutRemovedDestinations(
+pub fn rebuildForwardLive(
     graph: *graph_core.GraphCore,
-    node_index: u32,
+    node_idx: u32,
     published_adj: types.NodeAdj,
     allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
@@ -36,109 +52,97 @@ pub fn rebuildForwardWithoutRemovedDestinations(
     );
     defer result.new_blocks.deinit(graph.allocator);
 
-    try allocs.adoptBlocks(graph.allocator, .fwd, result.new_blocks.items);
+    allocs.adoptBlocks(graph.allocator, .fwd, result.new_blocks.items) catch |err| {
+        for (result.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, .fwd);
+        return err;
+    };
 
     var staging_adj = published_adj;
     {
         var tmp: types.SideAdj = undefined;
-        try mutation_common.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
+        try side_adj.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
         staging_adj.first_block_fwd = tmp.first_block;
         staging_adj.block_count_fwd = tmp.block_count;
         staging_adj.group_count_fwd = tmp.group_count;
         staging_adj.first_group_fwd = tmp.first_group;
     }
-    debt_mod.updateRepairDebt(graph, &staging_adj, node_index, .fwd);
+    debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0 };
 }
 
-pub fn countReverseSourceMatches(
+pub fn countReverseMatches(
     graph: *const graph_core.GraphCore,
     first_block: u32,
     block_count: u16,
     group_count: u16,
     first_group: u32,
-    source_index: u32,
+    source_idx: u32,
 ) !usize {
-    var matches: usize = 0;
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (block.sources[slot] == source_index) matches += 1;
-            }
-        }
-    } else {
-        try adjacency.validateSideAdjLayout(graph, .{
+    var count = ReverseSourceMatchCount{ .source_idx = source_idx };
+    try side_adj.forEachSlotInSide(
+        graph,
+        .{
             .first_block = first_block,
             .block_count = block_count,
             .group_count = group_count,
             .first_group = first_group,
-        });
-        var group_idx = first_group;
-        var rev_src_visited: u16 = 0;
-        while (group_idx != constants.END_OF_CHAIN) {
-            rev_src_visited += 1;
-            const group = page_ops.groupAtConst(graph, group_idx);
-            for (group.start..group.start + group.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (block.sources[slot] == source_index) matches += 1;
-                }
-            }
-            group_idx = group.next;
-        }
-    }
-    return matches;
+        },
+        .rev,
+        &count,
+        countReverseSourceMatch,
+    );
+    return count.total;
 }
 
-pub fn prepareReverseWithoutSource(
+pub fn prepareReverseDrop(
     graph: *graph_core.GraphCore,
     first_block: u32,
     block_count: u16,
     group_count: u16,
     first_group: u32,
-    source_index: u32,
+    source_idx: u32,
     allocator: std.mem.Allocator,
 ) !sorted_rebuild.SortedRebuildResult {
-    const matches = try countReverseSourceMatches(graph, first_block, block_count, group_count, first_group, source_index);
+    const matches = try countReverseMatches(graph, first_block, block_count, group_count, first_group, source_idx);
     if (!graph.multigraph_enabled and matches != 1) return error.CorruptGraph;
     if (matches == 0) return error.CorruptGraph;
-    return sorted_rebuild.sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, source_index, allocator);
+    return sorted_rebuild.sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, source_idx, allocator);
 }
 
-pub fn rebuildReverseWithoutSource(
+pub fn rebuildReverseDrop(
     graph: *graph_core.GraphCore,
-    destination_index: u32,
+    destination_idx: u32,
     published_adj: types.NodeAdj,
-    source_index: u32,
+    source_idx: u32,
     allocs: *mutation_common.MutationScratch,
 ) !ReverseTombstoneCompaction {
-    var result = try prepareReverseWithoutSource(
+    var result = try prepareReverseDrop(
         graph,
         published_adj.first_block_rev,
         published_adj.block_count_rev,
         published_adj.group_count_rev,
         published_adj.first_group_rev,
-        source_index,
+        source_idx,
         graph.allocator,
     );
     defer result.new_blocks.deinit(graph.allocator);
 
-    try allocs.adoptBlocks(graph.allocator, .rev, result.new_blocks.items);
+    allocs.adoptBlocks(graph.allocator, .rev, result.new_blocks.items) catch |err| {
+        for (result.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, .rev);
+        return err;
+    };
 
     var staging_adj = published_adj;
     {
         var tmp: types.SideAdj = undefined;
-        try mutation_common.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
+        try side_adj.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
         staging_adj.first_block_rev = tmp.first_block;
         staging_adj.block_count_rev = tmp.block_count;
         staging_adj.group_count_rev = tmp.group_count;
         staging_adj.first_group_rev = tmp.first_group;
     }
-    debt_mod.updateRepairDebt(graph, &staging_adj, destination_index, .rev);
+    debt_mod.updateRepairDebt(graph, &staging_adj, destination_idx, .rev);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after };
 }

@@ -7,7 +7,6 @@ const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../rcu.zig");
 const adjacency_mod = @import("../../adjacency.zig");
-const node_validity = @import("../../core/node_validity.zig");
 pub fn appendBlockShapeViolations(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
@@ -247,44 +246,4 @@ pub fn appendOwnershipAndShapeViolations(
             try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = block_index, .occupancy = @intCast(live_count) } });
         }
     }
-}
-
-pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj) bool {
-    const block_count = adjacency.block_count_fwd;
-    if (block_count == 0) return false;
-    const first_block = adjacency.first_block_fwd;
-    const group_count = adjacency.group_count_fwd;
-    const first_group = adjacency.first_group_fwd;
-
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const dst = block.edges[slot].destination;
-                if (dst < graph.publishedNodeCount() and
-                    node_validity.isNodeRemovedIndex(graph, dst)) return true;
-            }
-        }
-        return false;
-    }
-
-    var group_idx = first_group;
-    var visited: u32 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (visited >= graph.group_count or group_idx >= graph.group_count) break;
-        visited += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const dst = block.edges[slot].destination;
-                if (dst < graph.publishedNodeCount() and
-                    node_validity.isNodeRemovedIndex(graph, dst)) return true;
-            }
-        }
-        group_idx = group.next;
-    }
-    return false;
 }

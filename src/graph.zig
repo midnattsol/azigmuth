@@ -61,17 +61,7 @@ pub const Graph = struct {
         return false;
     }
 
-    fn beginCall(core: *graph_core.GraphCore) GraphError!void {
-        while (true) {
-            const state = core.callState();
-            if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return error.GraphBusy;
-            if ((state & graph_core.GraphCore.CALL_ACTIVE_MASK) == graph_core.GraphCore.CALL_ACTIVE_MASK) return error.GraphBusy;
-            const desired = state + 1;
-            if (core.call_state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) return;
-        }
-    }
-
-    fn beginCallNoError(core: *graph_core.GraphCore) bool {
+    fn tryBeginCall(core: *graph_core.GraphCore) bool {
         while (true) {
             const state = core.callState();
             if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return false;
@@ -81,8 +71,29 @@ pub const Graph = struct {
         }
     }
 
+    fn beginCall(core: *graph_core.GraphCore) GraphError!void {
+        if (!tryBeginCall(core)) return error.GraphBusy;
+    }
+
     fn endCall(core: *graph_core.GraphCore) void {
         _ = core.call_state.fetchSub(1, .acq_rel);
+    }
+
+    fn beginConstCall(self: *const Graph) GraphError!*graph_core.GraphCore {
+        const core = @constCast(&self.graph);
+        try beginCall(core);
+        return core;
+    }
+
+    fn beginMutCall(self: *Graph) GraphError!*graph_core.GraphCore {
+        try beginCall(&self.graph);
+        return &self.graph;
+    }
+
+    fn tryBeginConstCall(self: *const Graph) ?*graph_core.GraphCore {
+        const core = @constCast(&self.graph);
+        if (!tryBeginCall(core)) return null;
+        return core;
     }
 
     fn tryClose(core: *graph_core.GraphCore) DeinitError!void {
@@ -164,37 +175,37 @@ pub const Graph = struct {
     // ── Node API ──────────────────────────────────────────────────────
 
     pub fn addNode(self: *Graph) !types.NodeId {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
+        const core = try self.beginMutCall();
+        defer endCall(core);
 
         while (true) {
-            const index = self.graph.publishedNodeCount();
+            const index = core.publishedNodeCount();
             const page = page_ops.pageOf(index, constants.NODES_PER_PAGE);
-            _ = try page_ops.ensureNodePage(&self.graph, page);
-            page_ops.nodeAt(&self.graph, .{ .index = index }).next_local_edge_id.store(1, .monotonic);
+            _ = try page_ops.ensureNodePage(core, page);
+            page_ops.nodeAt(core, .{ .index = index }).next_local_edge_id.store(1, .monotonic);
 
-            if (self.graph.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
+            if (core.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
                 return types.NodeId{ .index = index };
             }
         }
     }
 
     pub fn nodeCount(self: *const Graph) usize {
-        if (!beginCallNoError(@constCast(&self.graph))) return 0;
-        defer endCall(@constCast(&self.graph));
-        return self.graph.publishedNodeCount();
+        const core = self.tryBeginConstCall() orelse return 0;
+        defer endCall(core);
+        return core.publishedNodeCount();
     }
 
     pub fn edgeCount(self: *const Graph) u64 {
-        if (!beginCallNoError(@constCast(&self.graph))) return 0;
-        defer endCall(@constCast(&self.graph));
-        return self.graph.edge_count.load(.acquire);
+        const core = self.tryBeginConstCall() orelse return 0;
+        defer endCall(core);
+        return core.edge_count.load(.acquire);
     }
 
     pub fn hasNode(self: *const Graph, id: types.NodeId) bool {
-        if (!beginCallNoError(@constCast(&self.graph))) return false;
-        defer endCall(@constCast(&self.graph));
-        return node_validity.isNodeLive(&self.graph, id);
+        const core = self.tryBeginConstCall() orelse return false;
+        defer endCall(core);
+        return node_validity.isNodeLive(core, id);
     }
 
     // ── Internal helpers (test/debug access, not public API) ───────────
@@ -236,9 +247,9 @@ pub const Graph = struct {
     }
 
     pub fn publishedNodeAdj(self: *const Graph, node: types.NodeId) !types.NodeAdj {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return adjacency.publishedNodeAdj(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return adjacency.publishedNodeAdj(core, node);
     }
 
     pub const ReaderToken = rcu.ReaderToken;
@@ -270,126 +281,126 @@ pub const Graph = struct {
     // ── Validation ────────────────────────────────────────────────────
 
     pub fn validate(self: *const Graph) GraphError!void {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return validate_mod.validate(&self.graph);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return validate_mod.validate(core);
     }
 
     pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) GraphError![]types.Violation {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return validate_mod.debugValidate(&self.graph, allocator);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return validate_mod.debugValidate(core, allocator);
     }
 
     // ── Query API ─────────────────────────────────────────────────────
 
     pub fn neighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.neighbors(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return query.neighbors(core, node);
     }
 
     pub fn inNeighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.inNeighbors(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return query.inNeighbors(core, node);
     }
 
     pub fn outDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.outDegree(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return query.outDegree(core, node);
     }
 
     pub fn inDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.inDegree(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return query.inDegree(core, node);
     }
 
     pub fn outEdges(self: *const Graph, node: types.NodeId) GraphError!out_edge_iter.OutEdgeIterator {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        if (!self.graph.multigraph_enabled) return error.UnsupportedOperation;
-        return out_edge_iter.outEdges(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        if (!core.multigraph_enabled) return error.UnsupportedOperation;
+        return out_edge_iter.outEdges(core, node);
     }
 
     pub fn bfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return bfs_mod.bfs(&self.graph, start, allocator);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return bfs_mod.bfs(core, start, allocator);
     }
 
     pub fn dfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return dfs_mod.dfs(&self.graph, start, allocator);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return dfs_mod.dfs(core, start, allocator);
     }
 
     pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) GraphError!bool {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return cycle_mod.hasCycle(&self.graph, allocator);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return cycle_mod.hasCycle(core, allocator);
     }
 
     // ── Repair API ────────────────────────────────────────────────────
 
     pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return repair.repairNode(&self.graph, node);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return repair.repairNode(core, node);
     }
 
     pub fn repairBudgeted(self: *Graph, max_nodes: usize) GraphError!usize {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return repair.repairBudgeted(&self.graph, max_nodes);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return repair.repairBudgeted(core, max_nodes);
     }
 
     pub fn flushRepairs(self: *Graph) GraphError!types.RepairFlushSummary {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return repair.flushRepairs(&self.graph);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return repair.flushRepairs(core);
     }
 
     pub fn debtStats(self: *const Graph) GraphError!types.DebtStats {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return stats_mod.debtStats(&self.graph);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return stats_mod.debtStats(core);
     }
 
     // ── Mutation ──────────────────────────────────────────────────────
 
     pub fn addEdge(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return mutation.addEdge(&self.graph, source, destination, relation, flags);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.addEdge(core, source, destination, relation, flags);
     }
 
     pub fn addEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!types.EdgeId {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        if (!self.graph.multigraph_enabled) return error.UnsupportedOperation;
-        return mutation.addEdgeWithId(&self.graph, source, destination, relation, flags);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        if (!core.multigraph_enabled) return error.UnsupportedOperation;
+        return mutation.addEdgeWithId(core, source, destination, relation, flags);
     }
 
     pub fn removeEdge(self: *Graph, source: types.NodeId, destination: types.NodeId) GraphError!bool {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return mutation.removeEdge(&self.graph, source, destination);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.removeEdge(core, source, destination);
     }
 
     pub fn removeEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) GraphError!bool {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        if (!self.graph.multigraph_enabled) return error.UnsupportedOperation;
-        return mutation.removeEdgeWithId(&self.graph, source, destination, edge_id);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        if (!core.multigraph_enabled) return error.UnsupportedOperation;
+        return mutation.removeEdgeWithId(core, source, destination, edge_id);
     }
 
     pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!types.NodeRemovalSummary {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return mutation.removeNode(&self.graph, node);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.removeNode(core, node);
     }
 };
 

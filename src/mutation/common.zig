@@ -1,6 +1,6 @@
 const claims_mod = @import("claims.zig");
 const scratch_mod = @import("scratch.zig");
-const adj_helpers_mod = @import("adj_helpers.zig");
+const side_adj = @import("../side_adj.zig");
 
 pub const ClaimedAdjacencies = claims_mod.ClaimedAdjacencies;
 pub const ClaimedNodeSides = claims_mod.ClaimedNodeSides;
@@ -17,16 +17,20 @@ pub const publishMetaFwdDeltaUpdated = claims_mod.publishMetaFwdDeltaUpdated;
 
 pub const MutationScratch = scratch_mod.MutationScratch;
 
-pub const AdjSlot = adj_helpers_mod.AdjSlot;
-pub const Run = adj_helpers_mod.Run;
-pub const RunCursor = adj_helpers_mod.RunCursor;
-pub const BlockCursor = adj_helpers_mod.BlockCursor;
-pub const SideBuilder = adj_helpers_mod.SideBuilder;
-pub const collectBlockList = adj_helpers_mod.collectBlockList;
-pub const buildSideFromBlocks = adj_helpers_mod.buildSideFromBlocks;
-pub const retireSide = adj_helpers_mod.retireSide;
-pub const publishBothAdj = adj_helpers_mod.publishBothAdj;
-pub const publishRevAdj = adj_helpers_mod.publishRevAdj;
-pub const retireGroupChain = adj_helpers_mod.retireGroupChain;
-pub const findSlotInAdj = adj_helpers_mod.findSlotInAdj;
-pub const findSlotInAdjById = adj_helpers_mod.findSlotInAdjById;
+pub const AdjSlot = side_adj.AdjSlot;
+pub const BlockCursor = side_adj.BlockCursor;
+pub const sideAdjOfNode = side_adj.sideAdjOfNode;
+pub const writeSide = side_adj.writeSide;
+pub const nodeAdjForSide = side_adj.nodeAdjForSide;
+pub const forEachBlockInSide = side_adj.forEachBlockInSide;
+pub const forEachSlotInSide = side_adj.forEachSlotInSide;
+pub const countLiveInSide = side_adj.countLiveInSide;
+pub const SideBuilder = side_adj.SideBuilder;
+pub const collectBlockList = side_adj.collectBlockList;
+pub const buildSideFromBlocks = side_adj.buildSideFromBlocks;
+pub const retireSide = side_adj.retireSide;
+pub const publishBothAdj = side_adj.publishBothAdj;
+pub const publishRevAdj = side_adj.publishRevAdj;
+pub const retireGroupChain = side_adj.retireGroupChain;
+pub const findSlotInAdj = side_adj.findSlotInAdj;
+pub const findSlotInAdjById = side_adj.findSlotInAdjById;

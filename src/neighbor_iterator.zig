@@ -7,6 +7,7 @@ const std = @import("std");
 const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
+const iterator_common = @import("iterator_common.zig");
 const types = @import("core/types.zig");
 const page_ops = @import("storage/page_ops.zig");
 const rcu = @import("rcu.zig");
@@ -25,7 +26,6 @@ pub const NeighborIterator = struct {
     current_group_index: u32,
 
     current_mask: u64,
-    current_block_for_mask: u32,
     /// Cached from loadNextNonEmptyMask so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
@@ -41,26 +41,7 @@ pub const NeighborIterator = struct {
     group_count_bound: u16 = 0,
 
     fn advanceToNextGroup(self: *NeighborIterator) bool {
-        if (self.contiguous_mode) return false;
-        if (self.current_group_index == constants.END_OF_CHAIN) return false;
-
-        const current = page_ops.groupAtConst(self.core, self.current_group_index);
-        if (current.next == constants.END_OF_CHAIN) {
-            self.current_group_index = constants.END_OF_CHAIN;
-            return false;
-        }
-
-        self.current_group_index = current.next;
-        self.groups_visited += 1;
-        if (self.groups_visited >= self.group_count_bound) {
-            self.current_group_index = constants.END_OF_CHAIN;
-            return false;
-        }
-
-        const next_group = page_ops.groupAtConst(self.core, self.current_group_index);
-        self.current_block_index = next_group.start;
-        self.blocks_remaining = next_group.count;
-        return true;
+        return iterator_common.advanceToNextGroup(self, self.core);
     }
 
     fn loadNextNonEmptyMask(self: *NeighborIterator) bool {
@@ -89,19 +70,12 @@ pub const NeighborIterator = struct {
                     self.cached_fwd_block = null;
                 },
             }
-            self.current_block_for_mask = block_index;
             return true;
         }
     }
 
     fn candidateRemoved(self: *NeighborIterator, candidate_index: u32) bool {
-        const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
-        if (self.cached_node_page == null or self.cached_node_page_index != page_index) {
-            self.cached_node_page = page_ops.nodePageAtConst(self.core, page_index);
-            self.cached_node_page_index = page_index;
-        }
-        const slot_index = page_ops.slotOf(candidate_index, constants.NODES_PER_PAGE);
-        return self.cached_node_page.?[slot_index].loadPublishedMeta().removed;
+        return iterator_common.candidateRemoved(self, self.core, candidate_index);
     }
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
@@ -131,13 +105,7 @@ pub const NeighborIterator = struct {
     }
 
     pub fn deinit(self: *NeighborIterator) void {
-        if (!self.reader_active) return;
-        switch (rcu.beginCloseReaderToken(self.reader_token)) {
-            .inactive => {},
-            .pending => {},
-            .finalize => rcu.finalizeReaderExit(@constCast(self.core), self.reader_token),
-        }
-        self.reader_active = false;
+        iterator_common.deinitReader(self, self.core);
     }
 
     /// Drains remaining items into a caller-owned slice. Allocates the result
@@ -189,38 +157,20 @@ pub fn materializeExactConsuming(iterator: *NeighborIterator, allocator: std.mem
     return out.toOwnedSlice(allocator);
 }
 
-fn buildIteratorState(direction: Direction, node_adj: types.NodeAdj) struct {
-    contiguous_mode: bool,
-    current_block_index: u32,
-    blocks_remaining: u32,
-    current_group_index: u32,
-} {
-    const block_count: u32 = if (direction == .fwd) node_adj.block_count_fwd else node_adj.block_count_rev;
-    const group_count: u32 = if (direction == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
-
-    if (block_count == 0) {
-        return .{
-            .contiguous_mode = true,
-            .current_block_index = 0,
-            .blocks_remaining = 0,
-            .current_group_index = constants.END_OF_CHAIN,
-        };
-    }
-
-    if (group_count == 0) {
-        return .{
-            .contiguous_mode = true,
-            .current_block_index = if (direction == .fwd) node_adj.first_block_fwd else node_adj.first_block_rev,
-            .blocks_remaining = block_count,
-            .current_group_index = constants.END_OF_CHAIN,
-        };
-    }
-
-    return .{
-        .contiguous_mode = false,
-        .current_block_index = 0,
-        .blocks_remaining = 0,
-        .current_group_index = if (direction == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev,
+fn sideAdj(direction: Direction, node_adj: types.NodeAdj) types.SideAdj {
+    return switch (direction) {
+        .fwd => .{
+            .first_block = node_adj.first_block_fwd,
+            .block_count = node_adj.block_count_fwd,
+            .group_count = node_adj.group_count_fwd,
+            .first_group = node_adj.first_group_fwd,
+        },
+        .rev => .{
+            .first_block = node_adj.first_block_rev,
+            .block_count = node_adj.block_count_rev,
+            .group_count = node_adj.group_count_rev,
+            .first_group = node_adj.first_group_rev,
+        },
     };
 }
 
@@ -239,7 +189,7 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .rev);
     }
 
-    const initial = buildIteratorState(direction, node_adj_snapshot);
+    const initial = iterator_common.buildTraversalState(sideAdj(direction, node_adj_snapshot));
 
     var iterator = NeighborIterator{
         .core = graph,
@@ -250,7 +200,6 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .blocks_remaining = initial.blocks_remaining,
         .current_group_index = initial.current_group_index,
         .current_mask = 0,
-        .current_block_for_mask = 0,
         .reader_active = true,
         .reader_token = reader_token,
         .groups_visited = 0,
@@ -260,11 +209,7 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         },
     };
 
-    if (!iterator.contiguous_mode and iterator.current_group_index != constants.END_OF_CHAIN) {
-        const first_group = page_ops.groupAtConst(graph, iterator.current_group_index);
-        iterator.current_block_index = first_group.start;
-        iterator.blocks_remaining = first_group.count;
-    }
+    iterator_common.primeGroupedTraversal(&iterator, graph);
 
     return iterator;
 }

@@ -7,6 +7,7 @@ const shape = @import("validate/shape.zig");
 const sums = @import("validate/sums.zig");
 const stacks = @import("validate/stacks.zig");
 const ownership = @import("validate/ownership.zig");
+const run_search = @import("validate/run_search.zig");
 const consistency = @import("validate/consistency.zig");
 const violations = @import("validate/violations.zig");
 
@@ -65,9 +66,9 @@ pub const validateAdjacencyOwnershipAndLayoutFast = ownership.validateAdjacencyO
 pub const validateRepairDebtFast = ownership.validateRepairDebtFast;
 
 // ── Re-exports from consistency.zig ────────────────────────────────────
-pub const runContainsTarget = consistency.runContainsTarget;
-pub const findSlotInRun = consistency.findSlotInRun;
-pub const adjacencyContains = consistency.adjacencyContains;
+pub const runContainsTarget = run_search.runContainsTarget;
+pub const findSlotInRun = run_search.findSlotInRun;
+pub const adjacencyContains = run_search.adjacencyContains;
 pub const appendForwardConsistencyViolations = consistency.appendForwardConsistencyViolations;
 pub const appendReverseConsistencyViolations = consistency.appendReverseConsistencyViolations;
 pub const appendRepairDebtViolations = consistency.appendRepairDebtViolations;
@@ -79,7 +80,7 @@ pub const validateReverseConsistencyInContiguousBlocks = consistency.validateRev
 
 // ── Re-exports from violations.zig ─────────────────────────────────────
 pub const DebugGroupSpan = violations.DebugGroupSpan;
-pub const forwardHasTombstone = violations.forwardHasTombstone;
+pub const forwardHasTombstone = common.forwardHasTombstone;
 pub const appendBlockShapeViolations = violations.appendBlockShapeViolations;
 pub const appendContiguousBlocks = violations.appendContiguousBlocks;
 pub const spansOverlap = violations.spansOverlap;

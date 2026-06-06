@@ -11,12 +11,15 @@ pub const claimNodeForPublish = claims.claimNodeForPublish;
 pub const releaseNodeForPublish = claims.releaseNodeForPublish;
 
 pub const hasAnyTombstone = tombstones.hasAnyTombstone;
+pub const collectForwardTombstones = tombstones.collectForwardTombstones;
 
 pub const SortedRebuildResult = sorted_rebuild.SortedRebuildResult;
 pub const sortedRebuildForward = sorted_rebuild.sortedRebuildForward;
 pub const sortedRebuildReverse = sorted_rebuild.sortedRebuildReverse;
 
-pub const countReverseSourceMatches = cleanup.countReverseSourceMatches;
-pub const prepareReverseWithoutSource = cleanup.prepareReverseWithoutSource;
+pub const rebuildForwardLive = cleanup.rebuildForwardLive;
+pub const rebuildReverseDrop = cleanup.rebuildReverseDrop;
+pub const countReverseMatches = cleanup.countReverseMatches;
+pub const prepareReverseDrop = cleanup.prepareReverseDrop;
 
-pub const repairForwardTombstonesWithReverseCleanup = tombstone_repair.repairForwardTombstonesWithReverseCleanup;
+pub const compactForwardTombstones = tombstone_repair.compactForwardTombstones;

@@ -7,6 +7,8 @@ const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../rcu.zig");
 const adjacency_mod = @import("../../adjacency.zig");
 const node_validity = @import("../../core/node_validity.zig");
+
+const LiveTotal = struct { value: u64 = 0 };
 pub fn validateBlockDense(graph: *const graph_core.GraphCore, block_index: u32, comptime side: common.Side) !void {
     if (!common.blockExists(graph, block_index, side)) return error.CorruptGraph;
 
@@ -46,13 +48,17 @@ pub fn validateDenseInGroupChain(
 }
 
 pub fn validateDenseMasks(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !void {
-    if (common.blockCount(adjacency, side) == 0) return;
-
-    if (common.groupCount(adjacency, side) == 0) {
-        return validateDenseInContiguousBlocks(graph, common.firstBlock(adjacency, side), common.blockCount(adjacency, side), side);
-    }
-
-    return validateDenseInGroupChain(graph, common.firstGroup(adjacency, side), side);
+    return common.forEachRunInAdj(graph, adjacency, side, {}, struct {
+        fn callback(
+            inner_graph: *const graph_core.GraphCore,
+            _: void,
+            start: u32,
+            count: u16,
+            _: bool,
+        ) !void {
+            try validateDenseInContiguousBlocks(inner_graph, start, count, side);
+        }
+    }.callback);
 }
 
 pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u32, comptime side: common.Side) !u64 {
@@ -137,41 +143,39 @@ pub fn validateGroupChainFast(
 }
 
 pub fn validateAdjacencyBlocksFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !u64 {
-    if (common.blockCount(adjacency, side) == 0) return 0;
-
-    if (common.groupCount(adjacency, side) == 0) {
-        return validateContiguousBlocksFast(graph, common.firstBlock(adjacency, side), common.blockCount(adjacency, side), side);
-    }
-
-    return validateGroupChainFast(graph, common.firstGroup(adjacency, side), common.groupCount(adjacency, side), side);
+    var total = LiveTotal{};
+    try common.forEachRunInAdj(graph, adjacency, side, &total, struct {
+        fn callback(
+            inner_graph: *const graph_core.GraphCore,
+            inner_total: *LiveTotal,
+            start: u32,
+            count: u16,
+            _: bool,
+        ) !void {
+            inner_total.value += try validateContiguousBlocksFast(inner_graph, start, count, side);
+        }
+    }.callback);
+    return total.value;
 }
 
 pub fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !void {
-    const count = common.blockCount(adjacency, side);
-    if (count <= 1) return;
+    const block_count = common.blockCount(adjacency, side);
+    if (block_count <= 1) return;
 
-    if (common.groupCount(adjacency, side) == 0) {
-        const end = common.firstBlock(adjacency, side) + count - 1;
-        for (common.firstBlock(adjacency, side)..end) |block_index| {
-            if (@popCount(common.blockMask(graph, @intCast(block_index), side)) < constants.MIN_OCCUPANCY) return error.CorruptGraph;
+    try common.forEachRunInAdj(graph, adjacency, side, graph, struct {
+        fn callback(
+            inner_graph: *const graph_core.GraphCore,
+            _: *const graph_core.GraphCore,
+            start: u32,
+            run_count: u16,
+            is_last: bool,
+        ) !void {
+            const end = if (is_last) start + run_count - 1 else start + run_count;
+            for (start..end) |block_index| {
+                if (@popCount(common.blockMask(inner_graph, @intCast(block_index), side)) < constants.MIN_OCCUPANCY) {
+                    return error.CorruptGraph;
+                }
+            }
         }
-        return;
-    }
-
-    var group_index = common.firstGroup(adjacency, side);
-    var visited_groups: u32 = 0;
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return error.CorruptGraph;
-        if (visited_groups >= graph.group_count) return error.CorruptGraph;
-        visited_groups += 1;
-
-        const group = page_ops.groupAtConst(graph, group_index);
-        if (group.count == 0) return error.CorruptGraph;
-        const is_last_group = group.next == constants.END_OF_CHAIN;
-        const end = if (is_last_group) group.start + group.count - 1 else group.start + group.count;
-        for (group.start..end) |block_index| {
-            if (@popCount(common.blockMask(graph, @intCast(block_index), side)) < constants.MIN_OCCUPANCY) return error.CorruptGraph;
-        }
-        group_index = group.next;
-    }
+    }.callback);
 }

@@ -1,7 +1,6 @@
 //! Node-oriented mutation helpers and node removal implementation.
 
 const std = @import("std");
-const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
@@ -29,83 +28,104 @@ const RelatedNode = struct {
     fwd_degree_delta: u22 = 0,
 };
 
-fn toU22Degree(count: usize) u22 {
-    return @as(u22, @intCast(count));
+const RemovalScan = struct {
+    forward_destinations: std.ArrayList(u32) = .empty,
+    reverse_sources: std.ArrayList(u32) = .empty,
+    self_edge_count: u32 = 0,
+    visible_forward: u32 = 0,
+    visible_incoming: u32 = 0,
+
+    fn deinit(self: *RemovalScan, allocator: std.mem.Allocator) void {
+        self.forward_destinations.deinit(allocator);
+        self.reverse_sources.deinit(allocator);
+    }
+};
+
+const RemoveCounts = struct {
+    predecessors: u32 = 0,
+    destinations: u32 = 0,
+};
+
+const ForwardDestinationCollection = struct {
+    source_idx: u32,
+    node_count: u32,
+    scan: *RemovalScan,
+};
+
+fn appendForwardDestination(
+    graph: *const graph_core.GraphCore,
+    collection: *ForwardDestinationCollection,
+    block_idx: u32,
+    slot: u7,
+) !void {
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+    const destination = block.edges[slot].destination;
+    if (destination >= collection.node_count) return error.CorruptGraph;
+    try collection.scan.forward_destinations.append(graph.allocator, destination);
+    if (node_validity.isNodeLiveIndex(graph, destination)) {
+        collection.scan.visible_forward += 1;
+    }
+    if (destination == collection.source_idx) {
+        collection.scan.self_edge_count += 1;
+    }
 }
 
-fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.NodeId, destinations: *std.ArrayList(u32)) !void {
+const ReverseSourceCollection = struct {
+    node_count: u32,
+    source_idx: u32,
+    scan: *RemovalScan,
+};
+
+fn appendReverseSource(
+    graph: *const graph_core.GraphCore,
+    collection: *ReverseSourceCollection,
+    block_idx: u32,
+    slot: u7,
+) !void {
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
+    const source_idx = block.sources[slot];
+    try collection.scan.reverse_sources.append(graph.allocator, source_idx);
+    if (source_idx >= collection.node_count) return error.CorruptGraph;
+    if (source_idx != collection.source_idx and node_validity.isNodeLiveIndex(graph, source_idx)) {
+        collection.scan.visible_incoming += 1;
+    }
+}
+
+fn collectForwardDestinations(graph: *const graph_core.GraphCore, node: types.NodeId, scan: *RemovalScan) !void {
     const node_count = graph.publishedNodeCount();
     const node_buffer = page_ops.nodeAtConst(graph, node);
     const published_adj = node_buffer.publishedAdj();
-    const degree_fwd = node_buffer.loadPublishedMeta().degree_fwd;
-    try destinations.ensureTotalCapacity(graph.allocator, degree_fwd);
-    if (published_adj.block_count_fwd == 0) return;
 
-    if (published_adj.group_count_fwd == 0) {
-        const start = published_adj.first_block_fwd;
-        const end = start + published_adj.block_count_fwd;
-        for (start..end) |block_index| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const destination = block.edges[slot].destination;
-                if (destination >= node_count) return error.CorruptGraph;
-                try destinations.append(graph.allocator, destination);
-            }
-        }
-        return;
-    }
-
-    var group_index = published_adj.first_group_fwd;
-    var visited: u16 = 0;
-    while (visited < published_adj.group_count_fwd) : (visited += 1) {
-        if (group_index == constants.END_OF_CHAIN) break;
-        const group = page_ops.groupAtConst(graph, group_index);
-        for (group.start..group.start + group.count) |block_index| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const destination = block.edges[slot].destination;
-                if (destination >= node_count) return error.CorruptGraph;
-                try destinations.append(graph.allocator, destination);
-            }
-        }
-        group_index = group.next;
-    }
+    var collection = ForwardDestinationCollection{
+        .source_idx = node.index,
+        .node_count = node_count,
+        .scan = scan,
+    };
+    try common.forEachSlotInSide(
+        graph,
+        common.sideAdjOfNode(published_adj, .fwd),
+        .fwd,
+        &collection,
+        appendForwardDestination,
+    );
 }
 
-fn collectReverseSources(graph: *const graph_core.GraphCore, node: types.NodeId, sources: *std.ArrayList(u32)) !void {
+fn collectReverseSources(graph: *const graph_core.GraphCore, node: types.NodeId, scan: *RemovalScan) !void {
     const node_buffer = page_ops.nodeAtConst(graph, node);
     const published_adj = node_buffer.publishedAdj();
-    const degree_rev = node_buffer.loadPublishedMeta().degree_rev;
-    try sources.ensureTotalCapacity(graph.allocator, degree_rev);
-    if (published_adj.block_count_rev == 0) return;
 
-    if (published_adj.group_count_rev == 0) {
-        for (published_adj.first_block_rev..published_adj.first_block_rev + published_adj.block_count_rev) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                try sources.append(graph.allocator, block.sources[slot]);
-            }
-        }
-        return;
-    }
-
-    var group_idx = published_adj.first_group_rev;
-    var visited: u16 = 0;
-    while (visited < published_adj.group_count_rev) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) break;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                try sources.append(graph.allocator, block.sources[slot]);
-            }
-        }
-        group_idx = group.next;
-    }
+    var collection = ReverseSourceCollection{
+        .node_count = graph.publishedNodeCount(),
+        .source_idx = node.index,
+        .scan = scan,
+    };
+    try common.forEachSlotInSide(
+        graph,
+        common.sideAdjOfNode(published_adj, .rev),
+        .rev,
+        &collection,
+        appendReverseSource,
+    );
 }
 
 /// Collects a node that must be touched during removeNode.
@@ -121,81 +141,274 @@ fn markRelatedNode(
     related_nodes: *std.ArrayList(RelatedNode),
     related_node_index: *std.AutoHashMap(u32, usize),
     node_index: u32,
-    mark_reverse_cleanup: bool,
+    need_rev_claim: bool,
+    needs_reverse_cleanup: bool,
     fwd_degree_delta: u22,
 ) !void {
     if (related_node_index.get(node_index)) |entry_idx| {
         const entry = &related_nodes.items[entry_idx];
-        if (mark_reverse_cleanup) try entry.claims.ensureRev();
+        if (need_rev_claim) try entry.claims.ensureRev();
         // fwd_claim is NOT needed for visible_fwd_decrement — CAS on
         // published_meta provides the atomicity directly.
-        entry.needs_reverse_cleanup = entry.needs_reverse_cleanup or mark_reverse_cleanup;
+        entry.needs_reverse_cleanup = entry.needs_reverse_cleanup or needs_reverse_cleanup;
         entry.fwd_degree_delta += fwd_degree_delta;
         return;
     }
 
     const node_buffer = page_ops.nodeAt(graph, .{ .index = node_index });
-    const claims = try common.tryClaimNodeSides(node_buffer, false, mark_reverse_cleanup);
+    const claims = try common.tryClaimNodeSides(node_buffer, false, need_rev_claim);
     try related_nodes.append(graph.allocator, .{
         .node_index = node_index,
         .node_buffer = node_buffer,
         .claims = claims,
-        .needs_reverse_cleanup = mark_reverse_cleanup,
+        .needs_reverse_cleanup = needs_reverse_cleanup,
         .fwd_degree_delta = fwd_degree_delta,
     });
     try related_node_index.put(node_index, related_nodes.items.len - 1);
 }
 
-fn countDistinctNonSelfDestinations(destinations: []const u32, source_index: u32) usize {
-    var total: usize = 0;
-    for (destinations) |destination_index| {
-        if (destination_index != source_index) total += 1;
-    }
-    return total;
+fn scanNode(graph: *const graph_core.GraphCore, node: types.NodeId) !RemovalScan {
+    var scan = RemovalScan{};
+    errdefer scan.deinit(graph.allocator);
+
+    try collectForwardDestinations(graph, node, &scan);
+    try collectReverseSources(graph, node, &scan);
+
+    return scan;
 }
 
-fn countVisibleForwardEdges(graph: *const graph_core.GraphCore, destinations: []const u32) usize {
-    var total: usize = 0;
-    for (destinations) |destination_index| {
-        if (node_validity.isNodeLiveIndex(graph, destination_index)) total += 1;
+fn validateForwardDestinations(graph: *graph_core.GraphCore, forward_destinations: []const u32) !void {
+    if (graph.multigraph_enabled) return;
+
+    var seen = std.AutoHashMap(u32, void).init(graph.allocator);
+    defer seen.deinit();
+    for (forward_destinations) |destination_idx| {
+        const entry = try seen.getOrPut(destination_idx);
+        if (entry.found_existing) return error.CorruptGraph;
     }
-    return total;
 }
 
-fn countVisibleIncomingEdgesExcludingSelf(graph: *const graph_core.GraphCore, published_adj: types.NodeAdj, self_index: u32) usize {
-    if (published_adj.block_count_rev == 0) return 0;
+fn validateReverseView(
+    graph: *graph_core.GraphCore,
+    node: types.NodeId,
+    source_node: *types.NodeBuffer,
+    scan: *const RemovalScan,
+) !void {
+    const source_meta = source_node.loadPublishedMeta();
+    const predecessor_reader = try rcu.readerEnter(graph);
+    defer rcu.readerExit(graph, predecessor_reader);
 
-    var total: usize = 0;
-    if (published_adj.group_count_rev == 0) {
-        for (published_adj.first_block_rev..published_adj.first_block_rev + published_adj.block_count_rev) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const source_index = block.sources[slot];
-                if (source_index == self_index) continue;
-                if (node_validity.isNodeLiveIndex(graph, source_index)) total += 1;
-            }
+    var valid_count: u22 = 0;
+    var self_count: u22 = 0;
+    if (graph.multigraph_enabled) {
+        var source_counts = std.AutoHashMap(u32, u32).init(graph.allocator);
+        defer source_counts.deinit();
+
+        for (scan.reverse_sources.items) |source_idx| {
+            if (source_idx >= graph.publishedNodeCount()) return error.CorruptGraph;
+            if (!node_validity.isNodeLiveIndex(graph, source_idx)) continue;
+
+            const entry = try source_counts.getOrPut(source_idx);
+            if (!entry.found_existing) entry.value_ptr.* = 0;
+            entry.value_ptr.* += 1;
         }
-        return total;
+
+        if (source_counts.get(node.index)) |self_rev| {
+            self_count = @intCast(self_rev);
+            if (self_count != scan.self_edge_count) return error.CorruptGraph;
+        } else if (scan.self_edge_count > 0) {
+            return error.CorruptGraph;
+        }
+
+        var source_iter = source_counts.iterator();
+        while (source_iter.next()) |kv| {
+            const source_idx = kv.key_ptr.*;
+            if (source_idx == node.index) continue;
+
+            const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_idx }).publishedAdj();
+            const forward_count = try adjacency.countForwardDestinationMatchesChecked(
+                graph,
+                source_fwd.first_block_fwd,
+                source_fwd.block_count_fwd,
+                source_fwd.group_count_fwd,
+                source_fwd.first_group_fwd,
+                node.index,
+            );
+            const reverse_count = kv.value_ptr.*;
+            if (forward_count != reverse_count) return error.CorruptGraph;
+            valid_count += @as(u22, @intCast(reverse_count));
+            if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
+        }
+    } else {
+        var seen_incoming = std.AutoHashMap(u32, void).init(graph.allocator);
+        defer seen_incoming.deinit();
+        for (scan.reverse_sources.items) |source_idx| {
+            if (source_idx >= graph.publishedNodeCount()) return error.CorruptGraph;
+            if (source_idx == node.index) {
+                self_count += 1;
+                if (self_count > 1 or scan.self_edge_count == 0) return error.CorruptGraph;
+                continue;
+            }
+            if (!node_validity.isNodeLiveIndex(graph, source_idx)) continue;
+
+            const entry = try seen_incoming.getOrPut(source_idx);
+            if (entry.found_existing) return error.CorruptGraph;
+
+            const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_idx }).publishedAdj();
+            if (!(try adjacency.hasEdgeInAdjChecked(graph, source_fwd, node.index))) return error.CorruptGraph;
+
+            valid_count += 1;
+            if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
+        }
     }
 
-    var group_idx = published_adj.first_group_rev;
-    var visited: u16 = 0;
-    while (visited < published_adj.group_count_rev) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) break;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                const source_index = block.sources[slot];
-                if (source_index == self_index) continue;
-                if (node_validity.isNodeLiveIndex(graph, source_index)) total += 1;
-            }
-        }
-        group_idx = group.next;
+    if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
+}
+
+fn releaseRelatedNodes(related_nodes: *std.ArrayList(RelatedNode), allocator: std.mem.Allocator) void {
+    var remaining = related_nodes.items.len;
+    while (remaining > 0) {
+        remaining -= 1;
+        related_nodes.items[remaining].claims.release();
     }
-    return total;
+    related_nodes.deinit(allocator);
+}
+
+fn collectRelated(
+    graph: *graph_core.GraphCore,
+    node: types.NodeId,
+    scan: *const RemovalScan,
+) !struct { nodes: std.ArrayList(RelatedNode), index: std.AutoHashMap(u32, usize) } {
+    var related_nodes = try std.ArrayList(RelatedNode).initCapacity(
+        graph.allocator,
+        scan.forward_destinations.items.len - scan.self_edge_count + scan.visible_incoming,
+    );
+    errdefer releaseRelatedNodes(&related_nodes, graph.allocator);
+
+    var related_index = std.AutoHashMap(u32, usize).init(graph.allocator);
+    errdefer related_index.deinit();
+
+    for (scan.forward_destinations.items) |destination_idx| {
+        if (destination_idx == node.index) continue;
+        try markRelatedNode(graph, &related_nodes, &related_index, destination_idx, true, true, 0);
+    }
+    for (scan.reverse_sources.items) |source_idx| {
+        if (source_idx == node.index) continue;
+        if (!node_validity.isNodeLiveIndex(graph, source_idx)) continue;
+        // Claim predecessor rev to serialize against concurrent removeNode on
+        // that endpoint without requiring its fwd_claim.
+        try markRelatedNode(graph, &related_nodes, &related_index, source_idx, true, false, 1);
+    }
+
+    return .{ .nodes = related_nodes, .index = related_index };
+}
+
+fn buildUpdates(
+    graph: *graph_core.GraphCore,
+    node: types.NodeId,
+    related_nodes: []RelatedNode,
+    scratch: *common.MutationScratch,
+) !std.ArrayList(DestinationUpdate) {
+    var updates = try std.ArrayList(DestinationUpdate).initCapacity(graph.allocator, related_nodes.len);
+    errdefer updates.deinit(graph.allocator);
+
+    for (related_nodes) |*related| {
+        if (related.needs_reverse_cleanup) {
+            const destination_adj = related.node_buffer.publishedAdj();
+            const reverse_rebuild = try repair.rebuildReverseDrop(
+                graph,
+                related.node_index,
+                destination_adj,
+                node.index,
+                scratch,
+            );
+
+            const new_rev_degree = if (destination_adj.flags.removed) @as(u22, 0) else @as(u22, @intCast(reverse_rebuild.live_after));
+            try updates.append(graph.allocator, .{
+                .node_index = related.node_index,
+                .node_buffer = related.node_buffer,
+                .published_adj_before = destination_adj,
+                .staging_adj_after = reverse_rebuild.staging_adj,
+                .new_degree_rev = new_rev_degree,
+                .fwd_degree_delta = related.fwd_degree_delta,
+                .needs_reverse_retire = true,
+            });
+            continue;
+        }
+
+        if (related.fwd_degree_delta > 0) {
+            try updates.append(graph.allocator, .{
+                .node_index = related.node_index,
+                .node_buffer = related.node_buffer,
+                .published_adj_before = related.node_buffer.publishedAdj(),
+                .staging_adj_after = related.node_buffer.publishedAdj(),
+                .new_degree_rev = related.node_buffer.loadPublishedMeta().degree_rev,
+                .fwd_degree_delta = related.fwd_degree_delta,
+            });
+        }
+    }
+
+    return updates;
+}
+
+fn buildRemovedAdj(
+    graph: *graph_core.GraphCore,
+    node: types.NodeId,
+    source_adj: types.NodeAdj,
+    self_edge_count: u32,
+    scratch: *common.MutationScratch,
+) !types.NodeAdj {
+    var removed_adj = source_adj;
+    if (self_edge_count > 0) {
+        const reverse_rebuild = try repair.rebuildReverseDrop(
+            graph,
+            node.index,
+            source_adj,
+            node.index,
+            scratch,
+        );
+        removed_adj = reverse_rebuild.staging_adj;
+    }
+
+    removed_adj.first_block_fwd = 0;
+    removed_adj.block_count_fwd = 0;
+    removed_adj.group_count_fwd = 0;
+    removed_adj.first_group_fwd = 0;
+    removed_adj.flags.removed = true;
+    removed_adj.flags.needs_repair_fwd = false;
+    removed_adj.flags.needs_repair_rev = false;
+    return removed_adj;
+}
+
+fn publishUpdates(updates: []const DestinationUpdate) RemoveCounts {
+    var counts = RemoveCounts{};
+    for (updates) |update| {
+        if (update.fwd_degree_delta > 0) {
+            counts.predecessors += 1;
+            const meta = update.node_buffer.loadPublishedMeta();
+            _ = common.publishMetaFwdDeltaUpdated(update.node_buffer, meta, meta.needs_repair_fwd, update.fwd_degree_delta);
+        }
+        if (update.needs_reverse_retire) {
+            counts.destinations += 1;
+            common.publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);
+        }
+    }
+    return counts;
+}
+
+fn retireRemoveNode(
+    graph: *graph_core.GraphCore,
+    source_adj: types.NodeAdj,
+    self_edge_count: u32,
+    updates: []const DestinationUpdate,
+) !void {
+    for (updates) |update| {
+        if (update.needs_reverse_retire) {
+            try common.retireSide(graph, update.published_adj_before, .rev);
+        }
+    }
+    try common.retireSide(graph, source_adj, .fwd);
+    if (self_edge_count > 0) try common.retireSide(graph, source_adj, .rev);
 }
 
 pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeRemovalSummary {
@@ -211,131 +424,16 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     try adjacency.validateNodeAdjLayout(graph, source_adj_before, .fwd);
     try adjacency.validateNodeAdjLayout(graph, source_adj_before, .rev);
 
-    var forward_destinations: std.ArrayList(u32) = .empty;
-    defer forward_destinations.deinit(graph.allocator);
-    try collectForwardDestinations(graph, node, &forward_destinations);
+    var scan = try scanNode(graph, node);
+    defer scan.deinit(graph.allocator);
 
-    // RFC §A.25: reject duplicate outgoing destinations before any publish.
-    {
-        if (!graph.multigraph_enabled) {
-            var seen = std.AutoHashMap(u32, void).init(graph.allocator);
-            defer seen.deinit();
-            for (forward_destinations.items) |destination_index| {
-                const entry = try seen.getOrPut(destination_index);
-                if (entry.found_existing) return error.CorruptGraph;
-            }
-        }
-    }
+    try validateForwardDestinations(graph, scan.forward_destinations.items);
+    try validateReverseView(graph, node, source_node, &scan);
 
-    var reverse_sources: std.ArrayList(u32) = .empty;
-    defer reverse_sources.deinit(graph.allocator);
-    try collectReverseSources(graph, node, &reverse_sources);
-
-    var self_edge_count: u32 = 0;
-    for (forward_destinations.items) |destination_index| {
-        if (destination_index == node.index) self_edge_count += 1;
-    }
-
-    // Validate incoming reverse completeness before any publish.
-    // Reject invalid, removed, and duplicate sources.  Verify that every
-    // live predecessor still has a forward edge to the removed node.
-    // Compare the validated count against the exact published degree_rev.
-    const source_meta = source_node.loadPublishedMeta();
-    const predecessor_reader = try rcu.readerEnter(graph);
-    defer rcu.readerExit(graph, predecessor_reader);
-    {
-        var valid_count: u22 = 0;
-        var self_count: u22 = 0;
-        if (graph.multigraph_enabled) {
-            var source_counts = std.AutoHashMap(u32, u32).init(graph.allocator);
-            defer source_counts.deinit();
-
-            for (reverse_sources.items) |source_index| {
-                if (source_index >= graph.publishedNodeCount()) return error.CorruptGraph;
-                if (!node_validity.isNodeLiveIndex(graph, source_index)) continue;
-
-                const entry = try source_counts.getOrPut(source_index);
-                if (!entry.found_existing) entry.value_ptr.* = 0;
-                entry.value_ptr.* += 1;
-            }
-
-            if (source_counts.get(node.index)) |self_rev| {
-                self_count = @intCast(self_rev);
-                if (self_count != self_edge_count) return error.CorruptGraph;
-            } else if (self_edge_count > 0) {
-                return error.CorruptGraph;
-            }
-
-            var source_iter = source_counts.iterator();
-            while (source_iter.next()) |kv| {
-                const source_index = kv.key_ptr.*;
-                if (source_index == node.index) continue;
-
-                const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_index }).publishedAdj();
-                const forward_count = try adjacency.countForwardDestinationMatchesChecked(
-                    graph,
-                    source_fwd.first_block_fwd,
-                    source_fwd.block_count_fwd,
-                    source_fwd.group_count_fwd,
-                    source_fwd.first_group_fwd,
-                    node.index,
-                );
-                const reverse_count = kv.value_ptr.*;
-                if (forward_count != reverse_count) return error.CorruptGraph;
-                valid_count += @as(u22, @intCast(reverse_count));
-                if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
-            }
-        } else {
-            var seen_incoming = std.AutoHashMap(u32, void).init(graph.allocator);
-            defer seen_incoming.deinit();
-            for (reverse_sources.items) |source_index| {
-                if (source_index >= graph.publishedNodeCount()) return error.CorruptGraph;
-                if (source_index == node.index) {
-                    self_count += 1;
-                    if (self_count > 1 or self_edge_count == 0) return error.CorruptGraph;
-                    continue;
-                }
-                if (!node_validity.isNodeLiveIndex(graph, source_index)) continue;
-
-                {
-                    const entry = try seen_incoming.getOrPut(source_index);
-                    if (entry.found_existing) return error.CorruptGraph;
-                }
-
-                const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_index }).publishedAdj();
-                if (!(try adjacency.hasEdgeInAdjChecked(graph, source_fwd, node.index))) return error.CorruptGraph;
-
-                valid_count += 1;
-                if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
-            }
-        }
-        if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
-    }
-
-    var related_nodes = try std.ArrayList(RelatedNode).initCapacity(
-        graph.allocator,
-        countDistinctNonSelfDestinations(forward_destinations.items, node.index) +
-            countVisibleIncomingEdgesExcludingSelf(graph, source_adj_before, node.index),
-    );
-    var related_node_index = std.AutoHashMap(u32, usize).init(graph.allocator);
+    var related = try collectRelated(graph, node, &scan);
     defer {
-        var remaining = related_nodes.items.len;
-        while (remaining > 0) {
-            remaining -= 1;
-            related_nodes.items[remaining].claims.release();
-        }
-        related_nodes.deinit(graph.allocator);
-        related_node_index.deinit();
-    }
-
-    for (forward_destinations.items) |destination_index| {
-        if (destination_index == node.index) continue;
-        try markRelatedNode(graph, &related_nodes, &related_node_index, destination_index, true, 0);
-    }
-    for (reverse_sources.items) |source_index| {
-        if (source_index == node.index) continue;
-        if (!node_validity.isNodeLiveIndex(graph, source_index)) continue;
-        try markRelatedNode(graph, &related_nodes, &related_node_index, source_index, false, 1);
+        releaseRelatedNodes(&related.nodes, graph.allocator);
+        related.index.deinit();
     }
 
     var scratch = common.MutationScratch{};
@@ -347,101 +445,12 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     var writer_guard = common.beginWriter(graph);
     defer writer_guard.end();
 
-    var destination_updates = try std.ArrayList(DestinationUpdate).initCapacity(graph.allocator, related_nodes.items.len);
+    var destination_updates = try buildUpdates(graph, node, related.nodes.items, &scratch);
     defer destination_updates.deinit(graph.allocator);
 
-    for (related_nodes.items) |*related| {
-        if (related.needs_reverse_cleanup) {
-            const destination_adj_before = related.node_buffer.publishedAdj();
-            var rb = try repair.prepareReverseWithoutSource(
-                graph,
-                destination_adj_before.first_block_rev,
-                destination_adj_before.block_count_rev,
-                destination_adj_before.group_count_rev,
-                destination_adj_before.first_group_rev,
-                node.index,
-                graph.allocator,
-            );
-            defer rb.new_blocks.deinit(graph.allocator);
+    const removed_visible_edge_count = scan.visible_forward + scan.visible_incoming;
 
-            scratch.adoptBlocks(graph.allocator, .rev, rb.new_blocks.items) catch |err| {
-                for (rb.new_blocks.items) |bid| page_ops.freeBlock(graph, bid, .rev);
-                return err;
-            };
-
-            var destination_staging_adj = destination_adj_before;
-            {
-                var tmp: types.SideAdj = undefined;
-                try common.buildSideFromBlocks(&tmp, graph, rb.new_blocks.items, &scratch);
-                destination_staging_adj.first_block_rev = tmp.first_block;
-                destination_staging_adj.block_count_rev = tmp.block_count;
-                destination_staging_adj.group_count_rev = tmp.group_count;
-                destination_staging_adj.first_group_rev = tmp.first_group;
-            }
-            const live_after: usize = rb.live_after;
-            // Removed nodes always have logical degree 0 regardless of
-            // residual reverse structure after tombstone cleanup.
-            const new_rev_deg = if (destination_adj_before.flags.removed) @as(u22, 0) else toU22Degree(live_after);
-            repair.updateRepairDebt(graph, &destination_staging_adj, related.node_index, .rev);
-
-            try destination_updates.append(graph.allocator, .{
-                .node_index = related.node_index,
-                .node_buffer = related.node_buffer,
-                .published_adj_before = destination_adj_before,
-                .staging_adj_after = destination_staging_adj,
-                .new_degree_rev = new_rev_deg,
-                .fwd_degree_delta = related.fwd_degree_delta,
-                .needs_reverse_retire = true,
-            });
-        } else if (related.fwd_degree_delta > 0) {
-            try destination_updates.append(graph.allocator, .{
-                .node_index = related.node_index,
-                .node_buffer = related.node_buffer,
-                .published_adj_before = related.node_buffer.publishedAdj(),
-                .staging_adj_after = related.node_buffer.publishedAdj(),
-                .new_degree_rev = related.node_buffer.loadPublishedMeta().degree_rev,
-                .fwd_degree_delta = related.fwd_degree_delta,
-            });
-        }
-    }
-
-    const removed_visible_edge_count = countVisibleForwardEdges(graph, forward_destinations.items) +
-        countVisibleIncomingEdgesExcludingSelf(graph, source_adj_before, node.index);
-
-    var source_staging_adj = source_adj_before;
-    if (self_edge_count > 0) {
-        var rb = try repair.prepareReverseWithoutSource(
-            graph,
-            source_adj_before.first_block_rev,
-            source_adj_before.block_count_rev,
-            source_adj_before.group_count_rev,
-            source_adj_before.first_group_rev,
-            node.index,
-            graph.allocator,
-        );
-        defer rb.new_blocks.deinit(graph.allocator);
-
-        scratch.adoptBlocks(graph.allocator, .rev, rb.new_blocks.items) catch |err| {
-            for (rb.new_blocks.items) |bid| page_ops.freeBlock(graph, bid, .rev);
-            return err;
-        };
-        {
-            var tmp: types.SideAdj = undefined;
-            try common.buildSideFromBlocks(&tmp, graph, rb.new_blocks.items, &scratch);
-            source_staging_adj.first_block_rev = tmp.first_block;
-            source_staging_adj.block_count_rev = tmp.block_count;
-            source_staging_adj.group_count_rev = tmp.group_count;
-            source_staging_adj.first_group_rev = tmp.first_group;
-        }
-    }
-
-    source_staging_adj.first_block_fwd = 0;
-    source_staging_adj.block_count_fwd = 0;
-    source_staging_adj.group_count_fwd = 0;
-    source_staging_adj.first_group_fwd = 0;
-    source_staging_adj.flags.removed = true;
-    source_staging_adj.flags.needs_repair_fwd = false;
-    source_staging_adj.flags.needs_repair_rev = false;
+    const source_staging_adj = try buildRemovedAdj(graph, node, source_adj_before, scan.self_edge_count, &scratch);
 
     // Publish predecessor-side degree/repair updates before tombstoning the
     // removed node. Readers may therefore observe a transient mixed-version
@@ -452,19 +461,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // (`publishMetaFwdDeltaUpdated`) which does NOT require `fwd_claim` on the
     // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
     // (RFC Phase 2 §concurrency note).
-    var predecessor_nodes_with_forward_tombstone: u32 = 0;
-    var destination_nodes_with_reverse_cleanup: u32 = 0;
-    for (destination_updates.items) |update| {
-        if (update.fwd_degree_delta > 0) {
-            predecessor_nodes_with_forward_tombstone += 1;
-            const meta = update.node_buffer.loadPublishedMeta();
-            _ = common.publishMetaFwdDeltaUpdated(update.node_buffer, meta, meta.needs_repair_fwd, update.fwd_degree_delta);
-        }
-        if (update.needs_reverse_retire) {
-            destination_nodes_with_reverse_cleanup += 1;
-            common.publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);
-        }
-    }
+    const counts = publishUpdates(destination_updates.items);
 
     common.publishBothAdj(source_node, source_staging_adj, 0, 0);
 
@@ -478,15 +475,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
         }
     }
 
-    for (destination_updates.items) |update| {
-        if (update.needs_reverse_retire) {
-            try common.retireSide(graph, update.published_adj_before, .rev);
-        }
-    }
-    try common.retireSide(graph, source_adj_before, .fwd);
-    if (self_edge_count > 0) {
-        try common.retireSide(graph, source_adj_before, .rev);
-    }
+    try retireRemoveNode(graph, source_adj_before, scan.self_edge_count, destination_updates.items);
 
     scratch.disarm();
     _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);
@@ -497,8 +486,8 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     return .{
         .removed_visible_edges = @intCast(removed_visible_edge_count),
         .related_live_nodes_touched = @intCast(destination_updates.items.len),
-        .predecessor_nodes_with_forward_tombstone = predecessor_nodes_with_forward_tombstone,
-        .destination_nodes_with_reverse_cleanup = destination_nodes_with_reverse_cleanup,
-        .left_forward_repair_debt = predecessor_nodes_with_forward_tombstone > 0,
+        .predecessor_nodes_with_forward_tombstone = counts.predecessors,
+        .destination_nodes_with_reverse_cleanup = counts.destinations,
+        .left_forward_repair_debt = counts.predecessors > 0,
     };
 }

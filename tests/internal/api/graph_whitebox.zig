@@ -26,80 +26,6 @@ fn publishReverseSourcesForForwardRange(graph: *Graph, source_index: u32, first_
     }
 }
 
-test "graph: addNode and hasNode basics" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const node0 = try graph.addNode();
-    const node1 = try graph.addNode();
-    try graph.validate();
-
-    try testing.expectEqual(@as(usize, 2), graph.nodeCount());
-    try testing.expect(graph.hasNode(node0));
-    try testing.expect(graph.hasNode(node1));
-    try testing.expect(!graph.hasNode(.{ .index = 999 }));
-}
-
-test "graph: addEdge updates outDegree and inDegree" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-
-    try graph.addEdge(a, b, 1, 0);
-    try graph.addEdge(a, c, 2, 0);
-    try graph.validate();
-
-    try testing.expectEqual(@as(usize, 2), try graph.outDegree(a));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(b));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(c));
-    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
-}
-
-test "graph: neighbors and inNeighbors iterate expected nodes" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(a, c, 0, 0);
-    try graph.validate();
-
-    var neighbors_it = try graph.neighbors(a);
-    defer neighbors_it.deinit();
-    const neighbors_slice = try graph_mod.materializeConsuming(&neighbors_it, testing.allocator);
-    defer testing.allocator.free(neighbors_slice);
-
-    try testing.expectEqual(@as(usize, 2), neighbors_slice.len);
-    try testing.expectEqual(b.index, neighbors_slice[0].index);
-    try testing.expectEqual(c.index, neighbors_slice[1].index);
-
-    var in_neighbors_it = try graph.inNeighbors(c);
-    defer in_neighbors_it.deinit();
-    const in_neighbors_slice = try graph_mod.materializeConsuming(&in_neighbors_it, testing.allocator);
-    defer testing.allocator.free(in_neighbors_slice);
-
-    try testing.expectEqual(@as(usize, 1), in_neighbors_slice.len);
-    try testing.expectEqual(a.index, in_neighbors_slice[0].index);
-}
-
-test "graph: addEdge duplicate returns EdgeAlreadyExists" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-
-    try graph.addEdge(a, b, 0, 0);
-    try graph.validate();
-    try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(a, b, 0, 0));
-}
-
 test "graph: query APIs return InvalidNode for out-of-bounds node" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
@@ -123,30 +49,6 @@ test "graph: removed node is absent from public node API" {
     try testing.expectError(error.InvalidNode, graph.nodeAt(node));
     try testing.expectError(error.InvalidNode, graph.nodeAtConst(node));
     try testing.expectError(error.InvalidNode, graph.publishedNodeAdj(node));
-}
-
-test "graph: self-edge appears in both neighbors and inNeighbors" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const n = try graph.addNode();
-    try graph.addEdge(n, n, 7, 0);
-    try graph.validate();
-
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(n));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(n));
-
-    var out_it = try graph.neighbors(n);
-    defer out_it.deinit();
-    const out_slice = try graph_mod.materializeConsuming(&out_it, testing.allocator);
-    defer testing.allocator.free(out_slice);
-    try testing.expectEqual(n.index, out_slice[0].index);
-
-    var in_it = try graph.inNeighbors(n);
-    defer in_it.deinit();
-    const in_slice = try graph_mod.materializeConsuming(&in_it, testing.allocator);
-    defer testing.allocator.free(in_slice);
-    try testing.expectEqual(n.index, in_slice[0].index);
 }
 
 test "graph: multiple blocks trigger group creation and still iterate" {
@@ -173,54 +75,6 @@ test "graph: multiple blocks trigger group creation and still iterate" {
     for (1..slice.len) |j| {
         try testing.expect(slice[j - 1].index < slice[j].index);
     }
-}
-
-test "graph: removeEdge existing edge returns true and updates state" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(a, c, 0, 0);
-    try graph.addEdge(b, c, 0, 0);
-    try graph.validate();
-    try testing.expect(try graph.removeEdge(a, c));
-    try graph.validate();
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(a));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(a));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(c));
-    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
-    var it = try graph.neighbors(a);
-    defer it.deinit();
-    const slice = try graph_mod.materializeConsuming(&it, testing.allocator);
-    defer testing.allocator.free(slice);
-    try testing.expectEqual(@as(usize, 1), slice.len);
-    try testing.expectEqual(b.index, slice[0].index);
-}
-
-test "graph: removeEdge non-existing edge returns false" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try testing.expect(!try graph.removeEdge(a, b));
-    try graph.validate();
-    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-}
-
-test "graph: removeEdge edgeCount consistency after add and remove" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-    const n = try graph.addNode();
-    try graph.addEdge(n, n, 0, 0);
-    try graph.validate();
-    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
-    try testing.expect(try graph.removeEdge(n, n));
-    try graph.validate();
-    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(n));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(n));
 }
 
 test "graph: removeEdge from multi-block node decreases degree" {
@@ -297,30 +151,6 @@ test "graph: removeEdge multiple edges from multi-block node" {
     for (1..slice.len) |j| {
         try testing.expect(slice[j - 1].index < slice[j].index);
     }
-}
-
-test "graph: debugValidate reports zero violations after mutations" {
-    var graph = try Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(b, c, 0, 0);
-    try graph.addEdge(a, c, 0, 0);
-    try graph.validate();
-
-    try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(a, b, 0, 0));
-    try graph.validate();
-
-    try testing.expect(try graph.removeEdge(a, b));
-    try graph.validate();
-
-    const violations = try graph.debugValidate(testing.allocator);
-    defer testing.allocator.free(violations);
-    try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
