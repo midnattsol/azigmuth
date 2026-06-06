@@ -22,7 +22,7 @@ test "sortedRebuildForward: removes tombstones and packs sorted edges" {
     blk.mask = constants.denseMask(8);
 
     _ = try graph.removeNode(nodes[2]);
-    try graph.removeNode(nodes[5]);
+    _ = try graph.removeNode(nodes[5]);
 
     var result = try repair.sortedRebuildForward(
         &graph.graph,
@@ -90,7 +90,7 @@ test "sortedRebuildReverse: removes tombstones and packs sorted sources" {
     blk.mask = constants.denseMask(8);
 
     _ = try graph.removeNode(nodes[2]);
-    try graph.removeNode(nodes[5]);
+    _ = try graph.removeNode(nodes[5]);
 
     var result = try repair.sortedRebuildReverse(
         &graph.graph,
@@ -209,7 +209,7 @@ test "sortedRebuildForward: two blocks with mixed tombstones produce packed outp
     pfwd.block_count = 2;
 
     _ = try graph.removeNode(nodes[3]);
-    try graph.removeNode(nodes[8]);
+    _ = try graph.removeNode(nodes[8]);
 
     var result = try repair.sortedRebuildForward(
         &graph.graph,

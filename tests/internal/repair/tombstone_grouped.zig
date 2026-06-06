@@ -22,7 +22,7 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
 
     // Create tombstones: remove destinations in different original blocks.
     _ = try graph.removeNode(destinations[64]);
-    try graph.removeNode(destinations[128]);
+    _ = try graph.removeNode(destinations[128]);
 
     source_adj = (try graph.nodeAtConst(source)).publishedAdj();
     try testing.expect(source_adj.flags.needs_repair_fwd);

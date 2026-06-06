@@ -265,6 +265,24 @@ test "contract: removeNode invalidates hasNode" {
     try graph.validate();
 }
 
+test "contract: removeNode returns summary for repair policy decisions" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(predecessor, target, 0, .{});
+    try graph.addEdge(target, destination, 0, .{});
+
+    const summary = try graph.removeNode(target);
+    try testing.expectEqual(@as(u64, 2), summary.removed_visible_edges);
+    try testing.expectEqual(@as(u32, 2), summary.related_live_nodes_touched);
+    try testing.expectEqual(@as(u32, 1), summary.predecessor_nodes_with_forward_tombstone);
+    try testing.expectEqual(@as(u32, 1), summary.destination_nodes_with_reverse_cleanup);
+    try testing.expect(summary.left_forward_repair_debt);
+}
+
 test "contract: removeNode clears outgoing edges" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -389,6 +407,40 @@ test "contract: repairBudgeted returns repaired count" {
     const repaired = try graph.repairBudgeted(1);
     try testing.expect(repaired <= 1);
     try graph.validate();
+}
+
+test "contract: debtStats reports repair debt after lazy removeNode" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, target, 0, .{});
+
+    _ = try graph.removeNode(target);
+
+    const stats = try graph.debtStats();
+    try testing.expectEqual(@as(usize, 1), stats.live_nodes);
+    try testing.expectEqual(@as(usize, 1), stats.removed_nodes);
+    try testing.expect(stats.nodes_with_repair_fwd >= 1);
+    try testing.expect(stats.estimated_tombstone_fwd_nodes >= 1);
+}
+
+test "contract: flushRepairs drains useful repair debt" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, target, 0, .{});
+
+    _ = try graph.removeNode(target);
+
+    const flush = try graph.flushRepairs();
+    try testing.expect(flush.repaired_nodes > 0);
+
+    const stats = try graph.debtStats();
+    try testing.expectEqual(@as(usize, 0), stats.nodes_with_repair_fwd);
 }
 
 test "contract: repairBudgeted with max_nodes=0 returns 0" {

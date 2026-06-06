@@ -94,8 +94,8 @@ test "tombstones: neighbors iterates past multiple consecutive removed nodes" {
     for (0..10) |i| try graph.addEdge(source, targets[i], 0, 0);
 
     _ = try graph.removeNode(targets[2]);
-    try graph.removeNode(targets[5]);
-    try graph.removeNode(targets[7]);
+    _ = try graph.removeNode(targets[5]);
+    _ = try graph.removeNode(targets[7]);
     try graph.validate();
 
     var it = try graph.neighbors(source);
@@ -115,8 +115,8 @@ test "tombstones: inNeighbors iterates past multiple consecutive removed sources
     for (0..10) |i| try graph.addEdge(sources[i], target, 0, 0);
 
     _ = try graph.removeNode(sources[2]);
-    try graph.removeNode(sources[5]);
-    try graph.removeNode(sources[7]);
+    _ = try graph.removeNode(sources[5]);
+    _ = try graph.removeNode(sources[7]);
     try graph.validate();
 
     var it = try graph.inNeighbors(target);
@@ -175,7 +175,9 @@ test "tombstones: outDegree at boundary with many tombstones" {
     for (0..20) |i| targets[i] = try graph.addNode();
     for (0..20) |i| try graph.addEdge(source, targets[i], 0, 0);
 
-    for (0..20) |i| if (i % 2 == 0) _ = try graph.removeNode(targets[i]);
+    for (0..20) |i| {
+        if (i % 2 == 0) _ = try graph.removeNode(targets[i]);
+    }
 
     try testing.expectEqual(@as(usize, 10), try graph.outDegree(source));
     try graph.validate();
@@ -190,7 +192,9 @@ test "tombstones: inDegree at boundary with many tombstones" {
     for (0..20) |i| sources[i] = try graph.addNode();
     for (0..20) |i| try graph.addEdge(sources[i], target, 0, 0);
 
-    for (0..20) |i| if (i % 2 == 0) _ = try graph.removeNode(sources[i]);
+    for (0..20) |i| {
+        if (i % 2 == 0) _ = try graph.removeNode(sources[i]);
+    }
 
     try testing.expectEqual(@as(usize, 10), try graph.inDegree(target));
     try graph.validate();
@@ -251,7 +255,7 @@ test "tombstones: neighbors returns empty when all destinations are removed" {
     try graph.addEdge(source, b, 0, 0);
 
     _ = try graph.removeNode(a);
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
 
     var it = try graph.neighbors(source);
     const neighbors = try graph_mod.materializeConsuming(&it, testing.allocator);
@@ -271,7 +275,7 @@ test "tombstones: inNeighbors returns empty when all sources are removed" {
     try graph.addEdge(b, target, 0, 0);
 
     _ = try graph.removeNode(a);
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
 
     var it = try graph.inNeighbors(target);
     const incoming = try graph_mod.materializeConsuming(&it, testing.allocator);
@@ -290,7 +294,9 @@ test "tombstones: large hub with many incoming tombstones is correct after repai
     for (0..sender_count) |i| senders[i] = try graph.addNode();
     for (0..sender_count) |i| try graph.addEdge(senders[i], hub, 0, 0);
 
-    for (0..sender_count) |i| if (i % 2 == 0) _ = try graph.removeNode(senders[i]);
+    for (0..sender_count) |i| {
+        if (i % 2 == 0) _ = try graph.removeNode(senders[i]);
+    }
 
     try testing.expectEqual(@as(usize, 25), try graph.inDegree(hub));
     try graph.validate();
