@@ -33,6 +33,10 @@ pub fn nodeAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const 
     return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
+pub fn nodePageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []const types.NodeBuffer {
+    return loadPage(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+}
+
 fn ptrFromRaw(comptime T: type, raw: usize, comptime len: usize) []T {
     const page_ptr: [*]T = @ptrFromInt(raw);
     return page_ptr[0..len];

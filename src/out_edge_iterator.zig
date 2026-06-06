@@ -25,6 +25,8 @@ pub const OutEdgeIterator = struct {
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+    cached_node_page_index: u32 = constants.END_OF_CHAIN,
+    cached_node_page: ?[]const types.NodeBuffer = null,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
@@ -75,6 +77,16 @@ pub const OutEdgeIterator = struct {
         }
     }
 
+    fn destinationRemoved(self: *OutEdgeIterator, destination_index: u32) bool {
+        const page_index = page_ops.pageOf(destination_index, constants.NODES_PER_PAGE);
+        if (self.cached_node_page == null or self.cached_node_page_index != page_index) {
+            self.cached_node_page = page_ops.nodePageAtConst(self.core, page_index);
+            self.cached_node_page_index = page_index;
+        }
+        const slot_index = page_ops.slotOf(destination_index, constants.NODES_PER_PAGE);
+        return self.cached_node_page.?[slot_index].loadPublishedMeta().removed;
+    }
+
     /// Returns the next outgoing edge with its identity, or null when exhausted.
     pub fn next(self: *OutEdgeIterator) ?types.EdgeRef {
         if (!self.reader_active) return null;
@@ -95,7 +107,7 @@ pub const OutEdgeIterator = struct {
             const edge = fwd_block.edges[bit_index];
             const destination = types.NodeId{ .index = edge.destination };
 
-            if (node_validity.isNodeRemovedIndex(self.core, destination.index)) continue;
+            if (self.destinationRemoved(destination.index)) continue;
 
             return types.EdgeRef{
                 .id = .{ .local = fwd_ids.ids[bit_index] },

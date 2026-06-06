@@ -29,6 +29,8 @@ pub const NeighborIterator = struct {
     /// Cached from loadNextNonEmptyMask so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
+    cached_node_page_index: u32 = constants.END_OF_CHAIN,
+    cached_node_page: ?[]const types.NodeBuffer = null,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
@@ -92,6 +94,16 @@ pub const NeighborIterator = struct {
         }
     }
 
+    fn candidateRemoved(self: *NeighborIterator, candidate_index: u32) bool {
+        const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
+        if (self.cached_node_page == null or self.cached_node_page_index != page_index) {
+            self.cached_node_page = page_ops.nodePageAtConst(self.core, page_index);
+            self.cached_node_page_index = page_index;
+        }
+        const slot_index = page_ops.slotOf(candidate_index, constants.NODES_PER_PAGE);
+        return self.cached_node_page.?[slot_index].loadPublishedMeta().removed;
+    }
+
     pub fn next(self: *NeighborIterator) ?types.NodeId {
         if (!self.reader_active) return null;
         if (!rcu.readerTokenActive(self.reader_token)) {
@@ -113,7 +125,7 @@ pub const NeighborIterator = struct {
                     break :blk types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] };
                 },
             };
-            if (node_validity.isNodeRemovedIndex(self.core, candidate.index)) continue;
+            if (self.candidateRemoved(candidate.index)) continue;
             return candidate;
         }
     }
