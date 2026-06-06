@@ -21,11 +21,16 @@ test "sortedRebuildForward: removes tombstones and packs sorted edges" {
     }
     blk.mask = constants.denseMask(8);
 
-    try graph.removeNode(nodes[2]);
+    _ = try graph.removeNode(nodes[2]);
     try graph.removeNode(nodes[5]);
 
     var result = try repair.sortedRebuildForward(
-        &graph.graph, block, 1, 0, 0, testing.allocator,
+        &graph.graph,
+        block,
+        1,
+        0,
+        0,
+        testing.allocator,
     );
     defer result.new_blocks.deinit(testing.allocator);
 
@@ -54,10 +59,15 @@ test "sortedRebuildForward: all edges are tombstones returns empty" {
     }
     blk.mask = constants.denseMask(3);
 
-    for (0..3) |i| try graph.removeNode(nodes[i]);
+    for (0..3) |i| _ = try graph.removeNode(nodes[i]);
 
     var result = try repair.sortedRebuildForward(
-        &graph.graph, block, 1, 0, 0, testing.allocator,
+        &graph.graph,
+        block,
+        1,
+        0,
+        0,
+        testing.allocator,
     );
     defer result.new_blocks.deinit(testing.allocator);
 
@@ -79,11 +89,17 @@ test "sortedRebuildReverse: removes tombstones and packs sorted sources" {
     }
     blk.mask = constants.denseMask(8);
 
-    try graph.removeNode(nodes[2]);
+    _ = try graph.removeNode(nodes[2]);
     try graph.removeNode(nodes[5]);
 
     var result = try repair.sortedRebuildReverse(
-        &graph.graph, block, 1, 0, 0, null, testing.allocator,
+        &graph.graph,
+        block,
+        1,
+        0,
+        0,
+        null,
+        testing.allocator,
     );
     defer result.new_blocks.deinit(testing.allocator);
 
@@ -113,7 +129,13 @@ test "sortedRebuildReverse: skip_source_index excludes specific source" {
     blk.mask = constants.denseMask(5);
 
     var result = try repair.sortedRebuildReverse(
-        &graph.graph, block, 1, 0, 0, nodes[2].index, testing.allocator,
+        &graph.graph,
+        block,
+        1,
+        0,
+        0,
+        nodes[2].index,
+        testing.allocator,
     );
     defer result.new_blocks.deinit(testing.allocator);
 
@@ -142,10 +164,16 @@ test "sortedRebuildReverse: all sources are tombstones returns empty" {
     }
     blk.mask = constants.denseMask(3);
 
-    for (0..3) |i| try graph.removeNode(nodes[i]);
+    for (0..3) |i| _ = try graph.removeNode(nodes[i]);
 
     var result = try repair.sortedRebuildReverse(
-        &graph.graph, block, 1, 0, 0, null, testing.allocator,
+        &graph.graph,
+        block,
+        1,
+        0,
+        0,
+        null,
+        testing.allocator,
     );
     defer result.new_blocks.deinit(testing.allocator);
 
@@ -180,11 +208,16 @@ test "sortedRebuildForward: two blocks with mixed tombstones produce packed outp
     pfwd.first_block = block0;
     pfwd.block_count = 2;
 
-    try graph.removeNode(nodes[3]);
+    _ = try graph.removeNode(nodes[3]);
     try graph.removeNode(nodes[8]);
 
     var result = try repair.sortedRebuildForward(
-        &graph.graph, block0, 2, 0, 0, testing.allocator,
+        &graph.graph,
+        block0,
+        2,
+        0,
+        0,
+        testing.allocator,
     );
     defer result.new_blocks.deinit(testing.allocator);
 

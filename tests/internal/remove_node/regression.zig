@@ -19,7 +19,7 @@ test "regression: removeNode reverse-only publish does not flip forward index of
     const b_node = try graph.nodeAt(b);
     const fwd_index_before = b_node.loadPublishedMeta().fwd_index;
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
 
     const fwd_index_after = b_node.loadPublishedMeta().fwd_index;
     try testing.expectEqual(fwd_index_before, fwd_index_after);
@@ -94,7 +94,7 @@ test "regression: validate and debugValidate agree on removed node with residual
 
     // Remove half the spokes, leaving tombstones in hub's reverse adjacency.
     for (0..spoke_count) |i| {
-        if (i % 2 == 0) try graph.removeNode(spokes[i]);
+        if (i % 2 == 0) _ = try graph.removeNode(spokes[i]);
     }
 
     // Both validators must pass.
@@ -240,6 +240,35 @@ test "regression: removeNode returns CorruptGraph when grouped forward chain is 
 
     // Verify dest_b's reverse was not touched (removeNode must abort before publish).
     try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(dest_b)).rev);
+}
+
+test "regression: removeNode returns CorruptGraph when forward first_group is invalid before traversal" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+
+    const source_node = try graph.nodeAt(source);
+    publish.clearPublishedSides(source_node);
+    publish.publishedFwdSide(source_node).block_count = 1;
+    publish.publishedFwdSide(source_node).group_count = 1;
+    publish.publishedFwdSide(source_node).first_group = graph.graph.group_count + 10;
+    publish.setPublishedFwdDegree(source_node, 1);
+
+    const reverse_block = try graph.allocBlockRev();
+    page_ops.edgeBlockAt(&graph.graph, reverse_block, .rev).sources[0] = source.index;
+    page_ops.edgeBlockAt(&graph.graph, reverse_block, .rev).mask = constants.denseMask(1);
+    const destination_node = try graph.nodeAt(destination);
+    publish.clearPublishedSides(destination_node);
+    publish.publishedRevSide(destination_node).first_block = reverse_block;
+    publish.publishedRevSide(destination_node).block_count = 1;
+    publish.setPublishedRevDegree(destination_node, 1);
+
+    graph.graph.edge_count.store(1, .release);
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(source));
+    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(destination_node).rev);
 }
 
 test "regression: removeNode returns CorruptGraph when grouped forward chain is shorter with live destination skipped" {
@@ -484,4 +513,75 @@ test "regression: removeNode returns CorruptGraph on forward destination out of 
     publish.setPublishedFwdDegree(source_node, 1);
 
     try testing.expectError(error.CorruptGraph, graph.removeNode(source));
+}
+
+test "regression: removeNode multigraph rejects reverse multiplicity exceeding forward" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, 0);
+    try graph.addEdge(source, target, 1, 0);
+
+    const target_node = try graph.nodeAt(target);
+    const target_adj = target_node.publishedAdj();
+    if (target_adj.block_count_rev > 0 and target_adj.group_count_rev == 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, target_adj.first_block_rev, .rev);
+        const live = @popCount(block.mask);
+        if (live < 64) {
+            block.sources[live] = source.index;
+            block.mask = constants.denseMask(@intCast(live + 1));
+        }
+    }
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(target));
+    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
+}
+
+test "regression: removeNode multigraph rejects reverse multiplicity below forward" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, 0);
+    try graph.addEdge(source, target, 1, 0);
+
+    const target_node = try graph.nodeAt(target);
+    const target_adj = target_node.publishedAdj();
+    if (target_adj.block_count_rev > 0 and target_adj.group_count_rev == 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, target_adj.first_block_rev, .rev);
+        const live = @popCount(block.mask);
+        if (live > 0) {
+            block.sources[0] = graph.graph.publishedNodeCount() + 10;
+            block.mask = constants.denseMask(@intCast(live - 1));
+        }
+    }
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(target));
+    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
+}
+
+test "regression: removeNode multigraph rejects corrupt self-edge multiplicity" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const node = try graph.addNode();
+    try graph.addEdge(node, node, 0, 0);
+    try graph.addEdge(node, node, 1, 0);
+
+    const node_buf = try graph.nodeAt(node);
+    const adj = node_buf.publishedAdj();
+    if (adj.block_count_rev > 0 and adj.group_count_rev == 0) {
+        const block = page_ops.edgeBlockAt(&graph.graph, adj.first_block_rev, .rev);
+        const live = @popCount(block.mask);
+        if (live < 64) {
+            block.sources[live] = node.index;
+            block.mask = constants.denseMask(@intCast(live + 1));
+        }
+    }
+
+    try testing.expectError(error.CorruptGraph, graph.removeNode(node));
+    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
 }

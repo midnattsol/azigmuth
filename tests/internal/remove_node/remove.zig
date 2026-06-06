@@ -23,7 +23,7 @@ test "removeNode: public API invalidates removed node and hides tombstoned incom
     try graph.addEdge(a, c, 0, 0);
     try graph.addEdge(b, a, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try graph.validate();
 
     try expectRemovedNodeInvalid(&graph, a);
@@ -48,7 +48,7 @@ test "removeNode: repairNode compacts tombstoned incoming edges" {
     const b = try graph.addNode();
     try graph.addEdge(b, a, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
 
     try graph.repairNode(b);
@@ -67,7 +67,7 @@ test "removeNode: self-edge is removed from both forward and reverse state" {
     const a = try graph.addNode();
     try graph.addEdge(a, a, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try graph.validate();
     try expectRemovedNodeInvalid(&graph, a);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -85,7 +85,7 @@ test "removeNode: repairBudgeted discovers tombstone debt without explicit repai
     const b = try graph.addNode();
     try graph.addEdge(b, a, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     const compacted = try graph.repairBudgeted(1);
@@ -105,7 +105,7 @@ test "removeNode: removed endpoints are InvalidNode for edge mutations" {
     const a = try graph.addNode();
     const b = try graph.addNode();
     try graph.addEdge(b, a, 0, 0);
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
 
     try testing.expectError(error.InvalidNode, graph.addEdge(a, b, 0, 0));
     try testing.expectError(error.InvalidNode, graph.addEdge(b, a, 0, 0));
@@ -118,7 +118,7 @@ test "removeNode: repeated removal returns InvalidNode" {
     defer graph.deinit();
 
     const a = try graph.addNode();
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try testing.expectError(error.InvalidNode, graph.removeNode(a));
 }
 
@@ -138,7 +138,7 @@ test "removeNode: predecessor forward tombstone debt flag IS set immediately" {
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
 
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try graph.validate();
 
     // After removeNode, the source's forward adjacency still contains
@@ -168,7 +168,7 @@ test "removeNode: repairNode on removed node returns InvalidNode" {
     const b = try graph.addNode();
     try graph.addEdge(b, a, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try testing.expectError(error.InvalidNode, graph.repairNode(a));
     try graph.validate();
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -188,7 +188,7 @@ test "removeNode: celebrity node (high in-degree) does not corrupt forward/rever
     const edge_count_before = graph.edgeCount();
     try testing.expectEqual(@as(u64, 200), edge_count_before);
 
-    try graph.removeNode(celebrity);
+    _ = try graph.removeNode(celebrity);
 
     // Celebrity is removed.
     try testing.expect(!graph.hasNode(celebrity));

@@ -13,6 +13,7 @@ pub const publishStagedRev = claims_mod.publishStagedRev;
 pub const publishStagedBoth = claims_mod.publishStagedBoth;
 pub const publishBothDelta = claims_mod.publishBothDelta;
 pub const publishMetaFwdUpdated = claims_mod.publishMetaFwdUpdated;
+pub const publishMetaFwdDeltaUpdated = claims_mod.publishMetaFwdDeltaUpdated;
 
 pub const MutationScratch = scratch_mod.MutationScratch;
 

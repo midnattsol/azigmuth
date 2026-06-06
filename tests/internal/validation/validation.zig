@@ -98,6 +98,99 @@ test "validation: detects unsorted blocks" {
     try testing.expect(containsViolation(violations, .unsorted_block));
 }
 
+test "validation: multigraph detects reverse multiplicity mismatch" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+    try graph.addEdge(source, destination, 1, 0);
+
+    const destination_adj = (try graph.nodeAt(destination)).publishedAdj();
+    const reverse_block = page_ops.edgeBlockAt(&graph.graph, destination_adj.first_block_rev, .rev);
+    reverse_block.mask = constants.denseMask(1);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .forward_reverse_multiplicity_mismatch));
+}
+
+test "validation: multigraph detects zero edge id in sidecar" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    _ = try graph.addEdgeWithId(source, destination, 0, 0);
+
+    const source_adj = (try graph.nodeAt(source)).publishedAdj();
+    page_ops.edgeBlockFwdIdsAt(&graph.graph, source_adj.first_block_fwd).ids[0] = 0;
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .invalid_edge_id));
+}
+
+test "validation: multigraph detects duplicate edge id within one source" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination_a = try graph.addNode();
+    const destination_b = try graph.addNode();
+    const id_a = try graph.addEdgeWithId(source, destination_a, 0, 0);
+    _ = try graph.addEdgeWithId(source, destination_b, 0, 0);
+
+    const source_adj = (try graph.nodeAt(source)).publishedAdj();
+    const id_block = page_ops.edgeBlockFwdIdsAt(&graph.graph, source_adj.first_block_fwd);
+    id_block.ids[1] = id_a.local;
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .duplicate_edge_id));
+}
+
+test "validation: multigraph detects regressed next edge id counter" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    _ = try graph.addEdgeWithId(source, destination, 0, 0);
+
+    const source_node = try graph.nodeAt(source);
+    source_node.next_local_edge_id.store(1, .release);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .edge_id_counter_regressed));
+}
+
+test "validation: multigraph detects descending edge ids for equal destination" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    const first_id = try graph.addEdgeWithId(source, destination, 0, 0);
+    const second_id = try graph.addEdgeWithId(source, destination, 1, 0);
+
+    const source_adj = (try graph.nodeAt(source)).publishedAdj();
+    const id_block = page_ops.edgeBlockFwdIdsAt(&graph.graph, source_adj.first_block_fwd);
+    id_block.ids[0] = second_id.local;
+    id_block.ids[1] = first_id.local;
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .unsorted_block));
+}
+
 test "validation: detects global edge count mismatch" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -306,7 +399,7 @@ test "validation: removed node entry in repair queue is currently accepted" {
     const source = try graph.addNode();
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
 
     try graph.graph.repair_fwd.append(graph.graph.allocator, target.index);
 
@@ -358,7 +451,7 @@ test "validation: detects predecessor with tombstone but missing needs_repair_fw
     try graph.addEdge(source, target, 0, 0);
 
     // removeNode(target) marks target removed and sets needs_repair_fwd on source.
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try graph.validate(); // state is clean after removeNode
 
     // Manually clear the needs_repair_fwd flag on source while the tombstoned
@@ -387,7 +480,7 @@ test "validation: debugValidate reports missing needs_repair_fwd on predecessor 
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
 
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
 
     var source_node = try graph.nodeAt(source);
     {
@@ -408,7 +501,7 @@ test "validation: removed node with non-zero published degree is flagged" {
     const source = try graph.addNode();
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
 
     // Removed nodes must have published degree 0 on both sides.
     const node = page_ops.nodeAt(&graph.graph, target);

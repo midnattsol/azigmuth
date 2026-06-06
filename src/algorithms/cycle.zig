@@ -3,12 +3,12 @@ const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const common = @import("common.zig");
 const node_validity = @import("../core/node_validity.zig");
+const query = @import("../query.zig");
 
 /// A frame in the iterative DFS stack used by `hasCycle`.
 const StackEntry = struct {
     node: types.NodeId,
-    neighbors: []const types.NodeId,
-    next_neighbor: usize,
+    iterator: query.NeighborIterator,
 };
 
 /// Returns true if the graph contains at least one directed cycle.
@@ -28,7 +28,7 @@ pub fn hasCycle(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator
 
     var stack = try std.ArrayList(StackEntry).initCapacity(allocator, node_count);
     defer {
-        for (stack.items) |entry| allocator.free(entry.neighbors);
+        for (stack.items) |*entry| entry.iterator.deinit();
         stack.deinit(allocator);
     }
 
@@ -42,20 +42,18 @@ pub fn hasCycle(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator
         seen.set(node_index);
         active.set(node_index);
 
-        const neighbors = try common.materializeNeighborsOrEmpty(graph, .{ .index = @intCast(node_index) }, allocator);
+        const neighbors = try common.neighborIteratorOrNull(graph, .{ .index = @intCast(node_index) }) orelse continue;
         try stack.append(allocator, .{
             .node = .{ .index = @intCast(node_index) },
-            .neighbors = neighbors,
-            .next_neighbor = 0,
+            .iterator = neighbors,
         });
 
         while (stack.items.len > 0) {
             const current = &stack.items[stack.items.len - 1];
 
             var found_unvisited = false;
-            while (current.next_neighbor < current.neighbors.len) {
-                const neighbor_index: usize = @intCast(current.neighbors[current.next_neighbor].index);
-                current.next_neighbor += 1;
+            while (current.iterator.next()) |neighbor| {
+                const neighbor_index: usize = @intCast(neighbor.index);
 
                 // Revalidate liveness: a neighbor materialized earlier may
                 // have been removed before this frame consumes it.
@@ -67,23 +65,18 @@ pub fn hasCycle(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator
                 if (seen.isSet(neighbor_index) and active.isSet(neighbor_index)) return true;
                 if (seen.isSet(neighbor_index)) continue;
 
+                const next_neighbors = try common.neighborIteratorOrNull(graph, .{ .index = @intCast(neighbor_index) }) orelse continue;
                 seen.set(neighbor_index);
                 active.set(neighbor_index);
-
-                const next_neighbors = try common.materializeNeighborsOrEmpty(graph, .{ .index = @intCast(neighbor_index) }, allocator);
-                try stack.append(allocator, .{
-                    .node = .{ .index = @intCast(neighbor_index) },
-                    .neighbors = next_neighbors,
-                    .next_neighbor = 0,
-                });
+                try stack.append(allocator, .{ .node = .{ .index = @intCast(neighbor_index) }, .iterator = next_neighbors });
                 found_unvisited = true;
                 break;
             }
 
             if (!found_unvisited) {
                 active.unset(current.node.index);
-                const completed = stack.pop().?;
-                allocator.free(completed.neighbors);
+                current.iterator.deinit();
+                _ = stack.pop();
             }
         }
     }

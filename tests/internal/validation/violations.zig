@@ -200,7 +200,7 @@ test "validation: debugValidate emits forward_tombstone_missing_repair_flag when
     const b = try graph.addNode();
     try graph.addEdge(a, b, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try graph.validate();
 
     const a_node = try graph.nodeAt(a);

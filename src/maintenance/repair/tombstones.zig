@@ -19,7 +19,7 @@ pub fn edgePointsToRemoved(
         .rev => block.sources[slot],
     };
     if (node_id >= graph.publishedNodeCount()) return false;
-    return page_ops.nodeAtConst(graph, .{ .index = node_id }).publishedAdj().flags.removed;
+    return node_validity.isNodeRemovedIndex(graph, node_id);
 }
 
 pub fn hasAnyTombstone(
@@ -39,11 +39,15 @@ pub fn hasAnyTombstone(
             }
         }
     } else {
+        adjacency.validateSideAdjLayout(graph, .{
+            .first_block = first_block,
+            .block_count = block_count,
+            .group_count = group_count,
+            .first_group = first_group,
+        }) catch return true;
         var group_idx = first_group;
         var visited: u16 = 0;
         while (group_idx != constants.END_OF_CHAIN) {
-            if (group_idx >= graph.group_count) return false;
-            if (visited >= group_count or visited >= graph.group_count) return false;
             visited += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
@@ -111,4 +115,3 @@ pub fn collectForwardTombstoneDestinations(
         group_idx = group.next;
     }
 }
-

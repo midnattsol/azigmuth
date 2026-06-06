@@ -17,7 +17,7 @@ test "tombstone regression: removeNode clears outgoing from all destinations" {
         try graph.addEdge(hub, destinations[i], 0, .{});
     }
 
-    try graph.removeNode(hub);
+    _ = try graph.removeNode(hub);
 
     try testing.expect(!graph.hasNode(hub));
     try testing.expectEqual(@as(usize, 0), graph.outDegree(hub) catch 0);
@@ -39,7 +39,7 @@ test "tombstone regression: removeNode leaves invisible incoming tombstones" {
         try graph.addEdge(sources[i], target, 0, .{});
     }
 
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
 
     try testing.expect(!graph.hasNode(target));
     try testing.expectEqual(@as(usize, 0), graph.edgeCount());
@@ -62,7 +62,7 @@ test "tombstone regression: reverse residual on removed node is allowed before c
         try graph.addEdge(sources[i], target, 0, .{});
     }
 
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
 
     try testing.expect(!graph.hasNode(target));
     try testing.expectError(error.InvalidNode, graph.inDegree(target));
@@ -96,7 +96,7 @@ test "tombstone regression: removeNode self-edge works correctly" {
     try graph.addEdge(node, other, 0, .{});
     try graph.addEdge(other, node, 0, .{});
 
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expect(!graph.hasNode(node));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -118,12 +118,12 @@ test "tombstone regression: removeNode with incoming from already-removed nodes"
     try graph.addEdge(c, b, 0, .{});
 
     // Remove A first — this clears A's forward and B's reverse for A.
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try graph.validate();
 
     // Then remove B — B has a stale reverse from A (already removed),
     // plus a live reverse from C.
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
 
     try testing.expect(!graph.hasNode(b));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -144,7 +144,7 @@ test "tombstone compaction: removeNode + repairBudgeted eliminates structural to
         try graph.addEdge(sources[i], target, 0, .{});
     }
 
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try graph.validate();
 
     // Run repair to compact tombstones.
@@ -176,7 +176,7 @@ test "tombstone stress: removeNode on hub with many incoming and outgoing" {
     }
 
     try graph.validate();
-    try graph.removeNode(hub);
+    _ = try graph.removeNode(hub);
 
     try testing.expect(!graph.hasNode(hub));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());

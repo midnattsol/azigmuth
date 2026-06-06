@@ -86,7 +86,7 @@ test "bfs returns error on removed start node" {
 
     const start = try graph.addNode();
     _ = try graph.addNode();
-    try graph.removeNode(start);
+    _ = try graph.removeNode(start);
 
     try std.testing.expectError(error.InvalidNode, graph.bfs(start, std.testing.allocator));
 }

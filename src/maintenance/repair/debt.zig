@@ -3,6 +3,7 @@
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
+const node_bitmap = @import("../../core/node_bitmap.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency.zig");
@@ -12,28 +13,62 @@ fn repairQueue(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) *
     return if (side == .fwd) &graph.repair_fwd else &graph.repair_rev;
 }
 
-fn enqueueRepairDebtBestEffort(graph: *graph_core.GraphCore, node_index: u32, comptime side: adjacency.AdjSide) void {
-    const active_w = graph.active_writers.load(.monotonic);
-    const active_r = graph.active_repairers.load(.monotonic);
-    if (active_w > 1 or (active_w > 0 and active_r > 0)) return;
-    const queue = repairQueue(graph, side);
-    for (queue.items) |existing| {
-        if (existing == node_index) return;
+fn lockRepairQueue(graph: *graph_core.GraphCore) void {
+    while (graph.repair_queue_lock.cmpxchgWeak(0, 1, .acq_rel, .acquire) != null) {
+        std.atomic.spinLoopHint();
     }
-    queue.append(graph.allocator, node_index) catch {};
+}
+
+fn unlockRepairQueue(graph: *graph_core.GraphCore) void {
+    graph.repair_queue_lock.store(0, .release);
+}
+
+fn repairQueuePages(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) []std.atomic.Value(usize) {
+    return if (side == .fwd) graph.repair_queued_fwd_pages[0..] else graph.repair_queued_rev_pages[0..];
+}
+
+fn enqueueRepairDebtBestEffort(graph: *graph_core.GraphCore, node_index: u32, comptime side: adjacency.AdjSide) void {
+    lockRepairQueue(graph);
+    defer unlockRepairQueue(graph);
+
+    if (node_bitmap.testAndSetBit(graph, repairQueuePages(graph, side), node_index) catch true) return;
+    repairQueue(graph, side).append(graph.allocator, node_index) catch {
+        _ = node_bitmap.testAndClearBit(repairQueuePages(graph, side), node_index);
+    };
 }
 
 pub fn popRepairDebtBestEffort(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) ?u32 {
-    const active_w = graph.active_writers.load(.monotonic);
-    const active_r = graph.active_repairers.load(.monotonic);
-    if (active_w > 1 or (active_w > 0 and active_r > 0)) return null;
-    return repairQueue(graph, side).pop();
+    lockRepairQueue(graph);
+    defer unlockRepairQueue(graph);
+
+    const queue = repairQueue(graph, side);
+    while (queue.pop()) |node_index| {
+        _ = node_bitmap.testAndClearBit(repairQueuePages(graph, side), node_index);
+        return node_index;
+    }
+    return null;
 }
 
 fn nodeNeedsRepair(graph: *const graph_core.GraphCore, node_index: u32, comptime side: adjacency.AdjSide) bool {
     const adj = page_ops.nodeAtConst(graph, .{ .index = node_index }).publishedAdj();
     if (adj.flags.removed) return false;
     return if (side == .fwd) adj.flags.needs_repair_fwd else adj.flags.needs_repair_rev;
+}
+
+pub fn queuedRepairCount(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) usize {
+    lockRepairQueue(graph);
+    defer unlockRepairQueue(graph);
+    return repairQueue(graph, side).items.len;
+}
+
+pub fn countNodesWithRepairFlag(graph: *const graph_core.GraphCore, comptime side: adjacency.AdjSide) usize {
+    const node_count = graph.publishedNodeCount();
+    var total: usize = 0;
+    for (0..node_count) |node_index_usize| {
+        const node_index: u32 = @intCast(node_index_usize);
+        if (nodeNeedsRepair(graph, node_index, side)) total += 1;
+    }
+    return total;
 }
 
 pub fn findRepairDebtByFlag(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) ?u32 {
@@ -77,8 +112,61 @@ pub fn updateRepairDebt(
 
     const needs_repair = computeNeedsRepair(graph, adj, side);
     const flag = if (side == .fwd) &adj.flags.needs_repair_fwd else &adj.flags.needs_repair_rev;
+    const previous_flag = flag.*;
     flag.* = needs_repair;
-    if (needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
+    if (!previous_flag and needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
+}
+
+fn mutationShapeNeedsRepair(
+    graph: *const graph_core.GraphCore,
+    adj: *const types.NodeAdj,
+    comptime side: adjacency.AdjSide,
+) bool {
+    const block_count = if (side == .fwd) adj.block_count_fwd else adj.block_count_rev;
+    const group_count = if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
+    const first_group = if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
+
+    if (block_count <= 1) return group_count > 0;
+    if (group_count == 0) return false;
+
+    adjacency.validateNodeAdjLayout(graph, adj.*, side) catch return true;
+    if (group_count > constants.MAX_GROUPS_PER_NODE) return true;
+
+    var group_idx = first_group;
+    var visited: u16 = 0;
+    var previous_group_end: ?u32 = null;
+    var chain_is_contiguous = true;
+    while (visited < group_count) : (visited += 1) {
+        const group = page_ops.groupAtConst(graph, group_idx);
+        const is_last_group = group.next == constants.END_OF_CHAIN;
+        if (previous_group_end) |expected_start| {
+            if (group.start != expected_start) chain_is_contiguous = false;
+        }
+        previous_group_end = group.start + group.count;
+        if (!is_last_group and group.count < 4) return true;
+        group_idx = group.next;
+    }
+
+    return chain_is_contiguous;
+}
+
+pub fn updateRepairDebtAfterEdgeMutation(
+    graph: *graph_core.GraphCore,
+    adj: *types.NodeAdj,
+    node_index: u32,
+    comptime side: adjacency.AdjSide,
+    previous_flag: bool,
+) void {
+    if (adj.flags.removed) {
+        adj.flags.needs_repair_fwd = false;
+        adj.flags.needs_repair_rev = false;
+        return;
+    }
+
+    const flag = if (side == .fwd) &adj.flags.needs_repair_fwd else &adj.flags.needs_repair_rev;
+    const needs_repair = previous_flag or mutationShapeNeedsRepair(graph, adj, side);
+    flag.* = needs_repair;
+    if (!previous_flag and needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
 }
 
 pub fn computeNeedsRepair(
@@ -90,6 +178,10 @@ pub fn computeNeedsRepair(
     const first_block = if (side == .fwd) adj.first_block_fwd else adj.first_block_rev;
     const group_count = if (side == .fwd) adj.group_count_fwd else adj.group_count_rev;
     const first_group = if (side == .fwd) adj.first_group_fwd else adj.first_group_rev;
+
+    if (group_count > 0) {
+        adjacency.validateNodeAdjLayout(graph, adj.*, side) catch return true;
+    }
 
     var needs_repair = side == .fwd and block_count > 0 and rebuild_mod.hasAnyTombstone(graph, first_block, block_count, group_count, first_group, .fwd);
 
@@ -116,8 +208,6 @@ pub fn computeNeedsRepair(
         var previous_group_end: ?u32 = null;
         var chain_is_contiguous = true;
         while (group_idx != constants.END_OF_CHAIN) {
-            if (group_idx >= graph.group_count) return true;
-            if (counted_groups >= group_count or counted_groups >= graph.group_count) return true;
             counted_groups += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             const is_last_group = group.next == constants.END_OF_CHAIN;
@@ -139,7 +229,6 @@ pub fn computeNeedsRepair(
                 }
             }
             if (needs_repair) break;
-            if (group.next == constants.END_OF_CHAIN) break;
             group_idx = group.next;
         }
         if (!needs_repair and counted_groups > constants.MAX_GROUPS_PER_NODE) {

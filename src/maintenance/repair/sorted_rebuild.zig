@@ -14,7 +14,57 @@ const BlockIter = struct {
     block_idx: u32,
     live: u7,
     pos: u7,
+    current_key: u32,
+    current_id: u32 = 0,
 };
+
+fn blockIterLess(lhs: BlockIter, rhs: BlockIter) bool {
+    if (lhs.current_key != rhs.current_key) return lhs.current_key < rhs.current_key;
+    return lhs.current_id < rhs.current_id;
+}
+
+fn siftUp(heap: []BlockIter, start_idx: usize) void {
+    var child_idx = start_idx;
+    while (child_idx > 0) {
+        const parent_idx = (child_idx - 1) / 2;
+        if (!blockIterLess(heap[child_idx], heap[parent_idx])) break;
+        std.mem.swap(BlockIter, &heap[parent_idx], &heap[child_idx]);
+        child_idx = parent_idx;
+    }
+}
+
+fn siftDown(heap: []BlockIter, start_idx: usize) void {
+    var parent_idx = start_idx;
+    while (true) {
+        const left_idx = parent_idx * 2 + 1;
+        if (left_idx >= heap.len) break;
+
+        const right_idx = left_idx + 1;
+        var min_idx = left_idx;
+        if (right_idx < heap.len and blockIterLess(heap[right_idx], heap[left_idx])) {
+            min_idx = right_idx;
+        }
+        if (!blockIterLess(heap[min_idx], heap[parent_idx])) break;
+
+        std.mem.swap(BlockIter, &heap[parent_idx], &heap[min_idx]);
+        parent_idx = min_idx;
+    }
+}
+
+fn heapPush(heap: *std.ArrayList(BlockIter), item: BlockIter) void {
+    heap.appendAssumeCapacity(item);
+    siftUp(heap.items, heap.items.len - 1);
+}
+
+fn heapRemoveTop(heap: *std.ArrayList(BlockIter)) void {
+    _ = heap.swapRemove(0);
+    if (heap.items.len > 0) siftDown(heap.items, 0);
+}
+
+fn heapUpdateTop(heap: *std.ArrayList(BlockIter), item: BlockIter) void {
+    heap.items[0] = item;
+    siftDown(heap.items, 0);
+}
 
 pub const SortedRebuildResult = struct {
     new_blocks: std.ArrayList(u32),
@@ -31,6 +81,14 @@ pub fn sortedRebuildForward(
 ) !SortedRebuildResult {
     var live_after: usize = 0;
     var max_iters: usize = 0;
+    if (group_count > 0) {
+        try adjacency.validateSideAdjLayout(graph, .{
+            .first_block = first_block,
+            .block_count = block_count,
+            .group_count = group_count,
+            .first_group = first_group,
+        });
+    }
 
     // Count live and determine how many iterators we need.
     if (group_count == 0) {
@@ -45,10 +103,7 @@ pub fn sortedRebuildForward(
     } else {
         var gidx = first_group;
         var visited_groups: u16 = 0;
-        while (gidx != constants.END_OF_CHAIN) {
-            if (gidx >= graph.group_count) return error.CorruptGraph;
-            if (visited_groups >= group_count or visited_groups >= graph.group_count) return error.CorruptGraph;
-            visited_groups += 1;
+        while (visited_groups < group_count) : (visited_groups += 1) {
             const grp = page_ops.groupAtConst(graph, gidx);
             max_iters += grp.count;
             for (grp.start..grp.start + grp.count) |bi| {
@@ -86,16 +141,20 @@ pub fn sortedRebuildForward(
                 if (!tombstones.edgePointsToRemoved(graph, block, pos, .fwd)) break;
             }
             if (pos < live) {
-                try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+                const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, @intCast(bi)) else null;
+                heapPush(&iters, .{
+                    .block_idx = @intCast(bi),
+                    .live = live,
+                    .pos = pos,
+                    .current_key = block.edges[pos].destination,
+                    .current_id = if (id_block) |fwd_ids| fwd_ids.ids[pos] else 0,
+                });
             }
         }
     } else {
         var gidx = first_group;
         var visited_groups2: u16 = 0;
-        while (gidx != constants.END_OF_CHAIN) {
-            if (gidx >= graph.group_count) return error.CorruptGraph;
-            if (visited_groups2 >= group_count or visited_groups2 >= graph.group_count) return error.CorruptGraph;
-            visited_groups2 += 1;
+        while (visited_groups2 < group_count) : (visited_groups2 += 1) {
             const grp = page_ops.groupAtConst(graph, gidx);
             for (grp.start..grp.start + grp.count) |bi| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .fwd);
@@ -105,7 +164,14 @@ pub fn sortedRebuildForward(
                     if (!tombstones.edgePointsToRemoved(graph, block, pos, .fwd)) break;
                 }
                 if (pos < live) {
-                    try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+                    const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, @intCast(bi)) else null;
+                    heapPush(&iters, .{
+                        .block_idx = @intCast(bi),
+                        .live = live,
+                        .pos = pos,
+                        .current_key = block.edges[pos].destination,
+                        .current_id = if (id_block) |fwd_ids| fwd_ids.ids[pos] else 0,
+                    });
                 }
             }
             gidx = grp.next;
@@ -116,16 +182,7 @@ pub fn sortedRebuildForward(
     var out_slot: u7 = 0;
 
     while (iters.items.len > 0) {
-        // Find iterator with minimum key
-        var min_idx: usize = 0;
-        var min_key: u32 = std.math.maxInt(u32);
-        for (iters.items, 0..) |iter, idx| {
-            const block = page_ops.edgeBlockAtConst(graph, iter.block_idx, .fwd);
-            const key = block.edges[iter.pos].destination;
-            if (key < min_key) { min_key = key; min_idx = idx; }
-        }
-
-        const iter_ref = &iters.items[min_idx];
+        const iter_ref = &iters.items[0];
         const block = page_ops.edgeBlockAtConst(graph, iter_ref.block_idx, .fwd);
         const edge = block.edges[iter_ref.pos];
 
@@ -137,8 +194,10 @@ pub fn sortedRebuildForward(
 
         const dst_block = page_ops.edgeBlockAt(graph, out_block.?, .fwd);
         dst_block.edges[out_slot] = edge;
-        const src_id_block = page_ops.edgeBlockFwdIdsAtConst(graph, iter_ref.block_idx);
-        page_ops.edgeBlockFwdIdsAt(graph, out_block.?, ).ids[out_slot] = src_id_block.ids[iter_ref.pos];
+        if (graph.multigraph_enabled) {
+            const src_id_block = page_ops.edgeBlockFwdIdsAtConst(graph, iter_ref.block_idx);
+            page_ops.edgeBlockFwdIdsAt(graph, out_block.?, ).ids[out_slot] = src_id_block.ids[iter_ref.pos];
+        }
         out_slot += 1;
         if (out_slot == 64) {
             const full_block = page_ops.edgeBlockAt(graph, out_block.?, .fwd);
@@ -146,12 +205,20 @@ pub fn sortedRebuildForward(
         }
 
         // Advance iterator, skip tombstones
-        iter_ref.pos += 1;
-        while (iter_ref.pos < iter_ref.live) : (iter_ref.pos += 1) {
-            if (!tombstones.edgePointsToRemoved(graph, block, iter_ref.pos, .fwd)) break;
+        var next_iter = iter_ref.*;
+        next_iter.pos += 1;
+        while (next_iter.pos < next_iter.live) : (next_iter.pos += 1) {
+            if (!tombstones.edgePointsToRemoved(graph, block, next_iter.pos, .fwd)) break;
         }
-        if (iter_ref.pos >= iter_ref.live) {
-            _ = iters.swapRemove(min_idx);
+        if (next_iter.pos >= next_iter.live) {
+            heapRemoveTop(&iters);
+        } else {
+            next_iter.current_key = block.edges[next_iter.pos].destination;
+            if (graph.multigraph_enabled) {
+                const src_id_block = page_ops.edgeBlockFwdIdsAtConst(graph, next_iter.block_idx);
+                next_iter.current_id = src_id_block.ids[next_iter.pos];
+            }
+            heapUpdateTop(&iters, next_iter);
         }
     }
 
@@ -173,6 +240,14 @@ pub fn sortedRebuildReverse(
 ) !SortedRebuildResult {
     var live_after: usize = 0;
     var max_iters: usize = 0;
+    if (group_count > 0) {
+        try adjacency.validateSideAdjLayout(graph, .{
+            .first_block = first_block,
+            .block_count = block_count,
+            .group_count = group_count,
+            .first_group = first_group,
+        });
+    }
 
     if (group_count == 0) {
         max_iters = block_count;
@@ -188,10 +263,7 @@ pub fn sortedRebuildReverse(
     } else {
         var gidx = first_group;
         var visited_groups_rev1: u16 = 0;
-        while (gidx != constants.END_OF_CHAIN) {
-            if (gidx >= graph.group_count) return error.CorruptGraph;
-            if (visited_groups_rev1 >= group_count or visited_groups_rev1 >= graph.group_count) return error.CorruptGraph;
-            visited_groups_rev1 += 1;
+        while (visited_groups_rev1 < group_count) : (visited_groups_rev1 += 1) {
             const grp = page_ops.groupAtConst(graph, gidx);
             max_iters += grp.count;
             for (grp.start..grp.start + grp.count) |bi| {
@@ -232,16 +304,18 @@ pub fn sortedRebuildReverse(
                 break;
             }
             if (pos < live) {
-                try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+                heapPush(&iters, .{
+                    .block_idx = @intCast(bi),
+                    .live = live,
+                    .pos = pos,
+                    .current_key = block.sources[pos],
+                });
             }
         }
     } else {
         var gidx = first_group;
         var visited_groups_rev2: u16 = 0;
-        while (gidx != constants.END_OF_CHAIN) {
-            if (gidx >= graph.group_count) return error.CorruptGraph;
-            if (visited_groups_rev2 >= group_count or visited_groups_rev2 >= graph.group_count) return error.CorruptGraph;
-            visited_groups_rev2 += 1;
+        while (visited_groups_rev2 < group_count) : (visited_groups_rev2 += 1) {
             const grp = page_ops.groupAtConst(graph, gidx);
             for (grp.start..grp.start + grp.count) |bi| {
                 const block = page_ops.edgeBlockAtConst(graph, @intCast(bi), .rev);
@@ -253,7 +327,12 @@ pub fn sortedRebuildReverse(
                     break;
                 }
                 if (pos < live) {
-                    try iters.append(allocator,.{ .block_idx = @intCast(bi), .live = live, .pos = pos });
+                    heapPush(&iters, .{
+                        .block_idx = @intCast(bi),
+                        .live = live,
+                        .pos = pos,
+                        .current_key = block.sources[pos],
+                    });
                 }
             }
             gidx = grp.next;
@@ -264,15 +343,7 @@ pub fn sortedRebuildReverse(
     var out_slot: u7 = 0;
 
     while (iters.items.len > 0) {
-        var min_idx: usize = 0;
-        var min_key: u32 = std.math.maxInt(u32);
-        for (iters.items, 0..) |iter, idx| {
-            const block = page_ops.edgeBlockAtConst(graph, iter.block_idx, .rev);
-            const key = block.sources[iter.pos];
-            if (key < min_key) { min_key = key; min_idx = idx; }
-        }
-
-        const iter_ref = &iters.items[min_idx];
+        const iter_ref = &iters.items[0];
         const block = page_ops.edgeBlockAtConst(graph, iter_ref.block_idx, .rev);
         const source_id = block.sources[iter_ref.pos];
 
@@ -290,14 +361,18 @@ pub fn sortedRebuildReverse(
             full_block.mask = constants.FULL_BLOCK_MASK;
         }
 
-        iter_ref.pos += 1;
-        while (iter_ref.pos < iter_ref.live) : (iter_ref.pos += 1) {
-            if (skip_source_index != null and block.sources[iter_ref.pos] == skip_source_index.?) continue;
-            if (tombstones.edgePointsToRemoved(graph, block, iter_ref.pos, .rev)) continue;
+        var next_iter = iter_ref.*;
+        next_iter.pos += 1;
+        while (next_iter.pos < next_iter.live) : (next_iter.pos += 1) {
+            if (skip_source_index != null and block.sources[next_iter.pos] == skip_source_index.?) continue;
+            if (tombstones.edgePointsToRemoved(graph, block, next_iter.pos, .rev)) continue;
             break;
         }
-        if (iter_ref.pos >= iter_ref.live) {
-            _ = iters.swapRemove(min_idx);
+        if (next_iter.pos >= next_iter.live) {
+            heapRemoveTop(&iters);
+        } else {
+            next_iter.current_key = block.sources[next_iter.pos];
+            heapUpdateTop(&iters, next_iter);
         }
     }
 
@@ -307,4 +382,3 @@ pub fn sortedRebuildReverse(
 
     return .{ .new_blocks = new_blocks, .live_after = live_after };
 }
-

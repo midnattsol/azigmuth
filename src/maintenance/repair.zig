@@ -5,6 +5,7 @@ const rebuild = @import("repair/rebuild.zig");
 const scheduler = @import("repair/scheduler.zig");
 
 pub const updateRepairDebt = debt.updateRepairDebt;
+pub const updateRepairDebtAfterEdgeMutation = debt.updateRepairDebtAfterEdgeMutation;
 pub const updateRepairDebtSide = debt.updateRepairDebtSide;
 
 pub const sortedRebuildForward = rebuild.sortedRebuildForward;
@@ -15,3 +16,4 @@ pub const prepareReverseWithoutSource = rebuild.prepareReverseWithoutSource;
 pub const repairNodeSide = scheduler.repairNodeSide;
 pub const repairNode = scheduler.repairNode;
 pub const repairBudgeted = scheduler.repairBudgeted;
+pub const flushRepairs = scheduler.flushRepairs;

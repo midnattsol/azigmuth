@@ -70,11 +70,15 @@ pub fn countReverseSourceMatches(
             }
         }
     } else {
+        try adjacency.validateSideAdjLayout(graph, .{
+            .first_block = first_block,
+            .block_count = block_count,
+            .group_count = group_count,
+            .first_group = first_group,
+        });
         var group_idx = first_group;
         var rev_src_visited: u16 = 0;
         while (group_idx != constants.END_OF_CHAIN) {
-            if (group_idx >= graph.group_count) return error.CorruptGraph;
-            if (rev_src_visited >= group_count or rev_src_visited >= graph.group_count) return error.CorruptGraph;
             rev_src_visited += 1;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
@@ -138,4 +142,3 @@ pub fn rebuildReverseWithoutSource(
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after };
 }
-

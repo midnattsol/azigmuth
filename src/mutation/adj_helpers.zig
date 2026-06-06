@@ -174,6 +174,7 @@ pub fn collectBlockList(
     append_block: ?u32,
     out: *std.ArrayList(u32),
 ) !void {
+    try adjacency.validateSideAdjLayout(graph, published_side);
     var cursor = BlockCursor.init(published_side);
     while (cursor.next(graph)) |block_idx| {
         if (old_block != null and block_idx == old_block.?) {
@@ -304,32 +305,27 @@ pub fn findSlotInAdjById(
     destination_index: u32,
     edge_id: u32,
 ) ?AdjSlot {
+    if (!graph.multigraph_enabled) return null;
     if (block_count == 0) return null;
 
+    adjacency.validateSideAdjLayoutForSide(graph, .{
+        .first_block = first_block,
+        .block_count = block_count,
+        .group_count = group_count,
+        .first_group = first_group,
+    }, .fwd) catch return null;
+
     if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx_usize| {
-            const block_idx: u32 = @intCast(block_idx_usize);
-            const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-            if (adjacency.searchForwardBlockById(block, id_block, destination_index, edge_id)) |slot| {
-                return .{ .block_idx = block_idx, .slot = slot };
-            }
-        }
-        return null;
+        const slot = adjacency.findForwardSlotByIdInRun(graph, first_block, block_count, destination_index, edge_id) orelse return null;
+        return .{ .block_idx = slot.block_idx, .slot = slot.slot };
     }
 
     var group_idx = first_group;
     var visited: u16 = 0;
     while (visited < group_count) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) return null;
         const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx_usize| {
-            const block_idx: u32 = @intCast(block_idx_usize);
-            const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-            if (adjacency.searchForwardBlockById(block, id_block, destination_index, edge_id)) |slot| {
-                return .{ .block_idx = block_idx, .slot = slot };
-            }
+        if (adjacency.findForwardSlotByIdInRun(graph, group.start, group.count, destination_index, edge_id)) |slot| {
+            return .{ .block_idx = slot.block_idx, .slot = slot.slot };
         }
         group_idx = group.next;
     }

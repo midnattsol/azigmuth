@@ -263,6 +263,31 @@ test "mutation grouped: addEdge clones reverse group chain before tail mutation"
     try graph.validate();
 }
 
+test "mutation grouped: removeEdge tail block clones chain without mutating published groups" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try buildGroupedForwardGraph(&graph);
+    const before = try graph.publishedNodeAdj(source);
+    const first_group = before.first_group_fwd;
+    const second_group = page_ops.groupAtConst(&graph.graph, first_group).next;
+    const tail_group = page_ops.groupAtConst(&graph.graph, second_group).next;
+    const tail_before = page_ops.groupAtConst(&graph.graph, tail_group).*;
+
+    try testing.expect(try graph.removeEdge(source, .{ .index = 99 }));
+
+    const tail_after_old = page_ops.groupAtConst(&graph.graph, tail_group).*;
+    try testing.expectEqual(tail_before.start, tail_after_old.start);
+    try testing.expectEqual(tail_before.count, tail_after_old.count);
+    try testing.expectEqual(tail_before.next, tail_after_old.next);
+
+    const after = try graph.publishedNodeAdj(source);
+    try testing.expect(after.first_group_fwd != first_group);
+    try testing.expectEqual(before.group_count_fwd - 1, after.group_count_fwd);
+    try testing.expectEqual(before.block_count_fwd - 1, after.block_count_fwd);
+    try graph.validate();
+}
+
 fn publishSingleBlockGroupedForward(
     graph: *graph_mod.Graph,
     source: graph_mod.NodeId,

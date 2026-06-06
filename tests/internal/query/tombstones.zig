@@ -14,7 +14,7 @@ test "tombstones: neighbors skips removed destination nodes" {
     try graph.addEdge(source, b, 0, 0);
     try graph.addEdge(source, c, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try graph.validate();
 
     var it = try graph.neighbors(source);
@@ -38,7 +38,7 @@ test "tombstones: inNeighbors skips removed source nodes" {
     try graph.addEdge(b, target, 0, 0);
     try graph.addEdge(c, target, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try graph.validate();
 
     var it = try graph.inNeighbors(target);
@@ -62,7 +62,7 @@ test "tombstones: outDegree excludes edges to removed nodes" {
     try graph.addEdge(source, b, 0, 0);
     try graph.addEdge(source, c, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try testing.expectEqual(@as(usize, 2), try graph.outDegree(source));
     try graph.validate();
 }
@@ -79,7 +79,7 @@ test "tombstones: inDegree excludes edges from removed nodes" {
     try graph.addEdge(b, target, 0, 0);
     try graph.addEdge(c, target, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try testing.expectEqual(@as(usize, 2), try graph.inDegree(target));
     try graph.validate();
 }
@@ -93,7 +93,7 @@ test "tombstones: neighbors iterates past multiple consecutive removed nodes" {
     for (0..10) |i| targets[i] = try graph.addNode();
     for (0..10) |i| try graph.addEdge(source, targets[i], 0, 0);
 
-    try graph.removeNode(targets[2]);
+    _ = try graph.removeNode(targets[2]);
     try graph.removeNode(targets[5]);
     try graph.removeNode(targets[7]);
     try graph.validate();
@@ -114,7 +114,7 @@ test "tombstones: inNeighbors iterates past multiple consecutive removed sources
     for (0..10) |i| sources[i] = try graph.addNode();
     for (0..10) |i| try graph.addEdge(sources[i], target, 0, 0);
 
-    try graph.removeNode(sources[2]);
+    _ = try graph.removeNode(sources[2]);
     try graph.removeNode(sources[5]);
     try graph.removeNode(sources[7]);
     try graph.validate();
@@ -142,7 +142,7 @@ test "tombstones: edgeCount excludes all edges to/from removed node" {
 
     try testing.expectEqual(@as(u64, 4), graph.edgeCount());
 
-    try graph.removeNode(d);
+    _ = try graph.removeNode(d);
     try testing.expectEqual(@as(u64, 2), graph.edgeCount());
 
     try graph.validate();
@@ -159,7 +159,7 @@ test "tombstones: self-edge removed node excluded from all queries" {
     try graph.addEdge(a, b, 0, 0);
     try graph.addEdge(c, a, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(c));
@@ -175,7 +175,7 @@ test "tombstones: outDegree at boundary with many tombstones" {
     for (0..20) |i| targets[i] = try graph.addNode();
     for (0..20) |i| try graph.addEdge(source, targets[i], 0, 0);
 
-    for (0..20) |i| if (i % 2 == 0) try graph.removeNode(targets[i]);
+    for (0..20) |i| if (i % 2 == 0) _ = try graph.removeNode(targets[i]);
 
     try testing.expectEqual(@as(usize, 10), try graph.outDegree(source));
     try graph.validate();
@@ -190,7 +190,7 @@ test "tombstones: inDegree at boundary with many tombstones" {
     for (0..20) |i| sources[i] = try graph.addNode();
     for (0..20) |i| try graph.addEdge(sources[i], target, 0, 0);
 
-    for (0..20) |i| if (i % 2 == 0) try graph.removeNode(sources[i]);
+    for (0..20) |i| if (i % 2 == 0) _ = try graph.removeNode(sources[i]);
 
     try testing.expectEqual(@as(usize, 10), try graph.inDegree(target));
     try graph.validate();
@@ -209,7 +209,7 @@ test "tombstones: node pointing to multiple removed nodes has correct degree" {
     for (0..8) |i| try graph.addEdge(source, removals[i], 0, 0);
     for (0..4) |i| try graph.addEdge(source, survivors[i], 0, 0);
 
-    for (0..8) |i| try graph.removeNode(removals[i]);
+    for (0..8) |i| _ = try graph.removeNode(removals[i]);
 
     try testing.expectEqual(@as(usize, 4), try graph.outDegree(source));
     try graph.validate();
@@ -226,7 +226,7 @@ test "tombstones: validate correctly counts visible edges only" {
     try graph.addEdge(b, c, 0, 0);
     try graph.addEdge(c, a, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try graph.validate();
 
     var it_a = try graph.neighbors(a);
@@ -250,7 +250,7 @@ test "tombstones: neighbors returns empty when all destinations are removed" {
     try graph.addEdge(source, a, 0, 0);
     try graph.addEdge(source, b, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try graph.removeNode(b);
 
     var it = try graph.neighbors(source);
@@ -270,7 +270,7 @@ test "tombstones: inNeighbors returns empty when all sources are removed" {
     try graph.addEdge(a, target, 0, 0);
     try graph.addEdge(b, target, 0, 0);
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try graph.removeNode(b);
 
     var it = try graph.inNeighbors(target);
@@ -290,7 +290,7 @@ test "tombstones: large hub with many incoming tombstones is correct after repai
     for (0..sender_count) |i| senders[i] = try graph.addNode();
     for (0..sender_count) |i| try graph.addEdge(senders[i], hub, 0, 0);
 
-    for (0..sender_count) |i| if (i % 2 == 0) try graph.removeNode(senders[i]);
+    for (0..sender_count) |i| if (i % 2 == 0) _ = try graph.removeNode(senders[i]);
 
     try testing.expectEqual(@as(usize, 25), try graph.inDegree(hub));
     try graph.validate();
@@ -314,7 +314,7 @@ test "tombstones: repairNode removes tombstones from forward adjacency" {
     for (0..10) |i| removals[i] = try graph.addNode();
     for (0..10) |i| try graph.addEdge(source, removals[i], 0, 0);
 
-    for (0..10) |i| try graph.removeNode(removals[i]);
+    for (0..10) |i| _ = try graph.removeNode(removals[i]);
 
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
     try graph.validate();
@@ -336,7 +336,7 @@ test "tombstones: debugValidate detects inconsistency if any" {
     const b = try graph.addNode();
     try graph.addEdge(a, b, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try graph.validate();
 
     const violations = try graph.debugValidate(testing.allocator);
@@ -350,7 +350,7 @@ test "tombstones: hasNode returns false for removed nodes" {
 
     const node = try graph.addNode();
     try graph.addEdge(node, node, 0, 0);
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expect(!graph.hasNode(node));
     try testing.expectError(error.InvalidNode, graph.neighbors(node));
@@ -363,7 +363,7 @@ test "tombstones: addEdge to removed destination fails" {
     const source = try graph.addNode();
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
 
     try testing.expectError(error.InvalidNode, graph.addEdge(source, target, 0, 0));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -376,7 +376,7 @@ test "tombstones: addEdge from removed source fails" {
     const source = try graph.addNode();
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
-    try graph.removeNode(source);
+    _ = try graph.removeNode(source);
 
     try testing.expectError(error.InvalidNode, graph.addEdge(source, target, 0, 0));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());

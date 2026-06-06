@@ -18,6 +18,12 @@ pub const GraphCore = struct {
     node_pages_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
 
+    /// Per-node repair queue membership bitmaps to avoid duplicate queue entries.
+    repair_queued_fwd_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
+    repair_queued_rev_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
+
     /// Atomically-published page directories for lock-free block/group lookup.
     /// Values are `@intFromPtr(page.ptr)` or 0 when the page is absent.
     edge_blocks_fwd_pages: [constants.MAX_EDGE_BLOCK_PAGES]std.atomic.Value(usize) =
@@ -58,6 +64,7 @@ pub const GraphCore = struct {
     /// flags so the queue is not on the concurrent-writer correctness path.
     repair_fwd: std.ArrayList(u32),
     repair_rev: std.ArrayList(u32),
+    repair_queue_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
     /// Total number of nodes that have been published.
     /// Readers load this atomically before dereferencing a node page.

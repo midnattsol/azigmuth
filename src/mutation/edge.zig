@@ -47,6 +47,17 @@ const RemovalBuild = struct {
     new_live: u7,
 };
 
+const DestinationMatchProbe = struct {
+    found: ?common.AdjSlot = null,
+    has_multiple: bool = false,
+};
+
+const ClonedGroupChain = struct {
+    first_group: u32,
+    last_group: u32,
+    previous_to_last: ?u32,
+};
+
 const SideRewriteResult = struct {
     old_block: ?u32 = null,
     new_block: u32,
@@ -84,7 +95,7 @@ fn prepareAppendBlockSide(
         return .{ .new_block = try scratch.allocBlock(graph, side) };
     }
 
-    const tail_index = adjacency.tailBlockIndexSide(graph, side_adj).?;
+    const tail_index = (try adjacency.tailBlockIndexSideChecked(graph, side_adj)).?;
     const new_block = try scratch.allocBlock(graph, side);
 
     switch (side) {
@@ -94,7 +105,7 @@ fn prepareAppendBlockSide(
                 return .{ .new_block = new_block, .tail_index = tail_index };
             }
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = tail_block.*;
-            page_ops.edgeBlockFwdIdsAt(graph, new_block).* = page_ops.edgeBlockFwdIdsAtConst(graph, tail_index).*;
+            if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block).* = page_ops.edgeBlockFwdIdsAtConst(graph, tail_index).*;
         },
         .rev => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_index, .rev);
@@ -139,15 +150,11 @@ fn applyPreparedAppendSideTracked(
     prepared: PreparedAppendBlock,
     scratch: *common.MutationScratch,
 ) !void {
-    if (side_adj.block_count == 0) {
-        side_adj.first_block = prepared.new_block;
-        side_adj.block_count = 1;
-        return;
-    }
+    if (try tryApplyPreparedAppendSideFast(graph, side_adj, prepared, scratch)) return;
 
     if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
 
-    var block_list: std.ArrayList(u32) = .empty;
+    var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, side_adj.block_count + 1);
     defer block_list.deinit(graph.allocator);
     try common.collectBlockList(
         graph,
@@ -160,9 +167,185 @@ fn applyPreparedAppendSideTracked(
     try common.buildSideFromBlocks(side_adj, graph, block_list.items, scratch);
 }
 
+fn lastGroupIndex(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) !u32 {
+    try adjacency.validateSideAdjLayout(graph, side_adj.*);
+    var group_index = side_adj.first_group;
+    var visited: u16 = 0;
+    while (visited < side_adj.group_count) : (visited += 1) {
+        const group = page_ops.groupAtConst(graph, group_index);
+        if (group.next == constants.END_OF_CHAIN) return group_index;
+        group_index = group.next;
+    }
+    return error.CorruptGraph;
+}
+
+fn previousToLastGroupIndex(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) !?u32 {
+    try adjacency.validateSideAdjLayout(graph, side_adj.*);
+    if (side_adj.group_count <= 1) return null;
+
+    var group_index = side_adj.first_group;
+    var visited: u16 = 1;
+    while (visited < side_adj.group_count) : (visited += 1) {
+        const group = page_ops.groupAtConst(graph, group_index);
+        const next_group = page_ops.groupAtConst(graph, group.next);
+        if (next_group.next == constants.END_OF_CHAIN) return group_index;
+        group_index = group.next;
+    }
+    return error.CorruptGraph;
+}
+
+fn cloneGroupChain(
+    graph: *graph_core.GraphCore,
+    side_adj: *const types.SideAdj,
+    scratch: *common.MutationScratch,
+) !ClonedGroupChain {
+    try adjacency.validateSideAdjLayout(graph, side_adj.*);
+    std.debug.assert(side_adj.group_count > 0);
+
+    var group_index = side_adj.first_group;
+    var visited: u16 = 0;
+    var first_group: ?u32 = null;
+    var previous_group: ?u32 = null;
+    var previous_to_last: ?u32 = null;
+    var last_group: u32 = undefined;
+
+    while (visited < side_adj.group_count) : (visited += 1) {
+        const cloned_group_index = try scratch.allocGroup(graph);
+        page_ops.groupAt(graph, cloned_group_index).* = page_ops.groupAtConst(graph, group_index).*;
+        page_ops.groupAt(graph, cloned_group_index).next = constants.END_OF_CHAIN;
+
+        if (first_group == null) first_group = cloned_group_index;
+        if (previous_group) |previous| {
+            page_ops.groupAt(graph, previous).next = cloned_group_index;
+            previous_to_last = previous;
+        }
+
+        previous_group = cloned_group_index;
+        last_group = cloned_group_index;
+        group_index = page_ops.groupAtConst(graph, group_index).next;
+    }
+
+    return .{
+        .first_group = first_group.?,
+        .last_group = last_group,
+        .previous_to_last = if (side_adj.group_count > 1) previous_to_last else null,
+    };
+}
+
+fn tryApplyPreparedAppendSideFast(
+    graph: *graph_core.GraphCore,
+    side_adj: *types.SideAdj,
+    prepared: PreparedAppendBlock,
+    scratch: *common.MutationScratch,
+) !bool {
+    if (side_adj.block_count == 0) {
+        side_adj.first_block = prepared.new_block;
+        side_adj.block_count = 1;
+        side_adj.group_count = 0;
+        side_adj.first_group = 0;
+        return true;
+    }
+
+    if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
+
+    if (prepared.old_block == null) {
+        if (side_adj.group_count == 0) {
+            if (prepared.new_block == side_adj.first_block + side_adj.block_count) {
+                side_adj.block_count += 1;
+                return true;
+            }
+            return false;
+        }
+
+        if (side_adj.block_count == 1) {
+            const group = page_ops.groupAtConst(graph, side_adj.first_group);
+            if (prepared.new_block == group.start + 1) {
+                side_adj.first_block = group.start;
+                side_adj.block_count = 2;
+                side_adj.group_count = 0;
+                side_adj.first_group = 0;
+                return true;
+            }
+        }
+
+        const cloned = try cloneGroupChain(graph, side_adj, scratch);
+        const last_group = page_ops.groupAt(graph, cloned.last_group);
+        side_adj.first_group = cloned.first_group;
+        if (prepared.new_block == last_group.start + last_group.count) {
+            last_group.count += 1;
+            side_adj.block_count += 1;
+            return true;
+        }
+
+        if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
+
+        const tail_group = try scratch.allocGroup(graph);
+        page_ops.groupAt(graph, tail_group).* = .{
+            .start = prepared.new_block,
+            .count = 1,
+            .next = constants.END_OF_CHAIN,
+        };
+        last_group.next = tail_group;
+        side_adj.group_count += 1;
+        side_adj.block_count += 1;
+        return true;
+    }
+
+    if (side_adj.group_count == 0) {
+        if (side_adj.block_count == 1) {
+            side_adj.first_block = prepared.new_block;
+            return true;
+        }
+
+        const prefix_group = try scratch.allocGroup(graph);
+        const tail_group = try scratch.allocGroup(graph);
+        page_ops.groupAt(graph, prefix_group).* = .{
+            .start = side_adj.first_block,
+            .count = side_adj.block_count - 1,
+            .next = tail_group,
+        };
+        page_ops.groupAt(graph, tail_group).* = .{
+            .start = prepared.new_block,
+            .count = 1,
+            .next = constants.END_OF_CHAIN,
+        };
+        side_adj.first_group = prefix_group;
+        side_adj.group_count = 2;
+        return true;
+    }
+
+    if (side_adj.block_count == 1) {
+        side_adj.first_block = prepared.new_block;
+        side_adj.group_count = 0;
+        side_adj.first_group = 0;
+        return true;
+    }
+
+    const cloned = try cloneGroupChain(graph, side_adj, scratch);
+    const last_group = page_ops.groupAt(graph, cloned.last_group);
+    side_adj.first_group = cloned.first_group;
+    if (last_group.count == 1) {
+        last_group.start = prepared.new_block;
+        return true;
+    }
+
+    if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
+
+    const tail_group = try scratch.allocGroup(graph);
+    page_ops.groupAt(graph, tail_group).* = .{
+        .start = prepared.new_block,
+        .count = 1,
+        .next = constants.END_OF_CHAIN,
+    };
+    last_group.count -= 1;
+    last_group.next = tail_group;
+    side_adj.group_count += 1;
+    return true;
+}
+
 fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination: types.NodeId, relation: u16, flags: u16, edge_id: u32) !void {
     const forward_block = page_ops.edgeBlockAt(graph, block_index, .fwd);
-    const id_block = page_ops.edgeBlockFwdIdsAt(graph, block_index);
+    const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_index) else undefined;
     const live = @popCount(forward_block.mask);
     var insertion_point: u7 = 0;
     var search_end: u7 = @intCast(live);
@@ -173,7 +356,7 @@ fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination
         } else if (forward_block.edges[probe].destination == destination.index) {
             if (!graph.multigraph_enabled) return error.EdgeAlreadyExists;
             // Multigraph: resolve by edge_id order (unique per source)
-            if (id_block.ids[probe] < edge_id) {
+            if (graph.multigraph_enabled and id_block.ids[probe] < edge_id) {
                 insertion_point = probe + 1;
             } else {
                 search_end = probe;
@@ -185,11 +368,11 @@ fn insertForwardEdge(graph: *graph_core.GraphCore, block_index: u32, destination
     var shift: u7 = @intCast(live);
     while (shift > insertion_point) {
         forward_block.edges[shift] = forward_block.edges[shift - 1];
-        id_block.ids[shift] = id_block.ids[shift - 1];
+        if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift - 1];
         shift -= 1;
     }
     forward_block.edges[insertion_point] = types.Edge{ .destination = destination.index, .relation = relation, .flags = @bitCast(flags) };
-    id_block.ids[insertion_point] = edge_id;
+    if (graph.multigraph_enabled) id_block.ids[insertion_point] = edge_id;
     forward_block.mask = constants.denseMask(@intCast(live + 1));
 }
 
@@ -215,6 +398,60 @@ fn insertReverseEdge(graph: *graph_core.GraphCore, block_index: u32, source: typ
     reverse_block.mask = constants.denseMask(@intCast(live + 1));
 }
 
+fn probeForwardDestinationMatches(
+    graph: *const graph_core.GraphCore,
+    side_adj: *const types.SideAdj,
+    destination_index: u32,
+) !DestinationMatchProbe {
+    if (side_adj.block_count == 0) return .{};
+    try adjacency.validateSideAdjLayoutForSide(graph, side_adj.*, .fwd);
+
+    var result: DestinationMatchProbe = .{};
+
+    if (side_adj.group_count == 0) {
+        for (side_adj.first_block..side_adj.first_block + side_adj.block_count) |block_idx_usize| {
+            const block_idx: u32 = @intCast(block_idx_usize);
+            const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+            const matches = adjacency.countForwardInBlock(block, destination_index);
+            if (matches == 0) continue;
+
+            if (result.found == null) {
+                result.found = .{ .block_idx = block_idx, .slot = adjacency.searchInBlock(types.EdgeBlockFwd, block, destination_index).? };
+                if (matches > 1) result.has_multiple = true;
+            } else {
+                result.has_multiple = true;
+            }
+
+            if (result.has_multiple) return result;
+        }
+        return result;
+    }
+
+    var group_idx = side_adj.first_group;
+    var visited: u16 = 0;
+    while (visited < side_adj.group_count) : (visited += 1) {
+        const group = page_ops.groupAtConst(graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx_usize| {
+            const block_idx: u32 = @intCast(block_idx_usize);
+            const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+            const matches = adjacency.countForwardInBlock(block, destination_index);
+            if (matches == 0) continue;
+
+            if (result.found == null) {
+                result.found = .{ .block_idx = block_idx, .slot = adjacency.searchInBlock(types.EdgeBlockFwd, block, destination_index).? };
+                if (matches > 1) result.has_multiple = true;
+            } else {
+                result.has_multiple = true;
+            }
+
+            if (result.has_multiple) return result;
+        }
+        group_idx = group.next;
+    }
+
+    return result;
+}
+
 fn planRemovalSide(
     graph: *graph_core.GraphCore,
     side_adj: *const types.SideAdj,
@@ -226,7 +463,7 @@ fn planRemovalSide(
         .rev => @intCast(@popCount(page_ops.edgeBlockAtConst(graph, found.block_idx, .rev).mask)),
     };
     const new_live: u7 = live_before - 1;
-    const tail_index = adjacency.tailBlockIndexSide(graph, side_adj) orelse return error.CorruptGraph;
+    const tail_index = (try adjacency.tailBlockIndexSideChecked(graph, side_adj)) orelse return error.CorruptGraph;
     const is_tail = found.block_idx == tail_index;
     if (!is_tail and new_live < constants.MIN_OCCUPANCY) return error.RepairRequired;
     return .{ .found = found, .live_before = live_before };
@@ -249,14 +486,16 @@ fn applyRemovalPlanSide(
         .fwd => {
             const block_before = page_ops.edgeBlockAtConst(graph, old_block, .fwd);
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = block_before.*;
-            const ids_before = page_ops.edgeBlockFwdIdsAtConst(graph, old_block);
-            page_ops.edgeBlockFwdIdsAt(graph, new_block).* = ids_before.*;
+            if (graph.multigraph_enabled) {
+                const ids_before = page_ops.edgeBlockFwdIdsAtConst(graph, old_block);
+                page_ops.edgeBlockFwdIdsAt(graph, new_block).* = ids_before.*;
+            }
             const block = page_ops.edgeBlockAt(graph, new_block, .fwd);
-            const id_block = page_ops.edgeBlockFwdIdsAt(graph, new_block);
+            const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block) else undefined;
             var shift: u7 = plan.found.slot;
             while (shift < plan.live_before - 1) : (shift += 1) {
                 block.edges[shift] = block.edges[shift + 1];
-                id_block.ids[shift] = id_block.ids[shift + 1];
+                if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift + 1];
             }
             block.mask = constants.denseMask(@intCast(new_live));
         },
@@ -270,7 +509,11 @@ fn applyRemovalPlanSide(
         },
     }
 
-    var block_list: std.ArrayList(u32) = .empty;
+    if (try tryApplyRemovalPlanSideFast(graph, staging_side, published_side, plan, new_block, new_live, allocs)) {
+        return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
+    }
+
+    var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
     try common.collectBlockList(
         graph,
@@ -283,6 +526,97 @@ fn applyRemovalPlanSide(
     try common.buildSideFromBlocks(staging_side, graph, block_list.items, allocs);
 
     return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
+}
+
+fn tryApplyRemovalPlanSideFast(
+    graph: *graph_core.GraphCore,
+    staging_side: *types.SideAdj,
+    published_side: *const types.SideAdj,
+    plan: RemovalPlan,
+    new_block: u32,
+    new_live: u7,
+    scratch: *common.MutationScratch,
+) !bool {
+    if (published_side.block_count == 1) {
+        if (new_live == 0) {
+            staging_side.first_block = 0;
+            staging_side.block_count = 0;
+            staging_side.group_count = 0;
+            staging_side.first_group = 0;
+        } else {
+            staging_side.first_block = new_block;
+            staging_side.block_count = 1;
+            staging_side.group_count = 0;
+            staging_side.first_group = 0;
+        }
+        return true;
+    }
+
+    const tail_index = (try adjacency.tailBlockIndexSideChecked(graph, published_side)) orelse return error.CorruptGraph;
+    if (plan.found.block_idx != tail_index) return false;
+
+    if (published_side.group_count == 0) {
+        if (new_live == 0) {
+            staging_side.block_count -= 1;
+            return true;
+        }
+
+        const prefix_group = try scratch.allocGroup(graph);
+        const tail_group = try scratch.allocGroup(graph);
+        page_ops.groupAt(graph, prefix_group).* = .{
+            .start = published_side.first_block,
+            .count = published_side.block_count - 1,
+            .next = tail_group,
+        };
+        page_ops.groupAt(graph, tail_group).* = .{
+            .start = new_block,
+            .count = 1,
+            .next = constants.END_OF_CHAIN,
+        };
+        staging_side.first_group = prefix_group;
+        staging_side.group_count = 2;
+        return true;
+    }
+
+    const cloned = try cloneGroupChain(graph, published_side, scratch);
+    const last_group = page_ops.groupAt(graph, cloned.last_group);
+    staging_side.first_group = cloned.first_group;
+
+    if (new_live == 0) {
+        if (last_group.count > 1) {
+            last_group.count -= 1;
+            staging_side.block_count -= 1;
+            return true;
+        }
+
+        if (cloned.previous_to_last) |previous_group| {
+            page_ops.groupAt(graph, previous_group).next = constants.END_OF_CHAIN;
+            scratch.freeGroup(graph, cloned.last_group);
+            staging_side.group_count -= 1;
+            staging_side.block_count -= 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    if (last_group.count == 1) {
+        last_group.start = new_block;
+        return true;
+    }
+
+    if (published_side.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
+
+    const tail_group = try scratch.allocGroup(graph);
+    page_ops.groupAt(graph, tail_group).* = .{
+        .start = new_block,
+        .count = 1,
+        .next = constants.END_OF_CHAIN,
+    };
+    last_group.count -= 1;
+    last_group.next = tail_group;
+    staging_side.group_count += 1;
+    return true;
 }
 
 fn addEdgeImpl(
@@ -318,7 +652,7 @@ fn addEdgeImpl(
     const srev = destination_node.stagingRev(destination_meta);
 
     if (!graph.multigraph_enabled) {
-        if (adjacency.hasEdgeInSideAdj(graph, source_pub, destination.index)) {
+        if (try adjacency.hasEdgeInSideAdjChecked(graph, source_pub, destination.index)) {
             return error.EdgeAlreadyExists;
         }
     }
@@ -330,7 +664,7 @@ fn addEdgeImpl(
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
 
-    const edge_id = source_node.nextEdgeId();
+    const edge_id = if (graph.multigraph_enabled) source_node.nextEdgeId() else types.EdgeId{ .local = 0 };
 
     const forward_prepared = try prepareAppendBlockSide(graph, sfwd, .fwd, &scratch);
     const reverse_prepared = try prepareAppendBlockSide(graph, srev, .rev, &scratch);
@@ -344,12 +678,12 @@ fn addEdgeImpl(
     try applyPreparedAppendSideTracked(graph, sfwd, forward_prepared, &scratch);
     try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags, edge_id.local);
     var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
-    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
+    repair.updateRepairDebtAfterEdgeMutation(graph, &source_publish_adj, source.index, .fwd, source_flags.needs_repair_fwd);
 
     try applyPreparedAppendSideTracked(graph, srev, reverse_prepared, &scratch);
     insertReverseEdge(graph, reverse_prepared.new_block, source);
     var destination_publish_adj = nodeAdjForSide(srev.*, destination_flags, .rev);
-    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
+    repair.updateRepairDebtAfterEdgeMutation(graph, &destination_publish_adj, destination.index, .rev, destination_flags.needs_repair_rev);
 
     scratch.disarm();
 
@@ -385,6 +719,7 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 
 /// Adds a directed edge and returns its unique EdgeId.
 pub fn addEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !types.EdgeId {
+    if (!graph.multigraph_enabled) return error.UnsupportedOperation;
     return addEdgeImpl(graph, source, destination, relation, flags);
 }
 
@@ -415,14 +750,11 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     const old_forward_groups = OldGroupChain.captureSide(&source_pubfwd);
     const old_reverse_groups = OldGroupChain.captureSide(&dest_pubrev);
 
+    var match_probe: ?DestinationMatchProbe = null;
     if (graph.multigraph_enabled) {
-        const match_count = adjacency.countForwardDestinationMatches(
-            graph, source_pubfwd.first_block, source_pubfwd.block_count,
-            source_pubfwd.group_count, source_pubfwd.first_group,
-            destination.index,
-        );
-        if (match_count == 0) return false;
-        if (match_count > 1) {
+        const probe = try probeForwardDestinationMatches(graph, &source_pubfwd, destination.index);
+        if (probe.found == null) return false;
+        if (probe.has_multiple) {
             source_node.copyPublishedToStagingFwd(source_meta);
             destination_node.copyPublishedToStagingRev(destination_meta);
             const sfwd2 = source_node.stagingFwd(source_meta);
@@ -431,44 +763,47 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
             defer bulk_scratch.deinit(graph.allocator);
             defer bulk_scratch.cleanup(graph);
             const fwd_result = try rebuildForwardRemoveAll(graph, &source_pubfwd, destination.index, &bulk_scratch);
+            if (fwd_result.removed <= 1) return error.CorruptGraph;
             sfwd2.* = fwd_result.new_side;
-            const rev_result = try rebuildReverseRemoveCount(graph, &dest_pubrev, source.index, match_count, &bulk_scratch);
+            const rev_result = try rebuildReverseRemoveCount(graph, &dest_pubrev, source.index, fwd_result.removed, &bulk_scratch);
             srev2.* = rev_result;
             var source_adj = nodeAdjForSide(sfwd2.*, source_flags, .fwd);
-            repair.updateRepairDebt(graph, &source_adj, source.index, .fwd);
+            repair.updateRepairDebtAfterEdgeMutation(graph, &source_adj, source.index, .fwd, source_flags.needs_repair_fwd);
             var dest_adj = nodeAdjForSide(srev2.*, destination_flags, .rev);
-            repair.updateRepairDebt(graph, &dest_adj, destination.index, .rev);
+            repair.updateRepairDebtAfterEdgeMutation(graph, &dest_adj, destination.index, .rev, destination_flags.needs_repair_rev);
             bulk_scratch.disarm();
             if (source.index == destination.index) {
                 var merged = source_adj.flags;
                 merged.needs_repair_rev = dest_adj.flags.needs_repair_rev;
                 merged.removed = false;
-                _ = common.publishBothDelta(source_node, source_meta, merged, -@as(i23, @intCast(match_count)), -@as(i23, @intCast(match_count)));
+                _ = common.publishBothDelta(source_node, source_meta, merged, -@as(i23, @intCast(fwd_result.removed)), -@as(i23, @intCast(fwd_result.removed)));
             } else {
-                _ = common.publishStagedRev(destination_node, destination_meta, dest_adj.flags.needs_repair_rev, -@as(i23, @intCast(match_count)));
-                _ = common.publishStagedFwd(source_node, source_meta, source_adj.flags.needs_repair_fwd, -@as(i23, @intCast(match_count)));
+                _ = common.publishStagedRev(destination_node, destination_meta, dest_adj.flags.needs_repair_rev, -@as(i23, @intCast(fwd_result.removed)));
+                _ = common.publishStagedFwd(source_node, source_meta, source_adj.flags.needs_repair_fwd, -@as(i23, @intCast(fwd_result.removed)));
             }
             try common.retireSide(graph, nodeAdjForSide(source_pubfwd, source_flags, .fwd), .fwd);
             try common.retireSide(graph, nodeAdjForSide(dest_pubrev, destination_flags, .rev), .rev);
-            old_forward_groups.retire(graph);
-            old_reverse_groups.retire(graph);
-            _ = graph.edge_count.fetchSub(match_count, .release);
+            _ = graph.edge_count.fetchSub(fwd_result.removed, .release);
             rcu.bumpEpoch(graph);
             writer_guard.end();
             rcu.reclaimRetired(graph);
             return true;
         }
+        match_probe = probe;
     }
 
-    const forward_found = common.findSlotInAdj(
-        graph,
-        source_pubfwd.first_block,
-        source_pubfwd.block_count,
-        source_pubfwd.group_count,
-        source_pubfwd.first_group,
-        destination.index,
-        .fwd,
-    ) orelse return false;
+    const forward_found = if (graph.multigraph_enabled)
+        match_probe.?.found orelse return false
+    else
+        common.findSlotInAdj(
+            graph,
+            source_pubfwd.first_block,
+            source_pubfwd.block_count,
+            source_pubfwd.group_count,
+            source_pubfwd.first_group,
+            destination.index,
+            .fwd,
+        ) orelse return false;
 
     const reverse_found = common.findSlotInAdj(
         graph,
@@ -495,10 +830,10 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd, &allocs);
     const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev, &allocs);
     var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
-    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
+    repair.updateRepairDebtAfterEdgeMutation(graph, &source_publish_adj, source.index, .fwd, source_flags.needs_repair_fwd);
 
     var destination_publish_adj = nodeAdjForSide(srev.*, destination_flags, .rev);
-    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
+    repair.updateRepairDebtAfterEdgeMutation(graph, &destination_publish_adj, destination.index, .rev, destination_flags.needs_repair_rev);
 
     allocs.disarm();
 
@@ -535,6 +870,7 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
 /// Removes a specific edge identified by its EdgeId. Returns true if found and removed.
 pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) !bool {
+    if (!graph.multigraph_enabled) return error.UnsupportedOperation;
     if (!node_validity.nodeExistsRaw(graph, source) or !node_validity.nodeExistsRaw(graph, destination)) return error.InvalidNode;
 
     const source_node = page_ops.nodeAt(graph, source);
@@ -587,10 +923,10 @@ pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, dest
     const forward_build = try applyRemovalPlanSide(graph, sfwd, &source_pubfwd, forward_plan, .fwd, &allocs);
     const reverse_build = try applyRemovalPlanSide(graph, srev, &dest_pubrev, reverse_plan, .rev, &allocs);
     var source_publish_adj = nodeAdjForSide(sfwd.*, source_flags, .fwd);
-    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
+    repair.updateRepairDebtAfterEdgeMutation(graph, &source_publish_adj, source.index, .fwd, source_flags.needs_repair_fwd);
 
     var destination_publish_adj = nodeAdjForSide(srev.*, destination_flags, .rev);
-    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
+    repair.updateRepairDebtAfterEdgeMutation(graph, &destination_publish_adj, destination.index, .rev, destination_flags.needs_repair_rev);
 
     allocs.disarm();
 
@@ -632,7 +968,7 @@ fn rebuildForwardRemoveAll(
     destination_index: u32,
     scratch: *common.MutationScratch,
 ) !struct { new_side: types.SideAdj, removed: u32 } {
-    var block_list: std.ArrayList(u32) = .empty;
+    var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
     var total_removed: u32 = 0;
 
@@ -674,7 +1010,7 @@ fn copyBlockWithoutDestination(
     block_list: *std.ArrayList(u32),
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-    const old_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+    const old_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else undefined;
     const live = @popCount(old_block.mask);
     if (live == 0) return 0;
 
@@ -683,18 +1019,21 @@ fn copyBlockWithoutDestination(
         if (old_block.edges[slot].destination == destination_index) removed += 1;
     }
     if (removed == 0) {
-        try block_list.append(graph.allocator, block_idx);
+        const new_block_idx = try scratch.allocBlock(graph, .fwd);
+        page_ops.edgeBlockAt(graph, new_block_idx, .fwd).* = old_block.*;
+        if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block_idx).* = old_ids.*;
+        try block_list.append(graph.allocator, new_block_idx);
         return 0;
     }
 
     const new_block_idx = try scratch.allocBlock(graph, .fwd);
     const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .fwd);
-    const new_ids = page_ops.edgeBlockFwdIdsAt(graph, new_block_idx);
+    const new_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block_idx) else undefined;
     var write: u7 = 0;
     for (0..live) |slot| {
         if (old_block.edges[slot].destination != destination_index) {
             new_block.edges[write] = old_block.edges[slot];
-            new_ids.ids[write] = old_ids.ids[slot];
+            if (graph.multigraph_enabled) new_ids.ids[write] = old_ids.ids[slot];
             write += 1;
         }
     }
@@ -712,7 +1051,7 @@ fn rebuildReverseRemoveCount(
     remove_count: u32,
     scratch: *common.MutationScratch,
 ) !types.SideAdj {
-    var block_list: std.ArrayList(u32) = .empty;
+    var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
     var remaining = remove_count;
 
@@ -727,13 +1066,12 @@ fn rebuildReverseRemoveCount(
         var group_idx = published_side.first_group;
         var visited: u16 = 0;
         while (visited < published_side.group_count) : (visited += 1) {
-            if (group_idx == constants.END_OF_CHAIN or remaining == 0) break;
+            if (group_idx == constants.END_OF_CHAIN) break;
             const group = page_ops.groupAtConst(graph, group_idx);
             for (group.start..group.start + group.count) |block_idx| {
                 remaining = try copyReverseBlockRemoveSource(
                     graph, @intCast(block_idx), source_index, remaining, scratch, &block_list,
                 );
-                if (remaining == 0) break;
             }
             group_idx = group.next;
         }
@@ -757,13 +1095,21 @@ fn copyReverseBlockRemoveSource(
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
     const live = @popCount(old_block.mask);
     if (live == 0) return remove_count;
+    if (remove_count == 0) {
+        const new_block_idx = try scratch.allocBlock(graph, .rev);
+        page_ops.edgeBlockAt(graph, new_block_idx, .rev).* = old_block.*;
+        try block_list.append(graph.allocator, new_block_idx);
+        return 0;
+    }
 
     var in_block: u32 = 0;
     for (0..live) |slot| {
         if (old_block.sources[slot] == source_index) in_block += 1;
     }
     if (in_block == 0) {
-        try block_list.append(graph.allocator, block_idx);
+        const new_block_idx = try scratch.allocBlock(graph, .rev);
+        page_ops.edgeBlockAt(graph, new_block_idx, .rev).* = old_block.*;
+        try block_list.append(graph.allocator, new_block_idx);
         return remove_count;
     }
 

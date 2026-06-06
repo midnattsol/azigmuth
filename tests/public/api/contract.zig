@@ -113,7 +113,7 @@ test "contract: double deinit on iterator is harmless" {
     iter.deinit();
 }
 
-test "contract: copied iterator is invalidated when sibling deinits" {
+test "contract: iterator remains usable until owner deinit" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -124,83 +124,12 @@ test "contract: copied iterator is invalidated when sibling deinits" {
     try graph.addEdge(source, second_destination, 0, .{});
 
     var iter = try graph.neighbors(source);
-    var copied = iter;
+    defer iter.deinit();
 
-    try testing.expect(copied.next() != null);
-    iter.deinit();
-
-    try testing.expect(copied.next() == null);
-    const remaining = try copied.materialize(testing.allocator);
+    try testing.expect(iter.next() != null);
+    const remaining = try iter.materialize(testing.allocator);
     defer testing.allocator.free(remaining);
-    try testing.expectEqual(@as(usize, 0), remaining.len);
-    copied.deinit();
-}
-
-test "contract: copied iterator materialize is empty immediately after sibling deinit" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const source = try graph.addNode();
-    const destination = try graph.addNode();
-    try graph.addEdge(source, destination, 0, .{});
-
-    var iter = try graph.neighbors(source);
-    var copied = iter;
-    iter.deinit();
-
-    const remaining = try copied.materialize(testing.allocator);
-    defer testing.allocator.free(remaining);
-    try testing.expectEqual(@as(usize, 0), remaining.len);
-    try testing.expect(copied.next() == null);
-    copied.deinit();
-}
-
-test "contract: all iterator copies are invalidated when one sibling deinits" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const source = try graph.addNode();
-    const first_destination = try graph.addNode();
-    const second_destination = try graph.addNode();
-    try graph.addEdge(source, first_destination, 0, .{});
-    try graph.addEdge(source, second_destination, 0, .{});
-
-    var iter = try graph.neighbors(source);
-    var copied_one = iter;
-    var copied_two = iter;
-
-    copied_one.deinit();
-
-    try testing.expect(iter.next() == null);
-    try testing.expect(copied_two.next() == null);
-
-    const remaining = try copied_two.materialize(testing.allocator);
-    defer testing.allocator.free(remaining);
-    try testing.expectEqual(@as(usize, 0), remaining.len);
-
-    iter.deinit();
-    copied_two.deinit();
-}
-
-test "contract: copied reverse iterator is invalidated when sibling deinits" {
-    var graph = try graphz.Graph.init(testing.allocator);
-    defer graph.deinit();
-
-    const target = try graph.addNode();
-    const source = try graph.addNode();
-    try graph.addEdge(source, target, 0, .{});
-
-    var iter = try graph.inNeighbors(target);
-    var copied = iter;
-
-    try testing.expect(copied.next() != null);
-    iter.deinit();
-
-    try testing.expect(copied.next() == null);
-    const remaining = try copied.materialize(testing.allocator);
-    defer testing.allocator.free(remaining);
-    try testing.expectEqual(@as(usize, 0), remaining.len);
-    copied.deinit();
+    try testing.expectEqual(@as(usize, 1), remaining.len);
 }
 
 // ── Edge mutations ─────────────────────────────────────────────────────────
@@ -331,7 +260,7 @@ test "contract: removeNode invalidates hasNode" {
 
     const node = try graph.addNode();
     try testing.expect(graph.hasNode(node));
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
     try testing.expect(!graph.hasNode(node));
     try graph.validate();
 }
@@ -346,7 +275,7 @@ test "contract: removeNode clears outgoing edges" {
     try graph.addEdge(source, destination, 0, .{});
     try graph.addEdge(source, extra, 1, .{});
 
-    try graph.removeNode(source);
+    _ = try graph.removeNode(source);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     var iter = try graph.neighbors(destination);
@@ -359,7 +288,7 @@ test "contract: neighbors on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
     try testing.expectError(error.InvalidNode, graph.neighbors(node));
 }
 
@@ -370,7 +299,7 @@ test "contract: inNeighbors on removed node returns InvalidNode" {
     const node = try graph.addNode();
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, node, 0, .{});
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
     try testing.expectError(error.InvalidNode, graph.inNeighbors(node));
 }
 
@@ -379,7 +308,7 @@ test "contract: outDegree on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
     try testing.expectError(error.InvalidNode, graph.outDegree(node));
 }
 
@@ -388,7 +317,7 @@ test "contract: inDegree on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
     try testing.expectError(error.InvalidNode, graph.inDegree(node));
 }
 
@@ -402,7 +331,7 @@ test "contract: removeNode with incoming edges" {
     try graph.addEdge(predecessor_one, target, 0, .{});
     try graph.addEdge(predecessor_two, target, 1, .{});
 
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try graph.validate();
 
     var iter_one = try graph.neighbors(predecessor_one);
@@ -423,7 +352,7 @@ test "contract: removeNode self-edge" {
     try graph.addEdge(node, node, 0, .{});
     try graph.addEdge(node, neighbor, 1, .{});
 
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
     try graph.validate();
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 

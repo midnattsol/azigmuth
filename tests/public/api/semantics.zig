@@ -11,7 +11,7 @@ test "api semantics: outDegree on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expectError(error.InvalidNode, graph.outDegree(node));
 }
@@ -21,7 +21,7 @@ test "api semantics: inDegree on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expectError(error.InvalidNode, graph.inDegree(node));
 }
@@ -31,7 +31,7 @@ test "api semantics: neighbors on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expectError(error.InvalidNode, graph.neighbors(node));
 }
@@ -41,7 +41,7 @@ test "api semantics: inNeighbors on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expectError(error.InvalidNode, graph.inNeighbors(node));
 }
@@ -51,7 +51,7 @@ test "api semantics: hasNode on removed node returns false" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expect(!graph.hasNode(node));
 }
@@ -62,7 +62,7 @@ test "api semantics: addEdge to removed node returns InvalidNode" {
 
     const src = try graph.addNode();
     const dst = try graph.addNode();
-    try graph.removeNode(dst);
+    _ = try graph.removeNode(dst);
 
     try testing.expectError(error.InvalidNode, graph.addEdge(src, dst, 0, .{}));
 }
@@ -73,7 +73,7 @@ test "api semantics: addEdge from removed node returns InvalidNode" {
 
     const src = try graph.addNode();
     const dst = try graph.addNode();
-    try graph.removeNode(src);
+    _ = try graph.removeNode(src);
 
     try testing.expectError(error.InvalidNode, graph.addEdge(src, dst, 0, .{}));
 }
@@ -85,7 +85,7 @@ test "api semantics: removeEdge on removed node source returns InvalidNode" {
     const src = try graph.addNode();
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, .{});
-    try graph.removeNode(src);
+    _ = try graph.removeNode(src);
 
     try testing.expectError(error.InvalidNode, graph.removeEdge(src, dst));
 }
@@ -97,7 +97,7 @@ test "api semantics: removeEdge on removed node destination returns InvalidNode"
     const src = try graph.addNode();
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, .{});
-    try graph.removeNode(dst);
+    _ = try graph.removeNode(dst);
 
     try testing.expectError(error.InvalidNode, graph.removeEdge(src, dst));
 }
@@ -107,7 +107,7 @@ test "api semantics: repairNode on removed node returns InvalidNode" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expectError(error.InvalidNode, graph.repairNode(node));
 }

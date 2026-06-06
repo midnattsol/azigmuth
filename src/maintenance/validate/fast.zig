@@ -53,6 +53,7 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .rev);
         try shape.validateOccupancyFast(graph, adjacency, .fwd);
         try shape.validateOccupancyFast(graph, adjacency, .rev);
+        try consistency.validateForwardEdgeIdsFast(graph, node_buffer, node_id, adjacency);
         try consistency.validateForwardConsistencyFast(graph, node_id, adjacency);
         try consistency.validateReverseConsistencyFast(graph, node_id, adjacency);
 

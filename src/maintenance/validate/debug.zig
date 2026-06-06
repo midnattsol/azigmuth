@@ -114,9 +114,12 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             }
         }
 
+        const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
+
         try v.appendOwnershipAndShapeViolations(graph, allocator, &list, &owned_forward_blocks, &free_forward_blocks, &retired_forward_blocks, node_id, forward_blocks.items, .fwd);
         try v.appendOwnershipAndShapeViolations(graph, allocator, &list, &owned_reverse_blocks, &free_reverse_blocks, &retired_reverse_blocks, node_id, reverse_blocks.items, .rev);
         if (!adjacency.flags.removed) {
+            try consistency.appendForwardEdgeIdViolations(graph, allocator, &list, node_id, node_buffer, adjacency);
             try consistency.appendForwardConsistencyViolations(graph, allocator, &list, node_id, forward_blocks.items);
             try consistency.appendReverseConsistencyViolations(graph, allocator, &list, node_id, reverse_blocks.items);
         }
@@ -133,7 +136,6 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         // RFC §2.5: published exact degree consistency. Removed nodes are exempt:
         // their reverse side may retain residual tombstoned structure that
         // does not contribute to the public logical degree.
-        const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
         const meta = node_buffer.loadPublishedMeta();
         if (!adjacency.flags.removed) {
             const live_fwd: usize = @intCast(sums.sumVisibleAdjacency(graph, adjacency, .fwd));

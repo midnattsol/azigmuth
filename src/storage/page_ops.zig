@@ -312,7 +312,7 @@ fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSid
         switch (side) {
             .fwd => {
                 _ = try ensurePage(graph, types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
-                _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+                if (graph.multigraph_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
                 _ = try ensureMetaPage(graph, graph.edge_blocks_fwd_meta_pages[0..], page_index);
                 if (@cmpxchgWeak(u32, &graph.block_fwd_count, block_index, block_index + 1, .acq_rel, .acquire) == null) return block_index;
             },
@@ -336,7 +336,7 @@ pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u
         switch (side) {
             .fwd => {
                 _ = try ensurePage(graph, types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
-                _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
+                if (graph.multigraph_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
                 _ = try ensureMetaPage(graph, graph.edge_blocks_fwd_meta_pages[0..], page_index);
             },
             .rev => {
@@ -354,7 +354,7 @@ pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide
             .rev => types.EdgeBlockRev,
         });
         if (side == .fwd) {
-            edgeBlockFwdIdsAt(graph, block_index).* = std.mem.zeroes(types.EdgeBlockFwdIds);
+            if (graph.multigraph_enabled) edgeBlockFwdIdsAt(graph, block_index).* = std.mem.zeroes(types.EdgeBlockFwdIds);
         }
         return block_index;
     }

@@ -45,7 +45,7 @@ fn removeNodeInLoop(ctx: *RemoveNodeCtx) void {
 
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
-        if (ctx.graph.removeNode(ctx.target)) {
+        if (ctx.graph.removeNode(ctx.target)) |_| {
             _ = ctx.successes.fetchAdd(1, .monotonic);
             return;
         } else |_| {}
@@ -163,4 +163,59 @@ test "contract: concurrent readers on disjoint nodes are lock-free" {
     try testing.expect(ctx_one.reads.load(.acquire) > 0);
     try testing.expect(ctx_two.reads.load(.acquire) > 0);
     try graph.validate();
+}
+
+test "contract: validate() tolerates concurrent multigraph addEdgeWithId/removeEdgeWithId" {
+    const allocator = std.heap.page_allocator;
+    var graph = try graphz.Graph.initWithOptions(allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const target = try graph.addNode();
+    try graph.addEdge(source, target, 0, .{});
+
+    const other = try graph.addNode();
+
+    var stop = std.atomic.Value(bool).init(false);
+    // Only the mutator participates in the start gate; validator can begin immediately.
+    var start_gate = std.atomic.Value(u32).init(1);
+
+    var mut_ctx = ForwardMutatorCtx{
+        .graph = graph,
+        .predecessor = source,
+        .other_node = other,
+        .stop = &stop,
+        .start_gate = &start_gate,
+    };
+    var val_ctx = ReaderCtx{
+        .graph = graph,
+        .node = source,
+        .stop = &stop,
+        .reads = std.atomic.Value(u64).init(0),
+    };
+
+    var val_thread = try std.Thread.spawn(.{}, validatorInLoop, .{&val_ctx});
+    var mut_thread = try std.Thread.spawn(.{}, forwardMutatorInLoop, .{&mut_ctx});
+
+    var verify_spin: usize = 0;
+    while (verify_spin < SpinBudget) : (verify_spin += 1) {
+        if (val_ctx.reads.load(.acquire) > 0 and mut_ctx.mutations.load(.acquire) > 0) break;
+        std.atomic.spinLoopHint();
+    }
+    stop.store(true, .release);
+
+    val_thread.join();
+    mut_thread.join();
+
+    try testing.expect(val_ctx.reads.load(.acquire) > 0);
+    try testing.expect(mut_ctx.mutations.load(.acquire) > 0);
+    try graph.validate();
+}
+
+fn validatorInLoop(ctx: *ReaderCtx) void {
+    var spin: usize = 0;
+    while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
+        ctx.graph.validate() catch continue;
+        _ = ctx.reads.fetchAdd(1, .monotonic);
+    }
 }

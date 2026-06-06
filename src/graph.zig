@@ -10,7 +10,9 @@ const rcu = @import("rcu.zig");
 const mutation = @import("mutation.zig");
 const query = @import("query.zig");
 const repair = @import("maintenance/repair.zig");
+const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
+const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
 const bfs_mod = @import("algorithms/bfs.zig");
 const dfs_mod = @import("algorithms/dfs.zig");
@@ -30,6 +32,9 @@ pub const OutEdgeIterator = out_edge_iter.OutEdgeIterator;
 pub const EdgeId = types.EdgeId;
 pub const EdgeRef = types.EdgeRef;
 pub const GraphOptions = types.GraphOptions;
+pub const NodeRemovalSummary = types.NodeRemovalSummary;
+pub const RepairFlushSummary = types.RepairFlushSummary;
+pub const DebtStats = types.DebtStats;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -132,10 +137,12 @@ pub const Graph = struct {
 
         const alloc = self.graph.allocator;
         freeAtomicPages(types.NodeBuffer, alloc, self.graph.node_pages_pages[0..], constants.NODES_PER_PAGE);
+        freeAtomicPages(std.atomic.Value(u64), alloc, self.graph.repair_queued_fwd_pages[0..], node_bitmap.WORDS_PER_PAGE);
+        freeAtomicPages(std.atomic.Value(u64), alloc, self.graph.repair_queued_rev_pages[0..], node_bitmap.WORDS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockFwd, alloc, self.graph.edge_blocks_fwd_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockRev, alloc, self.graph.edge_blocks_rev_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockGroup, alloc, self.graph.edge_block_group_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
-        freeAtomicPages(types.EdgeBlockFwdIds, alloc, self.graph.edge_blocks_fwd_id_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
+        if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, self.graph.edge_blocks_fwd_id_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_fwd_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_rev_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_block_group_meta_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
@@ -164,6 +171,7 @@ pub const Graph = struct {
             const index = self.graph.publishedNodeCount();
             const page = page_ops.pageOf(index, constants.NODES_PER_PAGE);
             _ = try page_ops.ensureNodePage(&self.graph, page);
+            page_ops.nodeAt(&self.graph, .{ .index = index }).next_local_edge_id.store(1, .monotonic);
 
             if (self.graph.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
                 return types.NodeId{ .index = index };
@@ -302,6 +310,7 @@ pub const Graph = struct {
     pub fn outEdges(self: *const Graph, node: types.NodeId) GraphError!out_edge_iter.OutEdgeIterator {
         try beginCall(@constCast(&self.graph));
         defer endCall(@constCast(&self.graph));
+        if (!self.graph.multigraph_enabled) return error.UnsupportedOperation;
         return out_edge_iter.outEdges(&self.graph, node);
     }
 
@@ -337,6 +346,18 @@ pub const Graph = struct {
         return repair.repairBudgeted(&self.graph, max_nodes);
     }
 
+    pub fn flushRepairs(self: *Graph) GraphError!types.RepairFlushSummary {
+        try beginCall(&self.graph);
+        defer endCall(&self.graph);
+        return repair.flushRepairs(&self.graph);
+    }
+
+    pub fn debtStats(self: *const Graph) GraphError!types.DebtStats {
+        try beginCall(@constCast(&self.graph));
+        defer endCall(@constCast(&self.graph));
+        return stats_mod.debtStats(&self.graph);
+    }
+
     // ── Mutation ──────────────────────────────────────────────────────
 
     pub fn addEdge(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
@@ -348,6 +369,7 @@ pub const Graph = struct {
     pub fn addEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!types.EdgeId {
         try beginCall(&self.graph);
         defer endCall(&self.graph);
+        if (!self.graph.multigraph_enabled) return error.UnsupportedOperation;
         return mutation.addEdgeWithId(&self.graph, source, destination, relation, flags);
     }
 
@@ -360,10 +382,11 @@ pub const Graph = struct {
     pub fn removeEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) GraphError!bool {
         try beginCall(&self.graph);
         defer endCall(&self.graph);
+        if (!self.graph.multigraph_enabled) return error.UnsupportedOperation;
         return mutation.removeEdgeWithId(&self.graph, source, destination, edge_id);
     }
 
-    pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!void {
+    pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!types.NodeRemovalSummary {
         try beginCall(&self.graph);
         defer endCall(&self.graph);
         return mutation.removeNode(&self.graph, node);

@@ -21,7 +21,7 @@ pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
             for (0..live) |slot| {
                 const dst = block.edges[slot].destination;
                 if (dst < graph.publishedNodeCount() and
-                    page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj().flags.removed) return true;
+                    node_validity.isNodeRemovedIndex(graph, dst)) return true;
             }
         }
         return false;
@@ -39,7 +39,7 @@ pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
             for (0..live) |slot| {
                 const dst = block.edges[slot].destination;
                 if (dst < graph.publishedNodeCount() and
-                    page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj().flags.removed) return true;
+                    node_validity.isNodeRemovedIndex(graph, dst)) return true;
             }
         }
         group_idx = group.next;

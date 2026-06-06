@@ -20,19 +20,41 @@ pub fn appendBlockShapeViolations(
 
     const mask = common.blockMask(graph, block_index, side);
     const live_count = @popCount(mask);
+    const id_block = if (side == .fwd and graph.multigraph_enabled)
+        page_ops.edgeBlockFwdIdsAtConst(graph, block_index)
+    else
+        null;
 
     if (mask != constants.denseMask(@intCast(live_count))) {
         try violations.append(allocator, .{ .mask_bit_out_of_range = .{ .node = node_id, .block = block_index } });
     }
 
+    var prev_key: ?u32 = null;
+    var prev_edge_id: u32 = 0;
     for (0..live_count) |slot| {
         const key = common.blockKey(graph, block_index, slot, side);
         if (key >= graph.publishedNodeCount()) {
             try violations.append(allocator, .{ .invalid_dst = .{ .node = node_id, .block = block_index, .slot = @intCast(slot), .dst = key } });
         }
-        if (slot > 0 and key <= common.blockKey(graph, block_index, slot - 1, side)) {
-            try violations.append(allocator, .{ .unsorted_block = .{ .node = node_id, .block = block_index, .slot = @intCast(slot) } });
+
+        if (id_block) |fwd_ids| {
+            const edge_id = fwd_ids.ids[slot];
+            if (edge_id == 0) {
+                try violations.append(allocator, .{ .invalid_edge_id = .{ .node = node_id, .block = block_index, .slot = @intCast(slot), .edge_id = edge_id } });
+            }
+            if (prev_key) |previous| {
+                if (key < previous or (key == previous and edge_id <= prev_edge_id)) {
+                    try violations.append(allocator, .{ .unsorted_block = .{ .node = node_id, .block = block_index, .slot = @intCast(slot) } });
+                }
+            }
+            prev_edge_id = edge_id;
+        } else if (prev_key) |previous| {
+            if (key < previous or (!graph.multigraph_enabled and key == previous)) {
+                try violations.append(allocator, .{ .unsorted_block = .{ .node = node_id, .block = block_index, .slot = @intCast(slot) } });
+            }
         }
+
+        prev_key = key;
     }
 }
 
@@ -241,7 +263,7 @@ pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
             for (0..live) |slot| {
                 const dst = block.edges[slot].destination;
                 if (dst < graph.publishedNodeCount() and
-                    page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj().flags.removed) return true;
+                    node_validity.isNodeRemovedIndex(graph, dst)) return true;
             }
         }
         return false;
@@ -259,7 +281,7 @@ pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
             for (0..live) |slot| {
                 const dst = block.edges[slot].destination;
                 if (dst < graph.publishedNodeCount() and
-                    page_ops.nodeAtConst(graph, .{ .index = dst }).publishedAdj().flags.removed) return true;
+                    node_validity.isNodeRemovedIndex(graph, dst)) return true;
             }
         }
         group_idx = group.next;

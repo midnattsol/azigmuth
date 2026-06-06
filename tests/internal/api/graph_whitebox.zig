@@ -117,7 +117,7 @@ test "graph: removed node is absent from public node API" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    try graph.removeNode(node);
+    _ = try graph.removeNode(node);
 
     try testing.expect(!graph.hasNode(node));
     try testing.expectError(error.InvalidNode, graph.nodeAt(node));
@@ -687,7 +687,7 @@ test "graph: debugValidate detects removed node with outgoing adjacency" {
 
     const removed = try graph.addNode();
     const live = try graph.addNode();
-    try graph.removeNode(removed);
+    _ = try graph.removeNode(removed);
 
     const fwd_block = try graph.allocBlockFwd();
     var fwd = page_ops.edgeBlockAt(&graph.graph, fwd_block, .fwd);
@@ -801,7 +801,7 @@ test "graph: reused free block starts empty" {
     graph.bumpEpoch();
     graph.bumpEpoch();
     graph.reclaimRetired();
-        const c = try graph.addNode();
+    const c = try graph.addNode();
     const d = try graph.addNode();
     try graph.addEdge(c, d, 0, 0);
     try graph.validate();

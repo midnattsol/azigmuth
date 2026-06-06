@@ -162,7 +162,7 @@ test "cycle detection ignores removed nodes" {
     const b = try graph.addNode();
     try graph.addEdge(a, b, 0, .{});
     try graph.addEdge(b, a, 0, .{});
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
 
     try graph.validate();
     try std.testing.expectEqual(false, try graph.hasCycle(std.testing.allocator));
@@ -222,7 +222,7 @@ test "cycle detection with dense hub and many tombstoned sources is correct" {
     }
 
     for (0..sender_count) |i| {
-        if (i % 3 == 0) try graph.removeNode(senders[i]);
+        if (i % 3 == 0) _ = try graph.removeNode(senders[i]);
     }
 
     try graph.validate();
@@ -245,7 +245,7 @@ test "cycle detection with tombstoned self-loop node returns false" {
     try graph.addEdge(b, c, 0, .{});
     try graph.addEdge(c, a, 0, .{});
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
     try graph.validate();
 
     try std.testing.expectEqual(false, try graph.hasCycle(std.testing.allocator));

@@ -35,7 +35,7 @@ test "mixed sequence: add, remove, repair, removeNode, add leaves a clean graph"
     try graph.repairNode(nodes[5]);
     try expectNoViolations(graph, allocator);
 
-    try graph.removeNode(nodes[5]);
+    _ = try graph.removeNode(nodes[5]);
     try expectNoViolations(graph, allocator);
 
     const replacement = try graph.addNode();
@@ -95,7 +95,7 @@ test "mixed sequence: addEdge, removeEdge, removeNode, addNode with the recycled
     _ = try graph.removeEdge(b, c);
     try expectNoViolations(graph, allocator);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try expectNoViolations(graph, allocator);
 
     const fresh = try graph.addNode();

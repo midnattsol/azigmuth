@@ -43,7 +43,7 @@ test "iterator: snapshotDegree() after deinit() returns 0 and is safe" {
     try testing.expectEqual(@as(usize, 0), graph_mod.snapshotDegree(&it));
 }
 
-test "iterator copy: snapshotDegree() after sibling deinit() returns 0 and is safe" {
+test "iterator copy: stale copied iterator becomes inert after owner deinit()" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -57,8 +57,9 @@ test "iterator copy: snapshotDegree() after sibling deinit() returns 0 and is sa
     try testing.expectEqual(@as(usize, 1), graph_mod.snapshotDegree(&copied));
     it.deinit();
 
-    // A copied iterator must not keep reading graph storage after the shared
-    // reader token has been closed by another copy.
+    // Copying and using multiple iterator values is unsupported by contract,
+    // but stale copies should still become inert instead of touching reclaimed
+    // graph storage after the owner releases the reader token.
     try testing.expectEqual(@as(usize, 0), graph_mod.snapshotDegree(&copied));
     try testing.expect(copied.next() == null);
 }

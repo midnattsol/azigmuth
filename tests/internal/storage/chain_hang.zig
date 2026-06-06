@@ -132,22 +132,21 @@ test "group chain: tailBlockIndex on cyclic chain returns null (does not hang)" 
     }
 }
 
-test "group chain: neighbors on cyclic chain does not hang" {
+test "contiguous layout: neighbors rejects first_block outside allocated range" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    const buf = try graph.nodeAt(src);
+    publish.clearPublishedSides(buf);
+    publish.publishedFwdSide(buf).first_block = graph.graph.block_fwd_count + 1;
+    publish.publishedFwdSide(buf).block_count = 1;
+    publish.setPublishedFwdDegree(buf, 1);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
-
-    var it = try graph.neighbors(src);
-    defer it.deinit();
-    _ = it.next(); // must return quickly, not hang
+    try testing.expectError(error.CorruptGraph, graph.neighbors(src));
 }
 
-test "group chain: neighbors on cyclic chain terminates without duplicates" {
+test "group chain: neighbors on cyclic chain returns CorruptGraph" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -157,22 +156,20 @@ test "group chain: neighbors on cyclic chain terminates without duplicates" {
 
     try makeAdjacencyGroupedWithCycle(&graph, src);
 
-    var it = try graph.neighbors(src);
-    defer it.deinit();
+    try testing.expectError(error.CorruptGraph, graph.neighbors(src));
+}
 
-    // Bound to 5 calls so the bug exposes itself without hanging.
-    var count: usize = 0;
-    for (0..5) |_| {
-        if (it.next()) |neighbor| {
-            count += 1;
-            try testing.expectEqual(dst.index, neighbor.index);
-        } else {
-            break;
-        }
-    }
-    // Correct: exactly 1 result, then null. Bug: iterator wraps the
-    // cycle and returns duplicates forever (count == 5 here).
-    try testing.expectEqual(@as(usize, 1), count);
+test "group chain: neighbors on cyclic chain rejects corruption" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const src = try graph.addNode();
+    const dst = try graph.addNode();
+    try graph.addEdge(src, dst, 0, 0);
+
+    try makeAdjacencyGroupedWithCycle(&graph, src);
+
+    try testing.expectError(error.CorruptGraph, graph.neighbors(src));
 }
 
 test "group chain: repairNode on cyclic forward chain returns CorruptGraph" {

@@ -139,6 +139,7 @@ pub const GraphBuilder = struct {
             node_buffer.fwd_buffers[1] = std.mem.zeroes(types.SideAdj);
             node_buffer.rev_buffers[0] = std.mem.zeroes(types.SideAdj);
             node_buffer.rev_buffers[1] = std.mem.zeroes(types.SideAdj);
+            node_buffer.next_local_edge_id.store(1, .monotonic);
             node_buffer.storePublishedMeta(.{});
         }
     }
@@ -189,61 +190,45 @@ pub const GraphBuilder = struct {
         if (run.len == 0) return;
 
         var edge_index: usize = 0;
+        var max_edge_id: u32 = 0;
 
         for (0..block_count) |block_offset| {
             const block_index = first_block + @as(u32, @intCast(block_offset));
             const block = page_ops.edgeBlockAt(&self.graph.graph, block_index, .fwd);
             block.* = std.mem.zeroes(types.EdgeBlockFwd);
 
-            const id_block = page_ops.edgeBlockFwdIdsAt(&self.graph.graph, block_index);
-            id_block.* = std.mem.zeroes(types.EdgeBlockFwdIds);
+            const id_block = if (self.graph.graph.multigraph_enabled)
+                page_ops.edgeBlockFwdIdsAt(&self.graph.graph, block_index)
+            else
+                null;
+            if (self.graph.graph.multigraph_enabled) {
+                id_block.?.* = std.mem.zeroes(types.EdgeBlockFwdIds);
+            }
 
             const remaining = run.len - edge_index;
             const live = @min(remaining, 64);
             for (0..live) |slot| {
                 const edge = run[edge_index + slot];
+                max_edge_id = @max(max_edge_id, edge.edge_id);
                 block.edges[slot] = .{
                     .destination = edge.destination,
                     .relation = edge.relation,
                     .flags = @bitCast(edge.flags),
                 };
-                id_block.ids[slot] = edge.edge_id;
+                if (id_block) |fwd_ids| fwd_ids.ids[slot] = edge.edge_id;
             }
             block.mask = constants.denseMask(@intCast(live));
             edge_index += live;
         }
 
         const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = source_index });
+        if (self.graph.graph.multigraph_enabled) {
+            node_buffer.next_local_edge_id.store(max_edge_id + 1, .monotonic);
+        }
         node_buffer.fwd_buffers[0].first_block = first_block;
         node_buffer.fwd_buffers[0].block_count = block_count;
         node_buffer.fwd_buffers[0].group_count = 0;
         node_buffer.fwd_buffers[0].first_group = 0;
-    }
-
-    fn publishReverseRun(self: *GraphBuilder, destination_index: u32, run: []const BuilderEdge, first_block: u32, block_count: u16) void {
-        if (run.len == 0) return;
-
-        var edge_index: usize = 0;
-
-        for (0..block_count) |block_offset| {
-            const block_index = first_block + @as(u32, @intCast(block_offset));
-            const block = page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev);
-            block.* = std.mem.zeroes(types.EdgeBlockRev);
-
-            const remaining = run.len - edge_index;
-            const live = @min(remaining, 64);
-            for (0..live) |slot| {
-                block.sources[slot] = run[edge_index + slot].source;
-            }
-            block.mask = constants.denseMask(@intCast(live));
-            edge_index += live;
-        }
-
-        const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = destination_index });
-        node_buffer.rev_buffers[0].first_block = first_block;
-        node_buffer.rev_buffers[0].block_count = block_count;
-        node_buffer.rev_buffers[0].group_count = 0;
-        node_buffer.rev_buffers[0].first_group = 0;
     }
 
     fn publishForwardAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_fwd: u32) void {
@@ -264,19 +249,58 @@ pub const GraphBuilder = struct {
         std.debug.assert(next_block_index == base_fwd + plan.total_fwd_blocks);
     }
 
-    fn publishReverseAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_rev: u32) void {
-        std.sort.heap(BuilderEdge, self.edges.items, {}, BuilderEdge.lessReverse);
+    fn publishReverseAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_rev: u32) !void {
+        const allocator = self.graph.graph.allocator;
+        const node_count = self.graph.nodeCount();
+
+        var rev_first_blocks = try allocator.alloc(u32, node_count);
+        defer allocator.free(rev_first_blocks);
+        var rev_positions = try allocator.alloc(u32, node_count);
+        defer allocator.free(rev_positions);
+        @memset(rev_positions, 0);
 
         var next_block_index = base_rev;
-        var start: usize = 0;
-        while (start < self.edges.items.len) {
-            const destination = self.edges.items[start].destination;
-            var end = start + 1;
-            while (end < self.edges.items.len and self.edges.items[end].destination == destination) : (end += 1) {}
-            const block_count = plan.rev_block_counts[destination];
-            self.publishReverseRun(destination, self.edges.items[start..end], next_block_index, block_count);
+        for (0..node_count) |node_index| {
+            rev_first_blocks[node_index] = next_block_index;
+            const block_count = plan.rev_block_counts[node_index];
+            if (block_count == 0) continue;
+
+            for (0..block_count) |block_offset| {
+                const block_index = next_block_index + @as(u32, @intCast(block_offset));
+                page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev).* = std.mem.zeroes(types.EdgeBlockRev);
+            }
+
+            const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
+            node_buffer.rev_buffers[0].first_block = next_block_index;
+            node_buffer.rev_buffers[0].block_count = block_count;
+            node_buffer.rev_buffers[0].group_count = 0;
+            node_buffer.rev_buffers[0].first_group = 0;
             next_block_index += block_count;
-            start = end;
+        }
+
+        for (self.edges.items) |edge| {
+            const destination_index = edge.destination;
+            const position = rev_positions[destination_index];
+            rev_positions[destination_index] = position + 1;
+
+            const block_index = rev_first_blocks[destination_index] + position / 64;
+            const slot: usize = @intCast(position % 64);
+            page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev).sources[slot] = edge.source;
+        }
+
+        for (0..node_count) |node_index| {
+            const degree = plan.rev_degrees[node_index];
+            const block_count = plan.rev_block_counts[node_index];
+            if (block_count == 0) continue;
+
+            const first_block = rev_first_blocks[node_index];
+            var remaining = degree;
+            for (0..block_count) |block_offset| {
+                const live = @min(remaining, 64);
+                const block_index = first_block + @as(u32, @intCast(block_offset));
+                page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev).mask = constants.denseMask(@intCast(live));
+                remaining -= live;
+            }
         }
 
         std.debug.assert(next_block_index == base_rev + plan.total_rev_blocks);
@@ -309,7 +333,7 @@ pub const GraphBuilder = struct {
 
         self.resetPublishedAdjacencyBuffers();
         self.publishForwardAdjacencies(&plan, reservation.base_fwd);
-        self.publishReverseAdjacencies(&plan, reservation.base_rev);
+        try self.publishReverseAdjacencies(&plan, reservation.base_rev);
         self.graph.graph.block_fwd_count = reservation.base_fwd + plan.total_fwd_blocks;
         self.graph.graph.block_rev_count = reservation.base_rev + plan.total_rev_blocks;
         self.graph.graph.edge_count.store(@intCast(self.edges.items.len), .release);

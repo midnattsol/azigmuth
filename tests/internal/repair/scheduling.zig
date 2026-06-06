@@ -63,7 +63,7 @@ test "repair debt: repairBudgeted ignores removed nodes" {
     try graph.addEdge(a, b, 0, 0);
     _ = try graph.addNode();
 
-    try graph.removeNode(a);
+    _ = try graph.removeNode(a);
 
     // Push the removed node into the repair queue.
     try graph.graph.repair_fwd.append(graph.graph.allocator, a.index);
@@ -83,7 +83,7 @@ test "repair debt: updateRepairDebtSide flags forward tombstones immediately aft
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try graph.removeNode(dst);
+    _ = try graph.removeNode(dst);
 
     // src must have needs_repair_fwd set because it still structurally
     // references the removed dst.

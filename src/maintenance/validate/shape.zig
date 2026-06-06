@@ -61,13 +61,25 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
 
     if (side == .fwd) {
         const block = page_ops.edgeBlockAtConst(graph, block_index, .fwd);
+        const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_index) else null;
         const live_count = @popCount(block.mask);
         if (block.mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
         var prev: u32 = 0;
+        var prev_id: u32 = 0;
         for (0..live_count) |slot| {
             const key = block.edges[slot].destination;
             if (key >= node_count) return error.CorruptGraph;
-            if (slot > 0 and (key < prev or (!graph.multigraph_enabled and key == prev))) return error.CorruptGraph;
+            if (graph.multigraph_enabled) {
+                const edge_id = id_block.?.ids[slot];
+                if (edge_id == 0) return error.CorruptGraph;
+                if (slot > 0) {
+                    if (key < prev) return error.CorruptGraph;
+                    if (key == prev and edge_id <= prev_id) return error.CorruptGraph;
+                }
+                prev_id = edge_id;
+            } else if (slot > 0 and key <= prev) {
+                return error.CorruptGraph;
+            }
             prev = key;
         }
         return live_count;

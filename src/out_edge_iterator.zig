@@ -1,9 +1,10 @@
 //! OutEdgeIterator — forward-only edge iterator that exposes EdgeRef (id,
-//! destination, relation, flags).  Returned by value; creation does not
-//! allocate.  Shares the same RCU snapshot + group traversal machinery as
-//! NeighborIterator.
+//! destination, relation, flags). Returned by value; creation does not
+//! allocate. Shares the same RCU snapshot + group traversal machinery as
+//! NeighborIterator and is likewise a logically single-owner value.
 
 const std = @import("std");
+const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const types = @import("core/types.zig");
@@ -77,19 +78,9 @@ pub const OutEdgeIterator = struct {
     /// Returns the next outgoing edge with its identity, or null when exhausted.
     pub fn next(self: *OutEdgeIterator) ?types.EdgeRef {
         if (!self.reader_active) return null;
-        if (!rcu.tryRetainReaderToken(self.reader_token)) {
+        if (!rcu.readerTokenActive(self.reader_token)) {
             self.reader_active = false;
             return null;
-        }
-        defer {
-            switch (rcu.releaseRetainedReaderToken(self.reader_token)) {
-                .alive => {},
-                .closed => self.reader_active = false,
-                .finalize => {
-                    self.reader_active = false;
-                    rcu.finalizeReaderExit(@constCast(self.core), self.reader_token);
-                },
-            }
         }
         while (true) {
             while (self.current_mask == 0) {
@@ -104,7 +95,7 @@ pub const OutEdgeIterator = struct {
             const edge = fwd_block.edges[bit_index];
             const destination = types.NodeId{ .index = edge.destination };
 
-            if (!node_validity.isNodeLive(self.core, destination)) continue;
+            if (node_validity.isNodeRemovedIndex(self.core, destination.index)) continue;
 
             return types.EdgeRef{
                 .id = .{ .local = fwd_ids.ids[bit_index] },
@@ -163,6 +154,7 @@ fn buildIteratorState(node_adj: types.NodeAdj) struct {
 
 /// Creates an OutEdgeIterator for the given node. Returns by value.
 pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!OutEdgeIterator {
+    if (!graph.multigraph_enabled) return error.UnsupportedOperation;
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 
     const reader_token = try rcu.readerEnter(@constCast(graph));
@@ -171,6 +163,7 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
     const node_buffer = page_ops.nodeAtConst(graph, node);
     const node_adj_snapshot = node_buffer.publishedAdj();
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
+    try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .fwd);
 
     const initial = buildIteratorState(node_adj_snapshot);
 

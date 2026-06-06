@@ -406,7 +406,7 @@ test "property_fuzz: removeNode followed by addNode reuses slots correctly" {
     const initial = try graph.addNode();
     try graph.addEdge(initial, initial, 0, .{});
 
-    try graph.removeNode(initial);
+    _ = try graph.removeNode(initial);
     try graph.validate();
 
     const new_node = try graph.addNode();

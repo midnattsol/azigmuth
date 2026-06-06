@@ -1,7 +1,10 @@
 //! Canonical neighbor iterator type shared by the public API and internal query
-//! helpers. Returned by value; creation does not allocate.
+//! helpers. Returned by value; creation does not allocate. Iterators are
+//! logically single-owner values: copying and using multiple copies is
+//! unsupported.
 
 const std = @import("std");
+const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const types = @import("core/types.zig");
@@ -91,19 +94,9 @@ pub const NeighborIterator = struct {
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
         if (!self.reader_active) return null;
-        if (!rcu.tryRetainReaderToken(self.reader_token)) {
+        if (!rcu.readerTokenActive(self.reader_token)) {
             self.reader_active = false;
             return null;
-        }
-        defer {
-            switch (rcu.releaseRetainedReaderToken(self.reader_token)) {
-                .alive => {},
-                .closed => self.reader_active = false,
-                .finalize => {
-                    self.reader_active = false;
-                    rcu.finalizeReaderExit(@constCast(self.core), self.reader_token);
-                },
-            }
         }
         while (true) {
             while (self.current_mask == 0) {
@@ -120,7 +113,7 @@ pub const NeighborIterator = struct {
                     break :blk types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] };
                 },
             };
-            if (!node_validity.isNodeLive(self.core, candidate)) continue;
+            if (node_validity.isNodeRemovedIndex(self.core, candidate.index)) continue;
             return candidate;
         }
     }
@@ -152,19 +145,9 @@ pub const NeighborIterator = struct {
 
 pub fn snapshotDegree(iterator: *const NeighborIterator) usize {
     if (!iterator.reader_active) return 0;
-    if (!rcu.tryRetainReaderToken(iterator.reader_token)) {
+    if (!rcu.readerTokenActive(iterator.reader_token)) {
         @constCast(iterator).reader_active = false;
         return 0;
-    }
-    defer {
-        switch (rcu.releaseRetainedReaderToken(iterator.reader_token)) {
-            .alive => {},
-            .closed => @constCast(iterator).reader_active = false,
-            .finalize => {
-                @constCast(iterator).reader_active = false;
-                rcu.finalizeReaderExit(@constCast(iterator.core), iterator.reader_token);
-            },
-        }
     }
     return switch (iterator.direction) {
         .fwd => sumVisibleCount(iterator.core, iterator.node_adj_snapshot, .fwd),
@@ -238,6 +221,11 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
     const node_buffer = page_ops.nodeAtConst(graph, node);
     const node_adj_snapshot = node_buffer.publishedAdj();
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
+    if (direction == .fwd) {
+        try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .fwd);
+    } else {
+        try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .rev);
+    }
 
     const initial = buildIteratorState(direction, node_adj_snapshot);
 

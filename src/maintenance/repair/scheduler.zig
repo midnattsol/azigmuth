@@ -48,7 +48,10 @@ pub fn repairNodeSideLimited(
         // computeNeedsRepair) or grouped layout awaiting canonicalization
         // (group_count > 0 — not detected by computeNeedsRepair for
         // single blocks but the flag is already set).
-        if (!debt_mod.computeNeedsRepair(graph, &node_adj, side) and group_count == 0) return 0;
+        if (!debt_mod.computeNeedsRepair(graph, &node_adj, side) and group_count == 0) {
+            debt_mod.updateRepairDebtSide(graph, node_mut, node.index, side);
+            return 0;
+        }
         // Fall through to rebuild.
     }
 
@@ -77,7 +80,7 @@ pub fn repairNodeSideLimited(
     }
 
     if (!debt_mod.computeNeedsRepair(graph, &staging_adj, side)) {
-        debt_mod.updateRepairDebt(graph, &staging_adj, node.index, side);
+        debt_mod.updateRepairDebtSide(graph, node_mut, node.index, side);
         return 0;
     }
 
@@ -117,9 +120,7 @@ pub fn repairNodeSideLimited(
     const meta = node_mut.loadPublishedMeta();
     const new_live: u22 = @as(u22, @intCast(live_total));
     scratch.disarm();
-    mutation_common.publishBothAdj(node_mut, staging_adj,
-        if (side == .fwd) new_live else meta.degree_fwd,
-        if (side == .rev) new_live else meta.degree_rev);
+    mutation_common.publishBothAdj(node_mut, staging_adj, if (side == .fwd) new_live else meta.degree_fwd, if (side == .rev) new_live else meta.degree_rev);
 
     // Retire old side using the shared primitive.
     try mutation_common.retireSide(graph, published_adj, side);
@@ -147,15 +148,8 @@ pub fn repairNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     }
 }
 
-fn processedNodeContains(processed_nodes: []const u32, node_index: u32) bool {
-    for (processed_nodes) |processed| {
-        if (processed == node_index) return true;
-    }
-    return false;
-}
-
-fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes: []const u32, node_index: u32) bool {
-    if (processedNodeContains(processed_nodes, node_index)) return false;
+fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes: *const std.AutoHashMap(u32, void), node_index: u32) bool {
+    if (processed_nodes.contains(node_index)) return false;
     return node_validity.isNodeLiveIndex(graph, node_index);
 }
 
@@ -194,7 +188,7 @@ fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
     return null;
 }
 
-fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: []const u32) ?u32 {
+fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: *const std.AutoHashMap(u32, void)) ?u32 {
     if (debt_mod.popRepairDebtBestEffort(graph, .fwd)) |node_index| {
         if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
     }
@@ -223,12 +217,12 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     defer graph.active_repairers.store(0, .release);
 
     var total_compacted: usize = 0;
-    var processed_nodes: std.ArrayList(u32) = .empty;
-    defer processed_nodes.deinit(graph.allocator);
+    var processed_nodes = std.AutoHashMap(u32, void).init(graph.allocator);
+    defer processed_nodes.deinit();
 
     while (total_compacted < max_nodes) {
-        const node_index = nextRepairDebtNode(graph, processed_nodes.items) orelse break;
-        try processed_nodes.append(graph.allocator, node_index);
+        const node_index = nextRepairDebtNode(graph, &processed_nodes) orelse break;
+        try processed_nodes.put(node_index, {});
 
         const compacted_fwd = try repairNodeSideLimited(graph, .{ .index = node_index }, .fwd, std.math.maxInt(usize));
         const compacted_rev = try repairNodeSideLimited(graph, .{ .index = node_index }, .rev, std.math.maxInt(usize));
@@ -241,4 +235,29 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     }
 
     return total_compacted;
+}
+
+pub fn flushRepairs(graph: *graph_core.GraphCore) !types.RepairFlushSummary {
+    const node_count = graph.publishedNodeCount();
+    if (node_count == 0) {
+        return .{
+            .repaired_nodes = 0,
+            .pass_count = 0,
+            .remaining_repair_fwd = 0,
+            .remaining_repair_rev = 0,
+            .remaining_structural_debt = false,
+        };
+    }
+
+    const repaired_nodes = try repairBudgeted(graph, node_count);
+    const remaining_repair_fwd = debt_mod.countNodesWithRepairFlag(graph, .fwd);
+    const remaining_repair_rev = debt_mod.countNodesWithRepairFlag(graph, .rev);
+
+    return .{
+        .repaired_nodes = repaired_nodes,
+        .pass_count = 1,
+        .remaining_repair_fwd = remaining_repair_fwd,
+        .remaining_repair_rev = remaining_repair_rev,
+        .remaining_structural_debt = remaining_repair_fwd > 0 or remaining_repair_rev > 0,
+    };
 }

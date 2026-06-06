@@ -97,6 +97,93 @@ pub fn adjacencyContains(graph: *const graph_core.GraphCore, adjacency: types.No
     return false;
 }
 
+fn countTargetInRun(
+    graph: *const graph_core.GraphCore,
+    start: u32,
+    count: u16,
+    target: u32,
+    comptime side: common.Side,
+) u32 {
+    var total: u32 = 0;
+    for (start..start + count) |block_index_usize| {
+        const block_index: u32 = @intCast(block_index_usize);
+        const live_count = @popCount(common.blockMask(graph, block_index, side));
+        for (0..live_count) |slot| {
+            if (common.blockKey(graph, block_index, slot, side) == target) total += 1;
+        }
+    }
+    return total;
+}
+
+fn countTargetMatches(
+    graph: *const graph_core.GraphCore,
+    adjacency: types.NodeAdj,
+    target: u32,
+    comptime side: common.Side,
+) u32 {
+    const count = common.blockCount(adjacency, side);
+    if (count == 0) return 0;
+
+    if (common.groupCount(adjacency, side) == 0) {
+        return countTargetInRun(graph, common.firstBlock(adjacency, side), count, target, side);
+    }
+
+    var total: u32 = 0;
+    var group_index = common.firstGroup(adjacency, side);
+    var visited_groups: u32 = 0;
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count) return total;
+        if (visited_groups >= graph.group_count) return total;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        total += countTargetInRun(graph, group.start, group.count, target, side);
+        group_index = group.next;
+    }
+    return total;
+}
+
+fn edgeIdAppearsLater(
+    graph: *const graph_core.GraphCore,
+    adjacency: types.NodeAdj,
+    current_block_index: u32,
+    current_slot: usize,
+    edge_id: u32,
+) bool {
+    if (common.groupCount(adjacency, .fwd) == 0) {
+        for (common.firstBlock(adjacency, .fwd)..common.firstBlock(adjacency, .fwd) + common.blockCount(adjacency, .fwd)) |block_index_usize| {
+            const block_index: u32 = @intCast(block_index_usize);
+            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_index);
+            const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask);
+            const slot_start: usize = if (block_index == current_block_index) current_slot + 1 else 0;
+            for (slot_start..live_count) |slot| {
+                if (id_block.ids[slot] == edge_id) return true;
+            }
+        }
+        return false;
+    }
+
+    var group_index = common.firstGroup(adjacency, .fwd);
+    var visited_groups: u32 = 0;
+    while (group_index != constants.END_OF_CHAIN) {
+        if (group_index >= graph.group_count or visited_groups >= graph.group_count) return false;
+        visited_groups += 1;
+
+        const group = page_ops.groupAtConst(graph, group_index);
+        for (group.start..group.start + group.count) |block_index_usize| {
+            const block_index: u32 = @intCast(block_index_usize);
+            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_index);
+            const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask);
+            const slot_start: usize = if (block_index == current_block_index) current_slot + 1 else 0;
+            for (slot_start..live_count) |slot| {
+                if (id_block.ids[slot] == edge_id) return true;
+            }
+        }
+        group_index = group.next;
+    }
+    return false;
+}
+
 pub fn appendForwardConsistencyViolations(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
@@ -111,6 +198,7 @@ pub fn appendForwardConsistencyViolations(
 
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .fwd);
         const live_count = @popCount(block.mask);
+        const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
 
         for (0..live_count) |slot| {
             const destination_node = block.edges[slot].destination;
@@ -118,10 +206,98 @@ pub fn appendForwardConsistencyViolations(
 
             const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
             if (destination_adjacency.flags.removed) continue;
-            if (!adjacencyContains(graph, destination_adjacency, source_node, .rev)) {
+            if (graph.multigraph_enabled) {
+                const forward_count = countTargetMatches(graph, source_adjacency, destination_node, .fwd);
+                const reverse_count = countTargetMatches(graph, destination_adjacency, source_node, .rev);
+                if (forward_count != reverse_count) {
+                    try violations.append(allocator, .{ .forward_reverse_multiplicity_mismatch = .{
+                        .node = source_node,
+                        .dst = destination_node,
+                        .forward_count = forward_count,
+                        .reverse_count = reverse_count,
+                    } });
+                }
+            } else if (!adjacencyContains(graph, destination_adjacency, source_node, .rev)) {
                 try violations.append(allocator, .{ .forward_reverse_mismatch = .{ .node = source_node, .dst = destination_node } });
             }
         }
+    }
+}
+
+pub fn appendForwardEdgeIdViolations(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    violations: *std.ArrayList(types.Violation),
+    node_id: u32,
+    node_buffer: *const types.NodeBuffer,
+    adjacency: types.NodeAdj,
+) !void {
+    if (!graph.multigraph_enabled) return;
+    if (adjacency.flags.removed) return;
+    if (common.blockCount(adjacency, .fwd) == 0) return;
+
+    var max_seen: u32 = 0;
+
+    if (common.groupCount(adjacency, .fwd) == 0) {
+        for (common.firstBlock(adjacency, .fwd)..common.firstBlock(adjacency, .fwd) + common.blockCount(adjacency, .fwd)) |block_index_usize| {
+            const block_index: u32 = @intCast(block_index_usize);
+            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_index);
+            const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask);
+            for (0..live_count) |slot| {
+                const edge_id = id_block.ids[slot];
+                if (edge_id == 0) {
+                    try violations.append(allocator, .{ .invalid_edge_id = .{
+                        .node = node_id,
+                        .block = block_index,
+                        .slot = @intCast(slot),
+                        .edge_id = edge_id,
+                    } });
+                }
+                max_seen = @max(max_seen, edge_id);
+                if (edgeIdAppearsLater(graph, adjacency, block_index, slot, edge_id)) {
+                    try violations.append(allocator, .{ .duplicate_edge_id = .{ .node = node_id, .edge_id = edge_id } });
+                }
+            }
+        }
+    } else {
+        var group_index = common.firstGroup(adjacency, .fwd);
+        var visited_groups: u32 = 0;
+        while (group_index != constants.END_OF_CHAIN) {
+            if (group_index >= graph.group_count or visited_groups >= graph.group_count) return;
+            visited_groups += 1;
+
+            const group = page_ops.groupAtConst(graph, group_index);
+            for (group.start..group.start + group.count) |block_index_usize| {
+                const block_index: u32 = @intCast(block_index_usize);
+                const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_index);
+                const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask);
+                for (0..live_count) |slot| {
+                    const edge_id = id_block.ids[slot];
+                    if (edge_id == 0) {
+                        try violations.append(allocator, .{ .invalid_edge_id = .{
+                            .node = node_id,
+                            .block = block_index,
+                            .slot = @intCast(slot),
+                            .edge_id = edge_id,
+                        } });
+                    }
+                    max_seen = @max(max_seen, edge_id);
+                    if (edgeIdAppearsLater(graph, adjacency, block_index, slot, edge_id)) {
+                        try violations.append(allocator, .{ .duplicate_edge_id = .{ .node = node_id, .edge_id = edge_id } });
+                    }
+                }
+            }
+            group_index = group.next;
+        }
+    }
+
+    const next_id = node_buffer.next_local_edge_id.load(.acquire);
+    if (max_seen >= next_id) {
+        try violations.append(allocator, .{ .edge_id_counter_regressed = .{
+            .node = node_id,
+            .next_id = next_id,
+            .max_seen = max_seen,
+        } });
     }
 }
 
@@ -222,9 +398,103 @@ pub fn appendLayoutDebtViolations(
     }
 }
 
+fn validateForwardMultiplicityInContiguousBlocks(
+    graph: *const graph_core.GraphCore,
+    source_node: u32,
+    source_adjacency: types.NodeAdj,
+    start: u32,
+    count: u16,
+) !void {
+    for (start..start + count) |block_index| {
+        const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
+        const live_count = @popCount(block.mask);
+        for (0..live_count) |slot| {
+            const destination_node = block.edges[slot].destination;
+            if (destination_node >= graph.publishedNodeCount()) return error.CorruptGraph;
+
+            const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+            if (destination_adjacency.flags.removed) continue;
+
+            const forward_count = countTargetMatches(graph, source_adjacency, destination_node, .fwd);
+            const reverse_count = countTargetMatches(graph, destination_adjacency, source_node, .rev);
+            if (forward_count != reverse_count) return error.CorruptGraph;
+        }
+    }
+}
+
+pub fn validateForwardEdgeIdsFast(
+    graph: *const graph_core.GraphCore,
+    node_buffer: *const types.NodeBuffer,
+    node_id: u32,
+    adjacency: types.NodeAdj,
+) !void {
+    _ = node_id;
+    if (!graph.multigraph_enabled) return;
+    if (adjacency.flags.removed) return;
+    if (common.blockCount(adjacency, .fwd) == 0) return;
+
+    var max_seen: u32 = 0;
+
+    if (common.groupCount(adjacency, .fwd) == 0) {
+        for (common.firstBlock(adjacency, .fwd)..common.firstBlock(adjacency, .fwd) + common.blockCount(adjacency, .fwd)) |block_index_usize| {
+            const block_index: u32 = @intCast(block_index_usize);
+            const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_index);
+            const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask);
+            for (0..live_count) |slot| {
+                const edge_id = id_block.ids[slot];
+                if (edge_id == 0) return error.CorruptGraph;
+                max_seen = @max(max_seen, edge_id);
+                if (edgeIdAppearsLater(graph, adjacency, block_index, slot, edge_id)) return error.CorruptGraph;
+            }
+        }
+    } else {
+        var group_index = common.firstGroup(adjacency, .fwd);
+        var visited_groups: u32 = 0;
+        while (group_index != constants.END_OF_CHAIN) {
+            if (group_index >= graph.group_count or visited_groups >= graph.group_count) return error.CorruptGraph;
+            visited_groups += 1;
+
+            const group = page_ops.groupAtConst(graph, group_index);
+            for (group.start..group.start + group.count) |block_index_usize| {
+                const block_index: u32 = @intCast(block_index_usize);
+                const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_index);
+                const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask);
+                for (0..live_count) |slot| {
+                    const edge_id = id_block.ids[slot];
+                    if (edge_id == 0) return error.CorruptGraph;
+                    max_seen = @max(max_seen, edge_id);
+                    if (edgeIdAppearsLater(graph, adjacency, block_index, slot, edge_id)) return error.CorruptGraph;
+                }
+            }
+            group_index = group.next;
+        }
+    }
+
+    if (max_seen >= node_buffer.next_local_edge_id.load(.acquire)) return error.CorruptGraph;
+}
+
 pub fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source_node: u32, adjacency: types.NodeAdj) !void {
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
+
+    if (graph.multigraph_enabled) {
+        if (common.groupCount(adjacency, .fwd) == 0) {
+            return validateForwardMultiplicityInContiguousBlocks(graph, source_node, adjacency, common.firstBlock(adjacency, .fwd), common.blockCount(adjacency, .fwd));
+        }
+
+        var group_index_multi = common.firstGroup(adjacency, .fwd);
+        var visited_groups_multi: u32 = 0;
+        while (group_index_multi != constants.END_OF_CHAIN) {
+            if (group_index_multi >= graph.group_count) return error.CorruptGraph;
+            if (visited_groups_multi >= graph.group_count) return error.CorruptGraph;
+            visited_groups_multi += 1;
+
+            const group = page_ops.groupAtConst(graph, group_index_multi);
+            try validateForwardMultiplicityInContiguousBlocks(graph, source_node, adjacency, group.start, group.count);
+            group_index_multi = group.next;
+        }
+        return;
+    }
 
     if (common.groupCount(adjacency, .fwd) == 0) {
         return validateForwardConsistencyInContiguousBlocks(graph, source_node, common.firstBlock(adjacency, .fwd), common.blockCount(adjacency, .fwd));

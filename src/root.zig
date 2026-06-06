@@ -13,6 +13,8 @@
 //!   var it = try g.neighbors(n);
 //!   defer it.deinit();
 //!   while (it.next()) |neighbor| { ... }
+//!   // Iterators are single-owner values; copying and using multiple copies
+//!   // is unsupported.
 //!
 //!   // materialize drains without consuming the iterator — deinit() still required:
 //!   var it2 = try g.neighbors(n);
@@ -47,6 +49,9 @@ pub const NodeFlags = graph.NodeFlags;
 pub const EdgeId = graph.EdgeId;
 pub const EdgeRef = graph.EdgeRef;
 pub const GraphOptions = graph.GraphOptions;
+pub const NodeRemovalSummary = graph.NodeRemovalSummary;
+pub const RepairFlushSummary = graph.RepairFlushSummary;
+pub const DebtStats = graph.DebtStats;
 
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;

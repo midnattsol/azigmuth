@@ -21,7 +21,7 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
     try testing.expect(source_adj.group_count_fwd > 0);
 
     // Create tombstones: remove destinations in different original blocks.
-    try graph.removeNode(destinations[64]);
+    _ = try graph.removeNode(destinations[64]);
     try graph.removeNode(destinations[128]);
 
     source_adj = (try graph.nodeAtConst(source)).publishedAdj();
@@ -65,7 +65,7 @@ test "repair: repairBudgeted discovers grouped forward tombstone debt without ex
     // Create tombstones via removeNode.
     const extra = try graph.addNode();
     try graph.addEdge(source, extra, 0, 0);
-    try graph.removeNode(extra);
+    _ = try graph.removeNode(extra);
 
     const source_adj = (try graph.nodeAtConst(source)).publishedAdj();
     try testing.expect(source_adj.flags.needs_repair_fwd);

@@ -25,6 +25,38 @@ pub const GraphOptions = struct {
     multigraph: bool = false,
 };
 
+pub const NodeRemovalSummary = struct {
+    removed_visible_edges: u64,
+    related_live_nodes_touched: u32,
+    predecessor_nodes_with_forward_tombstone: u32,
+    destination_nodes_with_reverse_cleanup: u32,
+    left_forward_repair_debt: bool,
+};
+
+pub const RepairFlushSummary = struct {
+    repaired_nodes: usize,
+    pass_count: usize,
+    remaining_repair_fwd: usize,
+    remaining_repair_rev: usize,
+    remaining_structural_debt: bool,
+};
+
+pub const DebtStats = struct {
+    live_nodes: usize,
+    removed_nodes: usize,
+
+    nodes_with_repair_fwd: usize,
+    nodes_with_repair_rev: usize,
+
+    queued_repair_fwd: usize,
+    queued_repair_rev: usize,
+
+    grouped_fwd_nodes: usize,
+    grouped_rev_nodes: usize,
+
+    estimated_tombstone_fwd_nodes: usize,
+};
+
 pub const GraphError = error{
     OutOfMemory,
     DegreeLimitReached,
@@ -146,13 +178,14 @@ pub const NodeBuffer = extern struct {
     rev_buffers: [2]SideAdj,
 
     /// Monotonic edge-id counter local to this node, used in multigraph mode.
-    /// 0 is reserved for "empty" slot; valid IDs start at 1.
-    next_local_edge_id: u32 = 1,
+    /// 0 is reserved for "empty" slot; valid IDs start at 1.  Atomic so that
+    /// lock-free readers (validate, debugValidate) can observe a coherent value
+    /// while writers increment via nextEdgeId().
+    next_local_edge_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 
     /// Allocates and returns the next edge ID local to this node.
     pub fn nextEdgeId(self: *NodeBuffer) EdgeId {
-        const local = self.next_local_edge_id;
-        self.next_local_edge_id += 1;
+        const local = self.next_local_edge_id.fetchAdd(1, .monotonic);
         return .{ .local = local };
     }
 
@@ -328,8 +361,12 @@ pub const Violation = union(enum) {
     occupancy_below_threshold: struct { node: u32, block: u32, occupancy: u32 },
     mask_bit_out_of_range: struct { node: u32, block: u32 },
     invalid_dst: struct { node: u32, block: u32, slot: u32, dst: u32 },
+    invalid_edge_id: struct { node: u32, block: u32, slot: u32, edge_id: u32 },
     forward_reverse_mismatch: struct { node: u32, dst: u32 },
+    forward_reverse_multiplicity_mismatch: struct { node: u32, dst: u32, forward_count: u32, reverse_count: u32 },
     unsorted_block: struct { node: u32, block: u32, slot: u32 },
+    duplicate_edge_id: struct { node: u32, edge_id: u32 },
+    edge_id_counter_regressed: struct { node: u32, next_id: u32, max_seen: u32 },
     blockgroup_chain_cycle: struct { node: u32, group: u32 },
     blockgroup_overlap: struct { node: u32, group_a: u32, group_b: u32 },
     run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u16 },
