@@ -155,15 +155,17 @@ pub fn updateRepairDebtAfterEdgeMutation(
     comptime side: adjacency.AdjSide,
     previous_flag: bool,
 ) void {
+    _ = graph;
+    _ = node_index;
     if (adj.flags.removed) {
         adj.flags.needs_repair_fwd = false;
         adj.flags.needs_repair_rev = false;
         return;
     }
 
-    const needs_repair = previous_flag or computeNeedsRepair(graph, adj, side);
-    setRepairFlag(adj, side, needs_repair);
-    if (!previous_flag and needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
+    // Hot-path edge mutations keep repair debt sticky but do not rescan the
+    // whole side. Exact recomputation belongs to explicit repair/validation.
+    setRepairFlag(adj, side, previous_flag);
 }
 
 pub fn computeNeedsRepair(

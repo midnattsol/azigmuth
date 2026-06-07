@@ -162,7 +162,11 @@ fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
     return null;
 }
 
-fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: *const std.AutoHashMap(u32, void)) ?u32 {
+fn nextRepairDebtNode(
+    graph: *graph_core.GraphCore,
+    processed_nodes: *const std.AutoHashMap(u32, void),
+    allow_tombstone_scan: bool,
+) ?u32 {
     if (debt_mod.popRepairDebtBestEffort(graph, .fwd)) |node_index| {
         if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
     }
@@ -175,10 +179,48 @@ fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: *const std.
     if (debt_mod.findRepairDebtByFlag(graph, .rev)) |node_index| {
         if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
     }
-    if (findTombstoneDebtByScan(graph)) |node_index| {
-        if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
+    if (allow_tombstone_scan) {
+        if (findTombstoneDebtByScan(graph)) |node_index| {
+            if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
+        }
     }
     return null;
+}
+
+fn repairBudgetedWork(
+    graph: *graph_core.GraphCore,
+    max_nodes: usize,
+    processed_nodes: *std.AutoHashMap(u32, void),
+    allow_tombstone_scan: bool,
+) !usize {
+    var total_compacted: usize = 0;
+
+    while (total_compacted < max_nodes) {
+        const node_index = nextRepairDebtNode(graph, processed_nodes, allow_tombstone_scan) orelse break;
+        try processed_nodes.put(node_index, {});
+
+        if (try repairBothSides(graph, .{ .index = node_index })) total_compacted += 1;
+    }
+
+    return total_compacted;
+}
+
+fn flushTombstoneDebt(
+    graph: *graph_core.GraphCore,
+    max_nodes: usize,
+    processed_nodes: *std.AutoHashMap(u32, void),
+) !usize {
+    var total_compacted: usize = 0;
+
+    while (total_compacted < max_nodes) {
+        const node_index = findTombstoneDebtByScan(graph) orelse break;
+        if (!isEligibleRepairCandidate(graph, processed_nodes, node_index)) continue;
+        try processed_nodes.put(node_index, {});
+
+        if (try repairBothSides(graph, .{ .index = node_index })) total_compacted += 1;
+    }
+
+    return total_compacted;
 }
 
 /// Run up to `max_nodes` repair operations across the repair debt queue.
@@ -190,16 +232,10 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     }
     defer graph.active_repairers.store(0, .release);
 
-    var total_compacted: usize = 0;
     var processed_nodes = std.AutoHashMap(u32, void).init(graph.allocator);
     defer processed_nodes.deinit();
 
-    while (total_compacted < max_nodes) {
-        const node_index = nextRepairDebtNode(graph, &processed_nodes) orelse break;
-        try processed_nodes.put(node_index, {});
-
-        if (try repairBothSides(graph, .{ .index = node_index })) total_compacted += 1;
-    }
+    const total_compacted = try repairBudgetedWork(graph, max_nodes, &processed_nodes, false);
 
     if (total_compacted > 0) {
         rcu.bumpEpoch(graph);
@@ -210,6 +246,11 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
 }
 
 pub fn flushRepairs(graph: *graph_core.GraphCore) !types.RepairFlushSummary {
+    if (graph.active_repairers.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) {
+        return error.ConcurrentMutation;
+    }
+    defer graph.active_repairers.store(0, .release);
+
     const node_count = graph.publishedNodeCount();
     if (node_count == 0) {
         return .{
@@ -221,13 +262,24 @@ pub fn flushRepairs(graph: *graph_core.GraphCore) !types.RepairFlushSummary {
         };
     }
 
-    const repaired_nodes = try repairBudgeted(graph, node_count);
+    var processed_nodes = std.AutoHashMap(u32, void).init(graph.allocator);
+    defer processed_nodes.deinit();
+
+    const repaired_flagged = try repairBudgetedWork(graph, node_count, &processed_nodes, false);
+    const repaired_scanned = try flushTombstoneDebt(graph, node_count - repaired_flagged, &processed_nodes);
+    const repaired_nodes = repaired_flagged + repaired_scanned;
+
+    if (repaired_nodes > 0) {
+        rcu.bumpEpoch(graph);
+        rcu.reclaimRetired(graph);
+    }
+
     const remaining_repair_fwd = debt_mod.countNodesWithRepairFlag(graph, .fwd);
     const remaining_repair_rev = debt_mod.countNodesWithRepairFlag(graph, .rev);
 
     return .{
         .repaired_nodes = repaired_nodes,
-        .pass_count = 1,
+        .pass_count = if (repaired_scanned > 0) 2 else 1,
         .remaining_repair_fwd = remaining_repair_fwd,
         .remaining_repair_rev = remaining_repair_rev,
         .remaining_structural_debt = remaining_repair_fwd > 0 or remaining_repair_rev > 0,

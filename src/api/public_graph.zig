@@ -1,6 +1,7 @@
-//! Public `Graph` handle — heap-allocated opaque type that forms the single
-//! canonical entry point for all graph operations.  Callers never see the
-//! internal layout and must go through the methods defined here.
+//! Public `Graph` handle — heap-allocated opaque type that forms the canonical
+//! entry point for core storage, mutation, validation, and maintenance
+//! operations. Callers never see the internal layout and must go through the
+//! methods defined here.
 //!
 //! Lifetime:
 //!   - `init(allocator)` allocates and returns a `*Graph`.  The caller owns the
@@ -13,8 +14,8 @@
 //!     fallible APIs MAY return `error.GraphBusy`; non-fallible accessors
 //!     (`hasNode`, `nodeCount`, `edgeCount`) return safe defaults.
 //!   - All query methods (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`,
-//!     `bfs`, `dfs`, `hasCycle`, `validate`, `debugValidate`) are lock-free
-//!     readers and never block writers.
+//!     `validate`, `debugValidate`) are lock-free readers and never block
+//!     writers.
 
 const std = @import("std");
 const internal = @import("../graph.zig");
@@ -145,12 +146,8 @@ pub const Graph = opaque {
         return self.inner().repairBudgeted(max_nodes);
     }
 
-    pub fn flushRepairs(self: *Graph) internal.GraphError!internal.RepairFlushSummary {
-        return self.inner().flushRepairs();
-    }
-
-    pub fn debtStats(self: *const Graph) internal.GraphError!internal.DebtStats {
-        return self.innerConst().debtStats();
+    pub fn reclaimRetired(self: *Graph) void {
+        return self.inner().reclaimRetired();
     }
 
     pub fn addEdge(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!void {
@@ -174,19 +171,5 @@ pub const Graph = opaque {
 
     pub fn removeNode(self: *Graph, node: internal.NodeId) internal.GraphError!internal.NodeRemovalSummary {
         return self.inner().removeNode(node);
-    }
-
-    // ── Algorithms (concurrent-safe, evolving valid view) ──────────────
-
-    pub fn bfs(self: *const Graph, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        return self.innerConst().bfs(start, allocator);
-    }
-
-    pub fn dfs(self: *const Graph, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        return self.innerConst().dfs(start, allocator);
-    }
-
-    pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!bool {
-        return self.innerConst().hasCycle(allocator);
     }
 };

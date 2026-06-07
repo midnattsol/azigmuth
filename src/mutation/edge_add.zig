@@ -9,7 +9,6 @@ const repair = @import("../maintenance/repair.zig");
 const common = @import("common.zig");
 const shared = @import("edge_shared.zig");
 const local_side_edit = @import("local_side_edit.zig");
-const structural_rebuild = @import("structural_rebuild.zig");
 
 fn prepareAppendBlockSide(
     graph: *graph_core.GraphCore,
@@ -57,11 +56,11 @@ fn applyPreparedAppendSideTracked(
     graph: *graph_core.GraphCore,
     side_adj: *types.SideAdj,
     prepared: shared.PreparedAppendBlock,
+    comptime side: adjacency.AdjSide,
     scratch: *common.MutationScratch,
-) !void {
-    if (try local_side_edit.tryApplyPreparedAppendFast(graph, side_adj, prepared, scratch)) return;
+) !shared.AppliedAppend {
     if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
-    try structural_rebuild.rebuildAfterPreparedAppend(graph, side_adj, prepared, scratch);
+    return try local_side_edit.tryApplyPreparedAppendFast(graph, side_adj, prepared, side, scratch) orelse error.RepairRequired;
 }
 
 fn insertForwardEdge(graph: *graph_core.GraphCore, block_idx: u32, destination: types.NodeId, relation: u16, flags: u16, edge_id: u32) !void {
@@ -162,19 +161,19 @@ fn addEdgeImpl(
     const old_forward_groups = shared.OldGroupChain.captureSide(source_staging);
     const old_reverse_groups = shared.OldGroupChain.captureSide(destination_staging);
 
-    try applyPreparedAppendSideTracked(graph, source_staging, forward_prepared, &scratch);
-    try insertForwardEdge(graph, forward_prepared.new_block, destination, relation, flags, edge_id.local);
+    const forward_applied = try applyPreparedAppendSideTracked(graph, source_staging, forward_prepared, .fwd, &scratch);
+    try insertForwardEdge(graph, forward_applied.block_idx, destination, relation, flags, edge_id.local);
     var source_publish_adj = common.nodeAdjForSide(source_staging.*, endpoints.source_flags, .fwd);
     repair.updateRepairDebtAfterEdgeMutation(graph, &source_publish_adj, source.index, .fwd, endpoints.source_flags.needs_repair_fwd);
 
-    try applyPreparedAppendSideTracked(graph, destination_staging, reverse_prepared, &scratch);
-    insertReverseEdge(graph, reverse_prepared.new_block, source);
+    const reverse_applied = try applyPreparedAppendSideTracked(graph, destination_staging, reverse_prepared, .rev, &scratch);
+    insertReverseEdge(graph, reverse_applied.block_idx, source);
     var destination_publish_adj = common.nodeAdjForSide(destination_staging.*, endpoints.destination_flags, .rev);
     repair.updateRepairDebtAfterEdgeMutation(graph, &destination_publish_adj, destination.index, .rev, endpoints.destination_flags.needs_repair_rev);
 
     scratch.disarm();
     shared.publishAdded(&endpoints, source, destination, source_publish_adj, destination_publish_adj);
-    try shared.retireAdded(graph, forward_prepared, reverse_prepared, old_forward_groups, old_reverse_groups);
+    try shared.retireAdded(graph, forward_prepared, forward_applied, reverse_prepared, reverse_applied, old_forward_groups, old_reverse_groups);
 
     _ = graph.edge_count.fetchAdd(1, .release);
     rcu.bumpEpoch(graph);

@@ -28,8 +28,6 @@ pub const GraphOptions = struct {
 pub const NodeRemovalSummary = struct {
     removed_visible_edges: u64,
     related_live_nodes_touched: u32,
-    predecessor_nodes_with_forward_tombstone: u32,
-    destination_nodes_with_reverse_tombstone: u32,
     left_repair_debt: bool,
 };
 

@@ -427,8 +427,6 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     return .{
         .removed_visible_edges = @intCast(removed_visible_edge_count),
         .related_live_nodes_touched = @intCast(related.nodes.items.len),
-        .predecessor_nodes_with_forward_tombstone = counts.predecessors,
-        .destination_nodes_with_reverse_tombstone = counts.destinations,
         .left_repair_debt = counts.predecessors > 0 or counts.destinations > 0,
     };
 }

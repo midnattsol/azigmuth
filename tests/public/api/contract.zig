@@ -278,8 +278,6 @@ test "contract: removeNode returns summary for repair policy decisions" {
     const summary = try graph.removeNode(target);
     try testing.expectEqual(@as(u64, 2), summary.removed_visible_edges);
     try testing.expectEqual(@as(u32, 2), summary.related_live_nodes_touched);
-    try testing.expectEqual(@as(u32, 1), summary.predecessor_nodes_with_forward_tombstone);
-    try testing.expectEqual(@as(u32, 1), summary.destination_nodes_with_reverse_tombstone);
     try testing.expect(summary.left_repair_debt);
 }
 
@@ -322,7 +320,6 @@ test "contract: removeNode with incoming edges" {
     defer iter_two.deinit();
     try testing.expect(iter_two.next() == null);
 }
-
 
 test "contract: outDegree and inDegree are consistent with neighbors materialize" {
     var graph = try graphz.Graph.init(testing.allocator);

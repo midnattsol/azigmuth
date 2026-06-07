@@ -271,3 +271,17 @@ pub fn retireSide(
     if (side_adj.group_count == 0) return;
     rcu.retireGroupSpan(graph, side_adj.first_group, side_adj.group_count);
 }
+
+pub fn retireRun(
+    graph: *graph_core.GraphCore,
+    run: RunDesc,
+    comptime side: adjacency.AdjSide,
+) !void {
+    for (run.start..run.start + run.count) |block_idx_usize| {
+        const block_idx: u32 = @intCast(block_idx_usize);
+        switch (side) {
+            .fwd => try rcu.retireBlockFwd(graph, block_idx),
+            .rev => try rcu.retireBlockRev(graph, block_idx),
+        }
+    }
+}

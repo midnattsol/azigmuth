@@ -446,3 +446,102 @@ test "mutation grouped: addEdge COW on single-block grouped reverse updates grou
     try testing.expectEqual(@as(u16, 1), after.block_count_rev);
     try neighbors.expectInNeighbors(&graph, testing.allocator, dest, &[_]u32{ old_source.index, new_source.index });
 }
+
+test "mutation grouped: addEdge appends past four runs without structural rebuild" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 258);
+    const source = graph_mod.NodeId{ .index = 0 };
+
+    const b0 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b4 = try graph.allocBlockFwd();
+    _ = try graph.allocBlockFwd();
+    const b6 = try graph.allocBlockFwd();
+    const spare7 = try graph.allocBlockFwd();
+
+    setForwardBlock(&graph, b0, 1, 64);
+    setForwardBlock(&graph, b2, 65, 64);
+    setForwardBlock(&graph, b4, 129, 64);
+    setForwardBlock(&graph, b6, 193, 64);
+
+    page_ops.freeBlock(&graph.graph, spare7, .fwd);
+    page_ops.freeBlock(&graph.graph, 5, .fwd);
+    page_ops.freeBlock(&graph.graph, 3, .fwd);
+    page_ops.freeBlock(&graph.graph, 1, .fwd);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    const g3 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = g3 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b6, .count = 1, .next = constants.END_OF_CHAIN };
+    try publishForwardGroups(&graph, source, &[_]u32{ g0, g1, g2, g3 }, 4);
+
+    for (1..257) |destination_idx| {
+        try publishSingleReverseSource(&graph, .{ .index = @intCast(destination_idx) }, source.index);
+    }
+    graph.graph.edge_count.store(256, .release);
+    try graph.validate();
+
+    try graph.addEdge(source, .{ .index = 257 }, 0, 0);
+    try graph.validate();
+
+    const after = try graph.publishedNodeAdj(source);
+    try testing.expectEqual(@as(usize, 257), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 257), graph.edgeCount());
+    try testing.expect(after.group_count_fwd <= constants.MAX_GROUPS_PER_NODE);
+    try testing.expectEqual(@as(u16, 5), after.block_count_fwd);
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = 257 }));
+}
+
+test "mutation grouped: addEdge replaces partial tail within four-run limit" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    try addNodeCount(&graph, 259);
+    const source = graph_mod.NodeId{ .index = 0 };
+
+    const b0 = try graph.allocBlockFwd();
+    const b1 = try graph.allocBlockFwd();
+    const b2 = try graph.allocBlockFwd();
+    const b3 = try graph.allocBlockFwd();
+    const b4 = try graph.allocBlockFwd();
+
+    setForwardBlock(&graph, b0, 1, 64);
+    setForwardBlock(&graph, b1, 65, 64);
+    setForwardBlock(&graph, b2, 129, 64);
+    setForwardBlock(&graph, b3, 193, 64);
+    setForwardBlock(&graph, b4, 257, 1);
+
+    const g0 = try graph.allocGroup();
+    const g1 = try graph.allocGroup();
+    const g2 = try graph.allocGroup();
+    const g3 = try graph.allocGroup();
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = g3 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 2, .next = constants.END_OF_CHAIN };
+    try publishForwardGroups(&graph, source, &[_]u32{ g0, g1, g2, g3 }, 5);
+
+    for (1..258) |destination_idx| {
+        try publishSingleReverseSource(&graph, .{ .index = @intCast(destination_idx) }, source.index);
+    }
+    graph.graph.edge_count.store(257, .release);
+    try graph.validate();
+
+    try graph.addEdge(source, .{ .index = 258 }, 0, 0);
+    try graph.validate();
+
+    const after = try graph.publishedNodeAdj(source);
+    try testing.expectEqual(@as(usize, 258), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 258), graph.edgeCount());
+    try testing.expectEqual(@as(u16, 3), after.group_count_fwd);
+    try testing.expectEqual(@as(u16, 5), after.block_count_fwd);
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = 258 }));
+}

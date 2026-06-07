@@ -364,6 +364,42 @@ fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSid
     }
 }
 
+pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, comptime side: adjacency.AdjSide) !u32 {
+    std.debug.assert(span_count > 0);
+
+    while (true) {
+        const first_block_idx = switch (side) {
+            .fwd => @atomicLoad(u32, &graph.block_fwd_count, .acquire),
+            .rev => @atomicLoad(u32, &graph.block_rev_count, .acquire),
+        };
+        const end_block_idx = std.math.add(u32, first_block_idx, span_count) catch return error.OutOfMemory;
+
+        try ensureBlockCapacity(graph, end_block_idx, side);
+        const published = switch (side) {
+            .fwd => @cmpxchgWeak(u32, &graph.block_fwd_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
+            .rev => @cmpxchgWeak(u32, &graph.block_rev_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
+        };
+        if (published != null) continue;
+
+        for (first_block_idx..end_block_idx) |block_idx_usize| {
+            const block_idx: u32 = @intCast(block_idx_usize);
+            edgeBlockAt(graph, block_idx, side).* = std.mem.zeroes(switch (side) {
+                .fwd => types.EdgeBlockFwd,
+                .rev => types.EdgeBlockRev,
+            });
+            switch (side) {
+                .fwd => {
+                    if (graph.multigraph_enabled) {
+                        edgeBlockFwdIdsAt(graph, block_idx).* = std.mem.zeroes(types.EdgeBlockFwdIds);
+                    }
+                },
+                .rev => {},
+            }
+        }
+        return first_block_idx;
+    }
+}
+
 pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u32, comptime side: adjacency.AdjSide) !void {
     if (required_block_count == 0) return;
 

@@ -27,6 +27,7 @@ pub const OutEdgeIterator = struct {
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const types.NodeBuffer = null,
+    check_removed_destinations: bool,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
@@ -59,6 +60,7 @@ pub const OutEdgeIterator = struct {
     }
 
     fn destinationRemoved(self: *OutEdgeIterator, destination_index: u32) bool {
+        if (!self.check_removed_destinations) return false;
         return iterator_common.candidateRemoved(self, self.core, destination_index);
     }
 
@@ -132,6 +134,7 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .blocks_remaining = initial.blocks_remaining,
         .current_group_index = initial.current_group_index,
         .current_mask = 0,
+        .check_removed_destinations = node_adj_snapshot.flags.needs_repair_fwd,
         .reader_active = true,
         .reader_token = reader_token,
         .groups_visited = 0,

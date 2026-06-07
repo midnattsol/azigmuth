@@ -32,6 +32,7 @@ pub const NeighborIterator = struct {
     cached_node_page: ?[]const types.NodeBuffer = null,
 
     degree_snapshot: usize,
+    check_removed_candidates: bool,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
@@ -76,6 +77,7 @@ pub const NeighborIterator = struct {
     }
 
     fn candidateRemoved(self: *NeighborIterator, candidate_index: u32) bool {
+        if (!self.check_removed_candidates) return false;
         return iterator_common.candidateRemoved(self, self.core, candidate_index);
     }
 
@@ -205,6 +207,10 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .degree_snapshot = switch (direction) {
             .fwd => meta.degree_fwd,
             .rev => meta.degree_rev,
+        },
+        .check_removed_candidates = switch (direction) {
+            .fwd => node_adj_snapshot.flags.needs_repair_fwd,
+            .rev => node_adj_snapshot.flags.needs_repair_rev,
         },
         .reader_active = true,
         .reader_token = reader_token,

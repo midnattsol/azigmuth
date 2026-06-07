@@ -27,6 +27,28 @@ pub const MutationScratch = struct {
         return block;
     }
 
+    pub fn allocFreshBlockSpan(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_count: u16) !u32 {
+        const first_block_idx = try page_ops.allocFreshBlockSpan(graph, block_count, side);
+        const list = switch (side) {
+            .fwd => &self.fwd_blocks,
+            .rev => &self.rev_blocks,
+        };
+
+        var tracked_blocks: u16 = 0;
+        errdefer {
+            var block_offset = tracked_blocks;
+            while (block_offset > 0) {
+                block_offset -= 1;
+                page_ops.freeBlock(graph, first_block_idx + block_offset, side);
+            }
+        }
+
+        while (tracked_blocks < block_count) : (tracked_blocks += 1) {
+            try list.append(graph.allocator, first_block_idx + tracked_blocks);
+        }
+        return first_block_idx;
+    }
+
     pub fn allocGroup(self: *MutationScratch, graph: *graph_core.GraphCore) !u32 {
         return self.allocGroupSpan(graph, 1);
     }
@@ -63,6 +85,22 @@ pub const MutationScratch = struct {
         self.fwd_blocks.deinit(allocator);
         self.rev_blocks.deinit(allocator);
         self.groups.deinit(allocator);
+    }
+
+    pub fn freeTrackedBlock(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_idx: u32) void {
+        const list = switch (side) {
+            .fwd => &self.fwd_blocks,
+            .rev => &self.rev_blocks,
+        };
+
+        for (list.items, 0..) |tracked_block_idx, list_idx| {
+            if (tracked_block_idx != block_idx) continue;
+            _ = list.swapRemove(list_idx);
+            page_ops.freeBlock(graph, block_idx, side);
+            return;
+        }
+
+        page_ops.freeBlock(graph, block_idx, side);
     }
 
     pub fn freeGroup(self: *MutationScratch, graph: *graph_core.GraphCore, group: u32) void {

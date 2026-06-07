@@ -22,7 +22,7 @@
 //!   const all = try it2.materialize(allocator);
 //!   defer allocator.free(all);
 //!
-//!   const order = try g.bfs(n, allocator);
+//!   const order = try graphz.algorithms.bfs(g, n, allocator);
 //!   defer allocator.free(order);
 //!
 //! Usage with GraphBuilder:
@@ -36,6 +36,7 @@
 
 const graph = @import("graph.zig");
 const public_iterator = @import("neighbor_iterator.zig");
+const public_algorithms = @import("api/public_algorithms.zig");
 const public_graph = @import("api/public_graph.zig");
 const public_builder = @import("api/public_builder.zig");
 
@@ -50,12 +51,11 @@ pub const EdgeId = graph.EdgeId;
 pub const EdgeRef = graph.EdgeRef;
 pub const GraphOptions = graph.GraphOptions;
 pub const NodeRemovalSummary = graph.NodeRemovalSummary;
-pub const RepairFlushSummary = graph.RepairFlushSummary;
-pub const DebtStats = graph.DebtStats;
 
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;
 pub const GraphBuilder = public_builder.GraphBuilder;
+pub const algorithms = public_algorithms;
 pub const NeighborIterator = public_iterator.NeighborIterator;
 pub const OutEdgeIterator = graph.OutEdgeIterator;
 pub const GraphError = graph.GraphError;

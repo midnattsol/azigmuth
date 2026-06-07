@@ -589,7 +589,7 @@ test "repair debt: repairNode clears flag on single-block grouped adjacency with
     try testing.expect(!repaired.flags.needs_repair_fwd);
 }
 
-test "repair debt: repairBudgeted fallback scan finds unflagged tombstone debt" {
+test "repair debt: flushRepairs scan finds unflagged tombstone debt" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -606,10 +606,8 @@ test "repair debt: repairBudgeted fallback scan finds unflagged tombstone debt" 
         try testing.expect(adj.flags.needs_repair_fwd);
     }
 
-    // Clear needs_repair_fwd and all repair-debt sources so
-    // repairBudgeted MUST fall through to the full tombstone scan
-    // (findTombstoneDebtByScan) — the path that currently does NOT
-    // enter a reader critical section.
+    // Clear needs_repair_fwd and all repair-debt sources so only the
+    // explicit flushRepairs tombstone scan can discover the debt.
     {
         var buf = try graph.nodeAt(source);
         var meta = buf.loadPublishedMeta();
@@ -627,9 +625,9 @@ test "repair debt: repairBudgeted fallback scan finds unflagged tombstone debt" 
     graph.graph.repair_scan_cursor_rev = 0;
     graph.graph.repair_scan_cursor_tombstone = 0;
 
-    // The tombstone fallback scan should still discover and compact the debt.
-    const compacted = try graph.repairBudgeted(1);
-    try testing.expectEqual(@as(usize, 1), compacted);
+    // flushRepairs should still discover and compact the debt.
+    const flush = try graph.flushRepairs();
+    try testing.expectEqual(@as(usize, 1), flush.repaired_nodes);
     try graph.validate();
 
     const after = (try graph.nodeAtConst(source)).publishedAdj();

@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const algorithms = graphz.algorithms;
 
 fn idxOf(order: []const graphz.NodeId, target: usize) usize {
     for (order, 0..) |node, node_index| {
@@ -22,7 +23,7 @@ test "dfs visits all reachable nodes from start" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.dfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.dfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(u32, 0), order[0].index);
@@ -46,7 +47,7 @@ test "dfs on unconnected graph visits only reachable component" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.dfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.dfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 2), order.len);
@@ -67,7 +68,7 @@ test "dfs on a graph with a cycle still terminates" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.dfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.dfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 3), order.len);
@@ -91,7 +92,7 @@ test "dfs returns actual depth-first visitation order" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.dfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.dfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(u32, 0), order[0].index);
@@ -108,7 +109,7 @@ test "dfs returns error on invalid start node" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    try std.testing.expectError(error.InvalidNode, graph.dfs(.{ .index = 99 }, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, algorithms.dfs(graph, .{ .index = 99 }, std.testing.allocator));
 }
 
 test "dfs returns error on removed start node" {
@@ -119,7 +120,7 @@ test "dfs returns error on removed start node" {
     _ = try graph.addNode();
     _ = try graph.removeNode(start);
 
-    try std.testing.expectError(error.InvalidNode, graph.dfs(start, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, algorithms.dfs(graph, start, std.testing.allocator));
 }
 
 test "dfs from isolated node returns only the start node" {
@@ -132,7 +133,7 @@ test "dfs from isolated node returns only the start node" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.dfs(.{ .index = 2 }, std.testing.allocator);
+    const order = try algorithms.dfs(graph, .{ .index = 2 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 1), order.len);
@@ -151,7 +152,7 @@ test "dfs handles self-loop without revisiting the node" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.dfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.dfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 2), order.len);
@@ -167,7 +168,7 @@ test "dfs visits neighbors across multiple edge blocks" {
         try graph.addEdge(source, target, 0, .{});
     }
 
-    const order = try graph.dfs(source, std.testing.allocator);
+    const order = try algorithms.dfs(graph, source, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 71), order.len);
@@ -177,5 +178,5 @@ test "dfs on empty graph returns InvalidNode" {
     var graph = try graphz.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
-    try std.testing.expectError(error.InvalidNode, graph.dfs(.{ .index = 0 }, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, algorithms.dfs(graph, .{ .index = 0 }, std.testing.allocator));
 }

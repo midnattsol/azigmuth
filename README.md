@@ -41,10 +41,11 @@ pub fn main() !void {
     const removal = try g.removeNode(b);
     std.debug.print("removed visible edges: {}\n", .{removal.removed_visible_edges});
 
-    const stats = try g.debtStats();
-    std.debug.print("fwd repair debt nodes: {}\n", .{stats.nodes_with_repair_fwd});
+    if (removal.left_repair_debt) {
+        _ = try g.repairBudgeted(removal.related_live_nodes_touched);
+    }
 
-    _ = try g.flushRepairs();
+    g.reclaimRetired();
 
     try g.validate();
 }
@@ -83,8 +84,9 @@ an implementation detail.
   also return `error.GraphBusy` instead of entering the graph.
 - Non-fallible accessors (`hasNode`, `nodeCount`, `edgeCount`) return safe
   defaults during that brief closing window.
-- Heavy maintenance is explicit. If you want a clean quiescent graph before
-  shutdown, call `flushRepairs()` before `deinitChecked()`.
+- Heavy maintenance is explicit. Use `repairNode()`, `repairBudgeted()`, and
+  `reclaimRetired()` when you want to pay maintenance costs deliberately before
+  `deinitChecked()`.
 
 ## RemoveNode And Repair
 
@@ -105,29 +107,11 @@ if (summary.left_repair_debt) {
 }
 ```
 
-For a stronger quiescent cleanup pass, use `flushRepairs()`:
+When you want to return memory from retired blocks/groups to the reusable pools,
+call `reclaimRetired()` explicitly:
 
 ```zig
-const flush = try g.flushRepairs();
-std.debug.print("repaired={} remaining_fwd={}\n", .{
-    flush.repaired_nodes,
-    flush.remaining_repair_fwd,
-});
-```
-
-## Debt Stats
-
-`debtStats()` exposes raw engine observability so embeddings can choose their
-own maintenance policy.
-
-```zig
-const debt = try g.debtStats();
-std.debug.print("live={} removed={} queued_fwd={} tombstone_fwd={}\n", .{
-    debt.live_nodes,
-    debt.removed_nodes,
-    debt.queued_repair_fwd,
-    debt.estimated_tombstone_fwd_nodes,
-});
+g.reclaimRetired();
 ```
 
 ## Materialize
@@ -147,13 +131,13 @@ defer allocator.free(all);
 ## Algorithms
 
 ```zig
-const order = try g.bfs(start, allocator);
+const order = try graphz.algorithms.bfs(g, start, allocator);
 defer allocator.free(order);  // may be empty (len == 0)
 
-const order = try g.dfs(start, allocator);
-defer allocator.free(order);  // may be empty (len == 0)
+const depth_order = try graphz.algorithms.dfs(g, start, allocator);
+defer allocator.free(depth_order);  // may be empty (len == 0)
 
-const has_cycle = try g.hasCycle(allocator);
+const has_cycle = try graphz.algorithms.hasCycle(g, allocator);
 ```
 
 ## Commands
@@ -161,6 +145,7 @@ const has_cycle = try g.hasCycle(allocator);
 ```sh
 zig build check     # compile the library
 zig build test      # run non-stress tests
+zig build bench -Doptimize=ReleaseFast
 zig build stress    # run long-running RCU stress tests
 ```
 

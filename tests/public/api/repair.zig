@@ -31,7 +31,7 @@ test "api repair: repairBudgeted returns repaired count" {
     try graph.validate();
 }
 
-test "api repair: debtStats reports repair debt after lazy removeNode" {
+test "api repair: removeNode summary reports repair debt after lazy removeNode" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -39,16 +39,13 @@ test "api repair: debtStats reports repair debt after lazy removeNode" {
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, target, 0, .{});
 
-    _ = try graph.removeNode(target);
-
-    const stats = try graph.debtStats();
-    try testing.expectEqual(@as(usize, 1), stats.live_nodes);
-    try testing.expectEqual(@as(usize, 1), stats.removed_nodes);
-    try testing.expect(stats.nodes_with_repair_fwd >= 1);
-    try testing.expect(stats.estimated_tombstone_fwd_nodes >= 1);
+    const summary = try graph.removeNode(target);
+    try testing.expectEqual(@as(u64, 1), summary.removed_visible_edges);
+    try testing.expectEqual(@as(u32, 1), summary.related_live_nodes_touched);
+    try testing.expect(summary.left_repair_debt);
 }
 
-test "api repair: flushRepairs drains useful repair debt" {
+test "api repair: repairBudgeted drains flagged repair debt" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -56,13 +53,12 @@ test "api repair: flushRepairs drains useful repair debt" {
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, target, 0, .{});
 
-    _ = try graph.removeNode(target);
+    const summary = try graph.removeNode(target);
+    try testing.expect(summary.left_repair_debt);
 
-    const flush = try graph.flushRepairs();
-    try testing.expect(flush.repaired_nodes > 0);
-
-    const stats = try graph.debtStats();
-    try testing.expectEqual(@as(usize, 0), stats.nodes_with_repair_fwd);
+    const repaired = try graph.repairBudgeted(summary.related_live_nodes_touched);
+    try testing.expect(repaired > 0);
+    try graph.validate();
 }
 
 test "api repair: repairBudgeted with max_nodes=0 returns 0" {

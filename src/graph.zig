@@ -12,11 +12,9 @@ const query = @import("query.zig");
 const repair = @import("maintenance/repair.zig");
 const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
+const read_session_mod = @import("algorithms/read_session.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
-const bfs_mod = @import("algorithms/bfs.zig");
-const dfs_mod = @import("algorithms/dfs.zig");
-const cycle_mod = @import("algorithms/cycle.zig");
 const out_edge_iter = @import("out_edge_iterator.zig");
 
 // ── Internal API used by public wrappers ─────────────────────────────────
@@ -35,6 +33,7 @@ pub const GraphOptions = types.GraphOptions;
 pub const NodeRemovalSummary = types.NodeRemovalSummary;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
+pub const ReadSession = read_session_mod.ReadSession;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -333,22 +332,12 @@ pub const Graph = struct {
         return out_edge_iter.outEdges(core, node);
     }
 
-    pub fn bfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
+    pub fn beginReadSession(self: *const Graph) GraphError!ReadSession {
         const core = try self.beginConstCall();
-        defer endCall(core);
-        return bfs_mod.bfs(core, start, allocator);
-    }
+        errdefer endCall(core);
 
-    pub fn dfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
-        const core = try self.beginConstCall();
-        defer endCall(core);
-        return dfs_mod.dfs(core, start, allocator);
-    }
-
-    pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) GraphError!bool {
-        const core = try self.beginConstCall();
-        defer endCall(core);
-        return cycle_mod.hasCycle(core, allocator);
+        const reader_token = try rcu.readerEnter(core);
+        return ReadSession.init(core, reader_token);
     }
 
     // ── Repair API ────────────────────────────────────────────────────

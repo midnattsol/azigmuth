@@ -19,20 +19,21 @@ pub fn tryApplyPreparedAppendFast(
     graph: *graph_core.GraphCore,
     side_adj: *types.SideAdj,
     prepared: shared.PreparedAppendBlock,
+    comptime side: adjacency.AdjSide,
     scratch: *common.MutationScratch,
-) !bool {
+) !?shared.AppliedAppend {
     if (side_adj.block_count == 0) {
         side_adj.first_block = prepared.new_block;
         side_adj.block_count = 1;
         side_adj.group_count = 0;
         side_adj.first_group = 0;
-        return true;
+        return .{ .block_idx = prepared.new_block };
     }
 
     if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
 
-    if (prepared.old_block == null) return try local_repair.appendPreparedBlock(graph, side_adj, prepared, scratch);
-    return try local_repair.replaceTailBlock(graph, side_adj, prepared, scratch);
+    if (prepared.old_block == null) return try local_repair.appendPreparedBlock(graph, side_adj, prepared, side, scratch);
+    return try local_repair.replaceTailBlock(graph, side_adj, prepared, side, scratch);
 }
 
 pub fn tryApplyRemovalPlanFast(

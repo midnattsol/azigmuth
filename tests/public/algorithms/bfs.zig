@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const algorithms = graphz.algorithms;
 
 fn idxOf(order: []const graphz.NodeId, target: usize) usize {
     for (order, 0..) |node, node_index| if (node.index == target) return node_index;
@@ -20,7 +21,7 @@ test "bfs order on a simple graph" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.bfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(u32, 0), order[0].index);
@@ -42,7 +43,7 @@ test "bfs distances" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.bfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expect(idxOf(order, 1) < idxOf(order, 3));
@@ -61,7 +62,7 @@ test "bfs on unconnected graph visits only reachable component" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.bfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 2), order.len);
@@ -77,7 +78,7 @@ test "bfs returns error on invalid start node" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    try std.testing.expectError(error.InvalidNode, graph.bfs(.{ .index = 99 }, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, algorithms.bfs(graph, .{ .index = 99 }, std.testing.allocator));
 }
 
 test "bfs returns error on removed start node" {
@@ -88,7 +89,7 @@ test "bfs returns error on removed start node" {
     _ = try graph.addNode();
     _ = try graph.removeNode(start);
 
-    try std.testing.expectError(error.InvalidNode, graph.bfs(start, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, algorithms.bfs(graph, start, std.testing.allocator));
 }
 
 test "bfs from isolated node returns only the start node" {
@@ -101,7 +102,7 @@ test "bfs from isolated node returns only the start node" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.bfs(.{ .index = 1 }, std.testing.allocator);
+    const order = try algorithms.bfs(graph, .{ .index = 1 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 1), order.len);
@@ -120,7 +121,7 @@ test "bfs handles self-loop without revisiting the node" {
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const order = try graph.bfs(.{ .index = 0 }, std.testing.allocator);
+    const order = try algorithms.bfs(graph, .{ .index = 0 }, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 2), order.len);
@@ -136,7 +137,7 @@ test "bfs visits neighbors across multiple edge blocks" {
         try graph.addEdge(source, target, 0, .{});
     }
 
-    const order = try graph.bfs(source, std.testing.allocator);
+    const order = try algorithms.bfs(graph, source, std.testing.allocator);
     defer std.testing.allocator.free(order);
 
     try std.testing.expectEqual(@as(usize, 71), order.len);
@@ -146,5 +147,5 @@ test "bfs on empty graph returns InvalidNode" {
     var graph = try graphz.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
-    try std.testing.expectError(error.InvalidNode, graph.bfs(.{ .index = 0 }, std.testing.allocator));
+    try std.testing.expectError(error.InvalidNode, algorithms.bfs(graph, .{ .index = 0 }, std.testing.allocator));
 }

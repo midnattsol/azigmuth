@@ -55,6 +55,21 @@ pub fn build(b: *std.Build) void {
         addStressFiles(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
     }
 
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("bench/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bench_mod.addImport("graphz", mod);
+    const bench_exe = b.addExecutable(.{
+        .name = "graphz-bench",
+        .root_module = bench_mod,
+    });
+    const bench_run = b.addRunArtifact(bench_exe);
+    if (b.args) |args| bench_run.addArgs(args);
+    const bench_step = b.step("bench", "Run basic performance benchmarks");
+    bench_step.dependOn(&bench_run.step);
+
     const stress_step = b.step("stress", "Run long-running stress tests");
     addStressFiles(b, stress_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
 }

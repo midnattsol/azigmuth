@@ -3,6 +3,7 @@ const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const rcu = @import("../rcu.zig");
+const side_runs = @import("../side_runs.zig");
 const common = @import("common.zig");
 const node_validity = @import("../core/node_validity.zig");
 
@@ -10,6 +11,13 @@ pub const PreparedAppendBlock = struct {
     old_block: ?u32 = null,
     new_block: u32,
     tail_index: ?u32 = null,
+};
+
+pub const AppliedAppend = struct {
+    block_idx: u32,
+    retire_prepared_old_block: bool = true,
+    retired_runs: [2]side_runs.RunDesc = undefined,
+    retired_run_count: u2 = 0,
 };
 
 pub const OldGroupChain = struct {
@@ -92,12 +100,29 @@ pub fn publishAdded(
 pub fn retireAdded(
     graph: *graph_core.GraphCore,
     forward_prepared: PreparedAppendBlock,
+    forward_applied: AppliedAppend,
     reverse_prepared: PreparedAppendBlock,
+    reverse_applied: AppliedAppend,
     old_source_groups: OldGroupChain,
     old_destination_groups: OldGroupChain,
 ) !void {
-    if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
-    if (reverse_prepared.old_block) |old_block| try rcu.retireBlockRev(graph, old_block);
+    if (forward_applied.retire_prepared_old_block) {
+        if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
+    }
+    if (reverse_applied.retire_prepared_old_block) {
+        if (reverse_prepared.old_block) |old_block| try rcu.retireBlockRev(graph, old_block);
+    }
+
+    var run_idx: u2 = 0;
+    while (run_idx < forward_applied.retired_run_count) : (run_idx += 1) {
+        try side_runs.retireRun(graph, forward_applied.retired_runs[run_idx], .fwd);
+    }
+
+    run_idx = 0;
+    while (run_idx < reverse_applied.retired_run_count) : (run_idx += 1) {
+        try side_runs.retireRun(graph, reverse_applied.retired_runs[run_idx], .rev);
+    }
+
     old_source_groups.retire(graph);
     old_destination_groups.retire(graph);
 }

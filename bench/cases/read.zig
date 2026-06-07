@@ -1,0 +1,64 @@
+const std = @import("std");
+const graphz = @import("graphz");
+const harness = @import("../harness.zig");
+
+const scan_iterations: usize = 32;
+const destination_count: usize = 4096;
+
+fn benchNeighborsScanClean(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.init(allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    for (0..destination_count) |_| {
+        const destination = try graph.addNode();
+        try graph.addEdge(source, destination, 0, .{});
+    }
+
+    var seen: usize = 0;
+    const start_ns = harness.nowNs();
+    for (0..scan_iterations) |_| {
+        var it = try graph.neighbors(source);
+        while (it.next() != null) seen += 1;
+        it.deinit();
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    if (seen != destination_count * scan_iterations) return error.CorruptGraph;
+    return .{ .ops = destination_count * scan_iterations, .elapsed_ns = elapsed_ns };
+}
+
+fn benchNeighborsScanTombstones(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.init(allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destinations = try allocator.alloc(graphz.NodeId, destination_count);
+    defer allocator.free(destinations);
+
+    for (destinations) |*destination| {
+        destination.* = try graph.addNode();
+        try graph.addEdge(source, destination.*, 0, .{});
+    }
+    for (destinations, 0..) |destination, destination_idx| {
+        if (destination_idx % 4 == 0) _ = try graph.removeNode(destination);
+    }
+
+    var visible_seen: usize = 0;
+    const start_ns = harness.nowNs();
+    for (0..scan_iterations) |_| {
+        var it = try graph.neighbors(source);
+        while (it.next() != null) visible_seen += 1;
+        it.deinit();
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    const visible_per_scan = destination_count - destination_count / 4;
+    if (visible_seen != visible_per_scan * scan_iterations) return error.CorruptGraph;
+    return .{ .ops = destination_count * scan_iterations, .elapsed_ns = elapsed_ns };
+}
+
+pub const cases = [_]harness.Case{
+    .{ .name = "read.neighbors_scan_clean", .run = benchNeighborsScanClean },
+    .{ .name = "read.neighbors_scan_tombstones", .run = benchNeighborsScanTombstones },
+};

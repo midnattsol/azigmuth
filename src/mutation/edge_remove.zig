@@ -180,9 +180,9 @@ fn removeBulkDestinationMatches(
     destination_staging.* = try rebuildReverseRemoveCount(graph, &remove_state.destination_pub, source.index, forward_result.removed, &scratch);
 
     var source_publish_adj = common.nodeAdjForSide(source_staging.*, endpoints.source_flags, .fwd);
-    repair.updateRepairDebtAfterEdgeMutation(graph, &source_publish_adj, source.index, .fwd, endpoints.source_flags.needs_repair_fwd);
+    repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
     var destination_publish_adj = common.nodeAdjForSide(destination_staging.*, endpoints.destination_flags, .rev);
-    repair.updateRepairDebtAfterEdgeMutation(graph, &destination_publish_adj, destination.index, .rev, endpoints.destination_flags.needs_repair_rev);
+    repair.updateRepairDebt(graph, &destination_publish_adj, destination.index, .rev);
 
     scratch.disarm();
 

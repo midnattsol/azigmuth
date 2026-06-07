@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const algorithms = graphz.algorithms;
 
 const testing = std.testing;
 
@@ -82,7 +83,7 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    const order = try graph.bfs(setup.root, testing.allocator);
+    const order = try algorithms.bfs(graph, setup.root, testing.allocator);
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
     stop.store(true, .release);
@@ -105,7 +106,7 @@ test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    const order = try graph.dfs(setup.root, testing.allocator);
+    const order = try algorithms.dfs(graph, setup.root, testing.allocator);
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
     stop.store(true, .release);
@@ -128,7 +129,7 @@ test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    const has_cycle = try graph.hasCycle(testing.allocator);
+    const has_cycle = try algorithms.hasCycle(graph, testing.allocator);
     traversal_active.store(false, .release);
     stop.store(true, .release);
 
@@ -149,7 +150,7 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    const order = try graph.bfs(setup.root, testing.allocator);
+    const order = try algorithms.bfs(graph, setup.root, testing.allocator);
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
 
@@ -171,7 +172,7 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    const order = try graph.dfs(setup.root, testing.allocator);
+    const order = try algorithms.dfs(graph, setup.root, testing.allocator);
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
 
@@ -193,7 +194,7 @@ test "algorithms concurrent: cycle tolerates node removed during traversal" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    const has_cycle = try graph.hasCycle(testing.allocator);
+    const has_cycle = try algorithms.hasCycle(graph, testing.allocator);
     traversal_active.store(false, .release);
 
     while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();

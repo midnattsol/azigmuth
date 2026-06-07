@@ -1,7 +1,5 @@
 const std = @import("std");
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const query = @import("../query.zig");
+const read_session = @import("read_session.zig");
 
 pub fn ensureBitCapacity(bitset: *std.DynamicBitSetUnmanaged, allocator: std.mem.Allocator, node_index: u32) !void {
     const required_len: usize = @as(usize, node_index) + 1;
@@ -9,14 +7,5 @@ pub fn ensureBitCapacity(bitset: *std.DynamicBitSetUnmanaged, allocator: std.mem
     try bitset.resize(allocator, required_len, false);
 }
 
-pub fn neighborIteratorOrNull(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!?query.NeighborIterator {
-    return query.neighbors(graph, node) catch |err| switch (err) {
-        error.InvalidNode => null,
-        else => err,
-    };
-}
-
-pub fn materializeNeighborsOrEmpty(graph: *const graph_core.GraphCore, node: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
-    var iter = try neighborIteratorOrNull(graph, node) orelse return allocator.alloc(types.NodeId, 0);
-    return query.materializeConsuming(&iter, allocator);
-}
+pub const ReadSession = read_session.ReadSession;
+pub const NeighborsCursor = read_session.NeighborsCursor;
