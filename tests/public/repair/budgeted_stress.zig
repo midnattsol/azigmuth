@@ -16,7 +16,7 @@ test "repair_budgeted: processes single node with repair debt" {
     // Remove the first 37 destination nodes (via removeNode), creating
     // tombstoned forward edges → repair debt.
     for (0..37) |i| {
-        try graph.removeNode(targets[i]);
+        _ = try graph.removeNode(targets[i]);
     }
     try graph.validate();
     const repaired = try graph.repairBudgeted(1);
@@ -43,7 +43,7 @@ test "repair_budgeted: processes multiple nodes in one call" {
     // Create tombstone debt by removing some destination nodes.
     for (0..node_count) |i| {
         for (0..10) |j| {
-            try graph.removeNode(all_targets[i][j]);
+            _ = try graph.removeNode(all_targets[i][j]);
         }
     }
     try graph.validate();
@@ -82,7 +82,7 @@ test "repair_budgeted: max_nodes limits work done" {
 
     for (0..node_count) |i| {
         for (0..10) |j| {
-            try graph.removeNode(all_targets[i][j]);
+            _ = try graph.removeNode(all_targets[i][j]);
         }
     }
     try graph.validate();
@@ -107,10 +107,10 @@ test "repair_budgeted: node with both fwd and rev debt counted once" {
     }
 
     for (0..32) |i| {
-        try graph.removeNode(targets[i]);
+        _ = try graph.removeNode(targets[i]);
     }
     for (0..16) |i| {
-        try graph.removeNode(senders[i]);
+        _ = try graph.removeNode(senders[i]);
     }
 
     try graph.validate();
@@ -172,7 +172,7 @@ test "repair_budgeted: repeated calls make progress" {
 
     for (0..node_count) |i| {
         for (0..10) |j| {
-            try graph.removeNode(all_targets[i][j]);
+            _ = try graph.removeNode(all_targets[i][j]);
         }
     }
     try graph.validate();
@@ -203,7 +203,7 @@ test "repair_budgeted: self-edge node repair works" {
     }
 
     for (0..32) |i| {
-        try graph.removeNode(targets[i]);
+        _ = try graph.removeNode(targets[i]);
     }
 
     try graph.validate();
@@ -221,7 +221,7 @@ test "repair_budgeted: repair after removeNode processes tombstoned edges" {
     for (0..50) |i| senders[i] = try graph.addNode();
     for (0..50) |i| try graph.addEdge(senders[i], hub, 0, .{});
 
-    try graph.removeNode(hub);
+    _ = try graph.removeNode(hub);
     try graph.validate();
 
     const repaired = try graph.repairBudgeted(50);
@@ -246,7 +246,7 @@ test "repair_budgeted: group count at max_boundary triggers repair" {
 
     for (0..250) |i| {
         if (i % 2 == 0) {
-            try graph.removeNode(targets[i]);
+            _ = try graph.removeNode(targets[i]);
         }
     }
 
@@ -273,7 +273,7 @@ test "repair_budgeted: verify repair debt queue is consumed" {
     }
 
     for (0..node_count) |i| {
-        try graph.removeNode(all_targets[i][0]);
+        _ = try graph.removeNode(all_targets[i][0]);
     }
     try graph.validate();
 

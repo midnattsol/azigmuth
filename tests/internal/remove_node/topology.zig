@@ -64,46 +64,6 @@ test "removeNode: new nodes after a removeNode receive fresh monotonic indices" 
     try graph.validate();
 }
 
-test "repairNode: consolidates a fragmented reverse adjacency into a valid layout" {
-    const allocator = std.heap.page_allocator;
-    var graph = try graph_mod.Graph.init(allocator);
-    defer graph.deinit();
-
-    const target = try graph.addNode();
-    const source_count: usize = 80;
-    var sources: [source_count]graph_mod.NodeId = undefined;
-    for (0..source_count) |source_index| {
-        sources[source_index] = try graph.addNode();
-        try graph.addEdge(sources[source_index], target, 0, 0);
-    }
-
-    const remove_indices = [_]usize{ 5, 10, 15, 20, 30, 40, 50, 60, 70, 75 };
-    for (remove_indices) |idx| {
-        _ = try graph.removeEdge(sources[idx], target);
-    }
-
-    const before_repair_adj = try graph.publishedNodeAdj(target);
-    try testing.expect(before_repair_adj.group_count_rev > 0 or before_repair_adj.block_count_rev > 1);
-
-    try graph.repairNode(target);
-
-    const after_repair_adj = try graph.publishedNodeAdj(target);
-    try testing.expectEqual(@as(usize, source_count - remove_indices.len), try graph.inDegree(target));
-    try testing.expect(after_repair_adj.block_count_rev >= 1);
-
-    var snapshot = try graph.inNeighbors(target);
-    const neighbor_list = try graph_mod.materializeConsuming(&snapshot, allocator);
-    defer allocator.free(neighbor_list);
-    try testing.expectEqual(@as(usize, source_count - remove_indices.len), neighbor_list.len);
-    for (neighbor_list) |neighbor| {
-        try testing.expect(graph.hasNode(neighbor));
-    }
-
-    const violations = try graph.debugValidate(allocator);
-    defer allocator.free(violations);
-    try testing.expectEqual(@as(usize, 0), violations.len);
-}
-
 test "block capacity: 64th edge keeps a single block, 65th triggers a second block" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

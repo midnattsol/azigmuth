@@ -7,7 +7,7 @@ const publish = @import("publish");
 
 const testing = std.testing;
 
-test "sortedRebuildForward: removes tombstones and packs sorted edges" {
+test "sorted rebuild forward: removes tombstones and packs sorted edges" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -45,7 +45,7 @@ test "sortedRebuildForward: removes tombstones and packs sorted edges" {
     try testing.expectEqual(constants.denseMask(6), out_blk.mask);
 }
 
-test "sortedRebuildForward: all edges are tombstones returns empty" {
+test "sorted rebuild forward: all tombstones returns empty" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -75,7 +75,7 @@ test "sortedRebuildForward: all edges are tombstones returns empty" {
     try testing.expectEqual(@as(usize, 0), result.new_blocks.items.len);
 }
 
-test "sortedRebuildReverse: removes tombstones and packs sorted sources" {
+test "sorted rebuild reverse: removes tombstones and packs sorted sources" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -114,7 +114,7 @@ test "sortedRebuildReverse: removes tombstones and packs sorted sources" {
     try testing.expectEqual(constants.denseMask(6), out_blk.mask);
 }
 
-test "sortedRebuildReverse: skip_source_index excludes specific source" {
+test "sorted rebuild reverse: skip_source_index excludes the requested source" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -150,7 +150,7 @@ test "sortedRebuildReverse: skip_source_index excludes specific source" {
     try testing.expectEqual(constants.denseMask(4), out_blk.mask);
 }
 
-test "sortedRebuildReverse: all sources are tombstones returns empty" {
+test "sorted rebuild reverse: all tombstones returns empty" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -181,7 +181,7 @@ test "sortedRebuildReverse: all sources are tombstones returns empty" {
     try testing.expectEqual(@as(usize, 0), result.new_blocks.items.len);
 }
 
-test "sortedRebuildForward: two blocks with mixed tombstones produce packed output" {
+test "sorted rebuild forward: two blocks with mixed tombstones produce packed output" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 

@@ -150,7 +150,7 @@ test "stress rcu: repairBudgeted tombstone scan runs safely under concurrent chu
     const source = try graph.addNode();
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try testing.expect((try graph.nodeAtConst(source)).publishedAdj().flags.needs_repair_fwd);
 
     // Churn node: continuously add/remove edges + reclaim, creating

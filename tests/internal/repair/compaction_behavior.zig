@@ -136,6 +136,94 @@ test "repair: reverse adjacency can be compacted independently" {
     try testing.expectEqual(@as(u16, 1), (try graph.publishedNodeAdj(destination)).block_count_rev);
 }
 
+test "repair: repairNode consolidates a fragmented reverse adjacency into a valid layout" {
+    const allocator = std.heap.page_allocator;
+    var graph = try graph_mod.Graph.init(allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const source_count: usize = 80;
+    var sources: [source_count]graph_mod.NodeId = undefined;
+    for (0..source_count) |source_index| {
+        sources[source_index] = try graph.addNode();
+        try graph.addEdge(sources[source_index], target, 0, 0);
+    }
+
+    const remove_indices = [_]usize{ 5, 10, 15, 20, 30, 40, 50, 60, 70, 75 };
+    for (remove_indices) |remove_idx| {
+        _ = try graph.removeEdge(sources[remove_idx], target);
+    }
+
+    const before_repair_adj = try graph.publishedNodeAdj(target);
+    try testing.expect(before_repair_adj.group_count_rev > 0 or before_repair_adj.block_count_rev > 1);
+
+    try graph.repairNode(target);
+
+    const after_repair_adj = try graph.publishedNodeAdj(target);
+    try testing.expectEqual(@as(usize, source_count - remove_indices.len), try graph.inDegree(target));
+    try testing.expect(after_repair_adj.block_count_rev >= 1);
+
+    var snapshot = try graph.inNeighbors(target);
+    const neighbor_list = try graph_mod.materializeConsuming(&snapshot, allocator);
+    defer allocator.free(neighbor_list);
+    try testing.expectEqual(@as(usize, source_count - remove_indices.len), neighbor_list.len);
+    for (neighbor_list) |neighbor| {
+        try testing.expect(graph.hasNode(neighbor));
+    }
+
+    const violations = try graph.debugValidate(allocator);
+    defer allocator.free(violations);
+    try testing.expectEqual(@as(usize, 0), violations.len);
+}
+
+test "repair: repairNode compacts under-full adjacent blocks" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    for (0..83) |_| {
+        _ = try graph.addNode();
+    }
+
+    const block0 = try graph.allocBlockFwd();
+    const block1 = try graph.allocBlockFwd();
+
+    var first_block_edges = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
+    var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
+    for (0..47) |edge_idx| {
+        first_block_edges.edges[edge_idx] = types.Edge{ .destination = @intCast(edge_idx + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    first_block_edges.mask = constants.denseMask(47);
+
+    for (0..36) |edge_idx| {
+        second_block_edges.edges[edge_idx] = types.Edge{ .destination = @intCast(edge_idx + 48), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    second_block_edges.mask = constants.denseMask(36);
+
+    const node = try graph.nodeAt(source);
+    publish.clearPublishedSides(node);
+    publish.publishedFwdSide(node).first_block = block0;
+    publish.publishedFwdSide(node).block_count = 2;
+    publish.setPublishedFwdDegree(node, @as(u22, @intCast(83)));
+    try publishReverseSourcesForForwardRange(&graph, source.index, 1, 47);
+    try publishReverseSourcesForForwardRange(&graph, source.index, 48, 36);
+    graph.graph.edge_count.store(83, .release);
+
+    try graph.repairNode(source);
+
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 83), try graph.outDegree(source));
+
+    var iterator = try graph.neighbors(source);
+    defer iterator.deinit();
+    const slice = try graph_mod.materializeConsuming(&iterator, testing.allocator);
+    defer testing.allocator.free(slice);
+    try testing.expectEqual(@as(usize, 83), slice.len);
+    for (1..slice.len) |edge_idx| {
+        try testing.expect(slice[edge_idx - 1].index < slice[edge_idx].index);
+    }
+}
+
 test "repair: no-op when every non-tail block meets occupancy" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

@@ -7,7 +7,7 @@ const adjacency_mod = graph_mod.adjacency_mod;
 
 const testing = std.testing;
 
-test "adjacency parity: tailBlockIndexSide returns correct tail for contiguous" {
+test "adjacency parity: tailBlockIndexSide returns the correct tail for contiguous layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -24,7 +24,7 @@ test "adjacency parity: tailBlockIndexSide returns correct tail for contiguous" 
     try testing.expectEqual(fwd.first_block + fwd.block_count - 1, tail.?);
 }
 
-test "adjacency parity: tailBlockIndexSide returns correct tail for grouped" {
+test "adjacency parity: tailBlockIndexSide returns the correct tail for grouped layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -41,7 +41,7 @@ test "adjacency parity: tailBlockIndexSide returns correct tail for grouped" {
     }
 }
 
-test "adjacency parity: tailBlockIndexSide returns null for empty" {
+test "adjacency parity: tailBlockIndexSide returns null for empty layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 

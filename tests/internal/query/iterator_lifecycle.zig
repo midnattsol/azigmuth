@@ -10,7 +10,7 @@ const rcu = graph_mod.repair_mod;
 
 const testing = std.testing;
 
-test "iterator: next() after deinit() returns null and is safe" {
+test "iterator lifecycle: next() after deinit() returns null and is safe" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -27,7 +27,7 @@ test "iterator: next() after deinit() returns null and is safe" {
     try testing.expect(it.next() == null);
 }
 
-test "iterator: snapshotDegree() after deinit() returns 0 and is safe" {
+test "iterator lifecycle: snapshotDegree() after deinit() returns 0 and is safe" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -43,7 +43,7 @@ test "iterator: snapshotDegree() after deinit() returns 0 and is safe" {
     try testing.expectEqual(@as(usize, 0), graph_mod.snapshotDegree(&it));
 }
 
-test "iterator copy: stale copied iterator becomes inert after owner deinit()" {
+test "iterator lifecycle: stale copied iterator becomes inert after owner deinit()" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -64,7 +64,7 @@ test "iterator copy: stale copied iterator becomes inert after owner deinit()" {
     try testing.expect(copied.next() == null);
 }
 
-test "iterator: double deinit() is harmless" {
+test "iterator lifecycle: double deinit() is harmless" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -77,7 +77,7 @@ test "iterator: double deinit() is harmless" {
     it.deinit(); // must not double-release the reader slot
 }
 
-test "iterator: next() and snapshotDegree() safe after iterator is consumed and deinited" {
+test "iterator lifecycle: next() and snapshotDegree() stay safe after iterator is consumed and deinited" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 

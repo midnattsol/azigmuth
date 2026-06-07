@@ -247,6 +247,41 @@ test "graph_builder: freeze transfers ownership and builder becomes inert" {
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 }
 
+test "graph_builder: frozen graph lifetime is independent of builder" {
+    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    const node = try builder.addNode();
+
+    var graph = try builder.freeze();
+    builder.deinit();
+
+    try testing.expect(graph.hasNode(node));
+    graph.deinit();
+}
+
+test "graph_builder: frozen graph remains mutable after freeze" {
+    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
+    try builder.addEdge(source, destination, 0, .{});
+
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    builder.deinit();
+
+    const extra = try graph.addNode();
+    try graph.addEdge(destination, extra, 1, .{});
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 2), graph.edgeCount());
+
+    var iter = try graph.neighbors(destination);
+    defer iter.deinit();
+    try testing.expectEqual(extra.index, iter.next().?.index);
+
+    var source_iter = try graph.neighbors(source);
+    defer source_iter.deinit();
+    try testing.expectEqual(destination.index, source_iter.next().?.index);
+}
+
 test "graph_builder: 500+ edges freeze produces a valid graph with zero debug violations" {
     var builder = try graphz.GraphBuilder.init(testing.allocator);
     defer builder.deinit();

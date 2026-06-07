@@ -2,54 +2,6 @@ const std = @import("std");
 const graphz = @import("graphz");
 const testing = std.testing;
 
-test "graph_builder: freeze on empty graph works" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    var g = try b.freeze();
-    g.deinit();
-}
-
-test "graph_builder: freeze after adding nodes and edges works" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const a = try b.addNode();
-    const b_node = try b.addNode();
-    const c = try b.addNode();
-
-    try b.addEdge(a, b_node, 0, .{});
-    try b.addEdge(b_node, c, 0, .{});
-    try b.addEdge(a, c, 0, .{});
-
-    var g = try b.freeze();
-    defer g.deinit();
-
-    try testing.expectEqual(@as(u64, 3), g.edgeCount());
-    try testing.expectEqual(@as(usize, 3), g.nodeCount());
-    try g.validate();
-}
-
-test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const a = try b.addNode();
-    const b_node = try b.addNode();
-
-    try b.addEdge(a, b_node, 0, .{});
-    try testing.expectError(error.EdgeAlreadyExists, b.addEdge(a, b_node, 0, .{}));
-}
-
-test "graph_builder: addEdge to non-existent node returns InvalidNode" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const a = try b.addNode();
-    try testing.expectError(error.InvalidNode, b.addEdge(a, .{ .index = 999 }, 0, .{}));
-    try testing.expectError(error.InvalidNode, b.addEdge(.{ .index = 999 }, a, 0, .{}));
-}
-
 test "graph_builder: freeze twice returns UnsupportedOperation" {
     var b = try graphz.GraphBuilder.init(testing.allocator);
     defer b.deinit();
@@ -81,20 +33,37 @@ test "graph_builder: addEdge after freeze returns UnsupportedOperation" {
     try testing.expectError(error.UnsupportedOperation, b.addEdge(a, b_node, 0, .{}));
 }
 
-test "graph_builder: freeze with no edges returns valid graph" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
+test "graph_builder: freeze OutOfMemory leaves builder usable" {
+    var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
+    var builder = try graphz.GraphBuilder.init(failing_allocator.allocator());
+    defer builder.deinit();
 
-    _ = try b.addNode();
-    _ = try b.addNode();
-    _ = try b.addNode();
+    failing_allocator.fail_index = failing_allocator.alloc_index;
+    try testing.expectError(error.OutOfMemory, builder.freeze());
 
-    var g = try b.freeze();
-    defer g.deinit();
+    failing_allocator.fail_index = std.math.maxInt(usize);
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    try graph.validate();
+}
 
-    try testing.expectEqual(@as(u64, 0), g.edgeCount());
-    try testing.expectEqual(@as(usize, 3), g.nodeCount());
-    try g.validate();
+test "graph_builder: freeze internal OutOfMemory leaves builder usable" {
+    var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
+    var builder = try graphz.GraphBuilder.init(failing_allocator.allocator());
+    defer builder.deinit();
+
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
+    try builder.addEdge(source, destination, 0, .{});
+
+    failing_allocator.fail_index = failing_allocator.alloc_index + 1;
+    try testing.expectError(error.OutOfMemory, builder.freeze());
+
+    failing_allocator.fail_index = std.math.maxInt(usize);
+    var graph = try builder.freeze();
+    defer graph.deinit();
+    try graph.validate();
+    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 }
 
 test "graph_builder: graph from freeze has correct adjacency" {
@@ -120,42 +89,6 @@ test "graph_builder: graph from freeze has correct adjacency" {
     try testing.expectEqual(@as(usize, 2), neighbors.len);
     try testing.expectEqual(b_node.index, neighbors[0].index);
     try testing.expectEqual(c.index, neighbors[1].index);
-}
-
-test "graph_builder: self-edge in builder works" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const node = try b.addNode();
-    try b.addEdge(node, node, 0, .{});
-
-    var g = try b.freeze();
-    defer g.deinit();
-
-    try testing.expectEqual(@as(u64, 1), g.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try g.outDegree(node));
-    try testing.expectEqual(@as(usize, 1), try g.inDegree(node));
-}
-
-test "graph_builder: many edges added then freeze" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const node_count: usize = 10;
-    var nodes: [node_count]graphz.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try b.addNode();
-
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i != j) try b.addEdge(nodes[i], nodes[j], 0, .{});
-        }
-    }
-
-    var g = try b.freeze();
-    defer g.deinit();
-
-    try g.validate();
-    try testing.expectEqual(@as(u64, node_count * (node_count - 1)), g.edgeCount());
 }
 
 test "graph_builder: builder deinit without freeze frees graph" {
@@ -222,45 +155,4 @@ test "graph_builder: reverse adjacency sorted after freeze" {
         prev_idx = src_node.index;
         first = false;
     }
-}
-
-test "graph_builder: freeze produces graph that passes validate" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const node_count: usize = 15;
-    var nodes: [node_count]graphz.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try b.addNode();
-
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i != j) try b.addEdge(nodes[i], nodes[j], 0, .{});
-        }
-    }
-
-    var g = try b.freeze();
-    defer g.deinit();
-
-    try g.validate();
-
-    const violations = try g.debugValidate(testing.allocator);
-    defer testing.allocator.free(violations);
-    try testing.expectEqual(@as(usize, 0), violations.len);
-}
-
-test "graph_builder: degree cache correct after freeze" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
-    defer b.deinit();
-
-    const source = try b.addNode();
-    const target_count: usize = 50;
-    var targets: [target_count]graphz.NodeId = undefined;
-    for (0..target_count) |i| targets[i] = try b.addNode();
-    for (0..target_count) |i| try b.addEdge(source, targets[i], 0, .{});
-
-    var g = try b.freeze();
-    defer g.deinit();
-
-    try testing.expectEqual(@as(usize, target_count), try g.outDegree(source));
-    try g.validate();
 }

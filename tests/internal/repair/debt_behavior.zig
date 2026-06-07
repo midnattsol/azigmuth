@@ -7,6 +7,148 @@ const publish = @import("publish");
 
 const testing = std.testing;
 
+test "repair debt: needs_repair flag alone is sufficient for repairBudgeted discovery" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    for (0..65) |_| {
+        const destination = try graph.addNode();
+        try graph.addEdge(source, destination, 0, 0);
+    }
+
+    for (1..1 + 20) |destination_idx| {
+        _ = graph.removeEdge(source, .{ .index = @intCast(destination_idx) }) catch {};
+    }
+
+    graph.graph.repair_fwd.clearRetainingCapacity();
+    graph.graph.repair_rev.clearRetainingCapacity();
+
+    const repaired = try graph.repairBudgeted(10);
+    try testing.expect(repaired > 0);
+    try graph.validate();
+}
+
+test "repair debt: stale entries in repair queue do not break repairBudgeted" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    for (0..65) |_| {
+        const destination = try graph.addNode();
+        try graph.addEdge(source, destination, 0, 0);
+    }
+    for (1..1 + 20) |destination_idx| {
+        _ = graph.removeEdge(source, .{ .index = @intCast(destination_idx) }) catch {};
+    }
+
+    try graph.graph.repair_fwd.append(graph.graph.allocator, 99999);
+    try graph.graph.repair_rev.append(graph.graph.allocator, 99998);
+
+    const repaired = try graph.repairBudgeted(5);
+    try testing.expect(repaired > 0);
+    try graph.validate();
+}
+
+test "repair debt: repairBudgeted ignores removed nodes" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+    _ = try graph.addNode();
+
+    _ = try graph.removeNode(source);
+    try graph.graph.repair_fwd.append(graph.graph.allocator, source.index);
+
+    const repaired = try graph.repairBudgeted(5);
+    try testing.expectEqual(@as(usize, 0), repaired);
+    try graph.validate();
+}
+
+test "repair debt: updateRepairDebtSide flags forward tombstones immediately after removeNode" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+
+    _ = try graph.removeNode(destination);
+
+    const source_meta = (try graph.nodeAtConst(source)).loadPublishedMeta();
+    try testing.expect(source_meta.needs_repair_fwd);
+    try graph.validate();
+}
+
+test "repair debt: no-op repairBudgeted returns 0 when no debt exists" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+
+    try graph.validate();
+    const repaired = try graph.repairBudgeted(10);
+    try testing.expectEqual(@as(usize, 0), repaired);
+}
+
+test "repair debt: repairBudgeted with max_nodes = 0 repairs nothing" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+
+    try graph.validate();
+    const repaired = try graph.repairBudgeted(0);
+    try testing.expectEqual(@as(usize, 0), repaired);
+}
+
+test "repair debt: repairBudgeted processes queued repair debt" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    for (0..83) |_| {
+        _ = try graph.addNode();
+    }
+
+    const block0 = try graph.allocBlockFwd();
+    const block1 = try graph.allocBlockFwd();
+    var first_block_edges = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
+    var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
+
+    for (0..47) |edge_idx| {
+        first_block_edges.edges[edge_idx] = types.Edge{ .destination = @intCast(edge_idx + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    first_block_edges.mask = constants.denseMask(47);
+    for (0..36) |edge_idx| {
+        second_block_edges.edges[edge_idx] = types.Edge{ .destination = @intCast(edge_idx + 48), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    }
+    second_block_edges.mask = constants.denseMask(36);
+
+    const node = try graph.nodeAt(source);
+    publish.clearPublishedSides(node);
+    publish.publishedFwdSide(node).first_block = block0;
+    publish.publishedFwdSide(node).block_count = 2;
+    publish.setPublishedFlags(node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    publish.setPublishedFwdDegree(node, @as(u22, @intCast(83)));
+    try publishReverseSourcesForForwardRange(&graph, source.index, 1, 47);
+    try publishReverseSourcesForForwardRange(&graph, source.index, 48, 36);
+    graph.graph.edge_count.store(83, .release);
+    try graph.graph.repair_fwd.append(graph.graph.allocator, source.index);
+
+    const compacted = try graph.repairBudgeted(1);
+    try testing.expect(compacted > 0);
+    try testing.expectEqual(@as(usize, 0), graph.graph.repair_fwd.items.len);
+    try graph.validate();
+    try testing.expectEqual(@as(usize, 83), try graph.outDegree(source));
+}
+
 fn addNodesForTest(graph: *graph_mod.Graph, count: usize) !void {
     for (0..count) |_| {
         _ = try graph.addNode();
