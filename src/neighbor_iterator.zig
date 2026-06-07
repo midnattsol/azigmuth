@@ -47,7 +47,7 @@ pub const NeighborIterator = struct {
 
     fn loadNextNonEmptyMask(self: *NeighborIterator) bool {
         while (true) {
-            if (self.blocks_remaining == 0) {
+            while (self.blocks_remaining == 0) {
                 if (!self.advanceToNextGroup()) return false;
             }
 

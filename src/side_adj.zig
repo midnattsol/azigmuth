@@ -7,71 +7,15 @@ const adjacency = @import("adjacency.zig");
 const rcu = @import("rcu.zig");
 const scratch_mod = @import("mutation/scratch.zig");
 const claims_mod = @import("mutation/claims.zig");
+const side_runs = @import("side_runs.zig");
 
 pub const AdjSlot = struct {
     block_idx: u32,
     slot: u7,
 };
 
-pub const BlockCursor = struct {
-    side: types.SideAdj,
-    current_block_idx: u32 = 0,
-    blocks_remaining: u16 = 0,
-    group_idx: u32 = constants.END_OF_CHAIN,
-    groups_remaining: u16 = 0,
-    contiguous: bool = false,
-    done: bool = true,
-
-    pub fn init(side: types.SideAdj) BlockCursor {
-        if (side.block_count == 0) {
-            return .{ .side = side };
-        }
-
-        if (side.group_count == 0) {
-            return .{
-                .side = side,
-                .current_block_idx = side.first_block,
-                .blocks_remaining = side.block_count,
-                .groups_remaining = 1,
-                .contiguous = true,
-                .done = false,
-            };
-        }
-
-        return .{
-            .side = side,
-            .group_idx = side.first_group,
-            .groups_remaining = side.group_count,
-            .done = false,
-        };
-    }
-
-    pub fn next(self: *BlockCursor, graph: *const graph_core.GraphCore) ?u32 {
-        if (self.done) return null;
-
-        while (self.blocks_remaining == 0) {
-            if (self.contiguous or self.groups_remaining == 0) {
-                self.done = true;
-                return null;
-            }
-            if (self.group_idx >= graph.group_count or self.group_idx == constants.END_OF_CHAIN) {
-                self.done = true;
-                return null;
-            }
-
-            const group = page_ops.groupAtConst(graph, self.group_idx);
-            self.current_block_idx = group.start;
-            self.blocks_remaining = group.count;
-            self.group_idx = group.next;
-            self.groups_remaining -= 1;
-        }
-
-        const block_idx = self.current_block_idx;
-        self.current_block_idx += 1;
-        self.blocks_remaining -= 1;
-        return block_idx;
-    }
-};
+pub const RunDesc = side_runs.RunDesc;
+pub const BlockCursor = side_runs.BlockCursor;
 
 pub const sideAdjOfNode = adjacency.sideAdjOfNode;
 
@@ -164,90 +108,7 @@ pub fn countLiveInSide(
     return total;
 }
 
-pub const SideBuilder = struct {
-    run_start_idx: u32 = 0,
-    run_block_count: u16 = 0,
-    total_blocks: u16 = 0,
-    first_block_set: bool = false,
-    tail_group_idx: ?u32 = null,
-
-    pub fn begin(side_adj: *types.SideAdj) SideBuilder {
-        side_adj.first_block = 0;
-        side_adj.block_count = 0;
-        side_adj.group_count = 0;
-        side_adj.first_group = 0;
-        return .{};
-    }
-
-    pub fn appendBlock(
-        self: *SideBuilder,
-        side_adj: *types.SideAdj,
-        graph: *graph_core.GraphCore,
-        block_idx: u32,
-        scratch: *scratch_mod.MutationScratch,
-    ) !void {
-        if (self.run_block_count > 0 and block_idx == self.run_start_idx + self.run_block_count) {
-            self.run_block_count += 1;
-        } else {
-            if (self.run_block_count > 0) try self.flush(side_adj, graph, scratch);
-            self.run_start_idx = block_idx;
-            self.run_block_count = 1;
-        }
-    }
-
-    fn flush(
-        self: *SideBuilder,
-        side_adj: *types.SideAdj,
-        graph: *graph_core.GraphCore,
-        scratch: *scratch_mod.MutationScratch,
-    ) !void {
-        if (self.run_block_count == 0) return;
-        if (!self.first_block_set) {
-            side_adj.first_block = self.run_start_idx;
-            side_adj.block_count = self.run_block_count;
-            self.first_block_set = true;
-        } else if (self.tail_group_idx == null and side_adj.group_count == 0) {
-            const prefix_group_idx = try scratch.allocGroup(graph);
-            const group_idx = try scratch.allocGroup(graph);
-            page_ops.groupAt(graph, prefix_group_idx).* = .{
-                .start = side_adj.first_block,
-                .count = side_adj.block_count,
-                .next = group_idx,
-            };
-            page_ops.groupAt(graph, group_idx).* = .{
-                .start = self.run_start_idx,
-                .count = self.run_block_count,
-                .next = constants.END_OF_CHAIN,
-            };
-            side_adj.first_group = prefix_group_idx;
-            side_adj.group_count = 2;
-            self.tail_group_idx = group_idx;
-        } else {
-            if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return error.RepairRequired;
-            const group_idx = try scratch.allocGroup(graph);
-            page_ops.groupAt(graph, group_idx).* = .{
-                .start = self.run_start_idx,
-                .count = self.run_block_count,
-                .next = constants.END_OF_CHAIN,
-            };
-            page_ops.groupAt(graph, self.tail_group_idx.?).next = group_idx;
-            self.tail_group_idx = group_idx;
-            side_adj.group_count += 1;
-        }
-        self.total_blocks += self.run_block_count;
-        self.run_block_count = 0;
-    }
-
-    pub fn finish(
-        self: *SideBuilder,
-        side_adj: *types.SideAdj,
-        graph: *graph_core.GraphCore,
-        scratch: *scratch_mod.MutationScratch,
-    ) !void {
-        if (self.run_block_count > 0) try self.flush(side_adj, graph, scratch);
-        side_adj.block_count = self.total_blocks;
-    }
-};
+pub const SideBuilder = side_runs.SideBuilder;
 
 pub fn collectBlockList(
     graph: *const graph_core.GraphCore,
@@ -258,15 +119,7 @@ pub fn collectBlockList(
     out: *std.ArrayList(u32),
 ) !void {
     try adjacency.validateSideAdjLayout(graph, published_side_adj);
-    var cursor = BlockCursor.init(published_side_adj);
-    while (cursor.next(graph)) |block_idx| {
-        if (old_block_idx != null and block_idx == old_block_idx.?) {
-            if (new_block_idx) |replacement_block_idx| try out.append(graph.allocator, replacement_block_idx);
-        } else {
-            try out.append(graph.allocator, block_idx);
-        }
-    }
-    if (append_block_idx) |tail_block_idx| try out.append(graph.allocator, tail_block_idx);
+    try side_runs.collectBlockList(graph, published_side_adj, old_block_idx, new_block_idx, append_block_idx, out);
 }
 
 pub fn buildSideFromBlocks(
@@ -275,17 +128,7 @@ pub fn buildSideFromBlocks(
     blocks: []const u32,
     scratch: *scratch_mod.MutationScratch,
 ) !void {
-    side_adj.first_block = 0;
-    side_adj.block_count = 0;
-    side_adj.group_count = 0;
-    side_adj.first_group = 0;
-    if (blocks.len == 0) return;
-
-    var builder = SideBuilder.begin(side_adj);
-    for (blocks) |block_idx| {
-        try builder.appendBlock(side_adj, graph, block_idx, scratch);
-    }
-    try builder.finish(side_adj, graph, scratch);
+    try side_runs.buildSideFromBlocks(side_adj, graph, blocks, scratch);
 }
 
 pub fn retireSide(
@@ -293,31 +136,7 @@ pub fn retireSide(
     adj_before: types.NodeAdj,
     comptime side: adjacency.AdjSide,
 ) !void {
-    const side_adj = sideAdjOfNode(adj_before, side);
-    if (side_adj.block_count == 0) return;
-
-    try forEachBlockInSide(graph, side_adj, side, undefined, struct {
-        fn callback(
-            inner_graph: *const graph_core.GraphCore,
-            _: void,
-            block_idx: u32,
-        ) !void {
-            switch (side) {
-                .fwd => try rcu.retireBlockFwd(@constCast(inner_graph), block_idx),
-                .rev => try rcu.retireBlockRev(@constCast(inner_graph), block_idx),
-            }
-        }
-    }.callback);
-
-    if (side_adj.group_count == 0) return;
-
-    var group_idx = side_adj.first_group;
-    var remaining = side_adj.group_count;
-    while (remaining > 0 and group_idx != constants.END_OF_CHAIN) : (remaining -= 1) {
-        const next_group_idx = page_ops.groupAtConst(graph, group_idx).next;
-        rcu.retireGroup(graph, group_idx);
-        group_idx = next_group_idx;
-    }
+    try side_runs.retireSide(graph, sideAdjOfNode(adj_before, side), side);
 }
 
 pub fn publishBothAdj(
@@ -359,13 +178,8 @@ pub fn publishRevAdj(
 }
 
 pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
-    var group_idx = first_group_idx;
-    var remaining = group_count;
-    while (remaining > 0 and group_idx != constants.END_OF_CHAIN) : (remaining -= 1) {
-        const next_group_idx = page_ops.groupAtConst(graph, group_idx).next;
-        rcu.retireGroup(graph, group_idx);
-        group_idx = next_group_idx;
-    }
+    if (group_count == 0) return;
+    rcu.retireGroupSpan(graph, first_group_idx, group_count);
 }
 
 /// Searches forward adjacency for a specific (destination, edge_id) pair.
@@ -393,14 +207,13 @@ pub fn findSlotInAdjById(
         return .{ .block_idx = slot.block_idx, .slot = slot.slot };
     }
 
-    var group_idx = first_group_idx;
-    var visited: u16 = 0;
-    while (visited < group_count) : (visited += 1) {
+    const end_group = first_group_idx + group_count;
+    for (first_group_idx..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
         if (adjacency.findForwardSlotByIdInRun(graph, group.start, group.count, destination_idx, edge_id)) |slot| {
             return .{ .block_idx = slot.block_idx, .slot = slot.slot };
         }
-        group_idx = group.next;
     }
     return null;
 }
@@ -420,13 +233,11 @@ pub fn findSlotInAdj(
         return findSlotInBlockRun(graph, first_block_idx, block_count, target, side);
     }
 
-    var group_idx = first_group_idx;
-    var visited: u16 = 0;
-    while (visited < group_count) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) return null;
+    const end_group = first_group_idx + group_count;
+    for (first_group_idx..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
         if (findSlotInBlockRun(graph, group.start, group.count, target, side)) |slot| return slot;
-        group_idx = group.next;
     }
     return null;
 }

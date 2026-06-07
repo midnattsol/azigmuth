@@ -66,13 +66,11 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
         }
 
         if (adjacency.group_count_fwd > 0) {
-            var group_idx = adjacency.first_group_fwd;
-            var visited_groups: u32 = 0;
-            while (group_idx != constants.END_OF_CHAIN and visited_groups < adjacency.group_count_fwd) : (visited_groups += 1) {
-                if (group_idx >= group_limit) {
-                    try list.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_idx } });
-                    break;
-                }
+            const end_group = adjacency.first_group_fwd + adjacency.group_count_fwd;
+            if (end_group > group_limit) {
+                try list.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = adjacency.first_group_fwd } });
+            } else for (adjacency.first_group_fwd..end_group) |group_idx_usize| {
+                const group_idx: u32 = @intCast(group_idx_usize);
                 if (owned_groups_debug.isSet(group_idx)) {
                     try list.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
                 }
@@ -83,20 +81,14 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
                 if (retired_groups_debug.isSet(group_idx)) {
                     try list.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
                 }
-                group_idx = page_ops.groupAtConst(graph, group_idx).next;
-            }
-            if (visited_groups != adjacency.group_count_fwd) {
-                try list.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = adjacency.first_group_fwd } });
             }
         }
         if (adjacency.group_count_rev > 0) {
-            var group_idx = adjacency.first_group_rev;
-            var visited_groups: u32 = 0;
-            while (group_idx != constants.END_OF_CHAIN and visited_groups < adjacency.group_count_rev) : (visited_groups += 1) {
-                if (group_idx >= group_limit) {
-                    try list.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_idx } });
-                    break;
-                }
+            const end_group = adjacency.first_group_rev + adjacency.group_count_rev;
+            if (end_group > group_limit) {
+                try list.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = adjacency.first_group_rev } });
+            } else for (adjacency.first_group_rev..end_group) |group_idx_usize| {
+                const group_idx: u32 = @intCast(group_idx_usize);
                 if (owned_groups_debug.isSet(group_idx)) {
                     try list.append(allocator, .{ .block_double_owned = .{ .block = group_idx } });
                 }
@@ -107,10 +99,6 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
                 if (retired_groups_debug.isSet(group_idx)) {
                     try list.append(allocator, .{ .retired_block_reachable = .{ .block = group_idx, .node = node_id } });
                 }
-                group_idx = page_ops.groupAtConst(graph, group_idx).next;
-            }
-            if (visited_groups != adjacency.group_count_rev) {
-                try list.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = adjacency.first_group_rev } });
             }
         }
 

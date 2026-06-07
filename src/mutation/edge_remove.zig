@@ -8,6 +8,8 @@ const rcu = @import("../rcu.zig");
 const repair = @import("../maintenance/repair.zig");
 const common = @import("common.zig");
 const shared = @import("edge_shared.zig");
+const local_side_edit = @import("local_side_edit.zig");
+const structural_rebuild = @import("structural_rebuild.zig");
 
 const RemovalPlan = struct {
     found: common.AdjSlot,
@@ -49,12 +51,6 @@ const ReverseRemovalContext = struct {
     remaining: u32,
     scratch: *common.MutationScratch,
     block_list: *std.ArrayList(u32),
-};
-
-const ClonedGroupChain = struct {
-    first_group: u32,
-    last_group: u32,
-    previous_to_last: ?u32,
 };
 
 fn loadRemoveState(endpoints: *const shared.EndpointState) RemoveState {
@@ -105,51 +101,14 @@ fn retireRemoved(
     remove_state.old_destination_groups.retire(graph);
 }
 
-fn cloneGroupChain(
-    graph: *graph_core.GraphCore,
-    side_adj: *const types.SideAdj,
-    scratch: *common.MutationScratch,
-) !ClonedGroupChain {
-    try adjacency.validateSideAdjLayout(graph, side_adj.*);
-    std.debug.assert(side_adj.group_count > 0);
-
-    var group_idx = side_adj.first_group;
-    var visited: u16 = 0;
-    var first_group: ?u32 = null;
-    var previous_group: ?u32 = null;
-    var previous_to_last: ?u32 = null;
-    var last_group: u32 = undefined;
-
-    while (visited < side_adj.group_count) : (visited += 1) {
-        const cloned_group_idx = try scratch.allocGroup(graph);
-        page_ops.groupAt(graph, cloned_group_idx).* = page_ops.groupAtConst(graph, group_idx).*;
-        page_ops.groupAt(graph, cloned_group_idx).next = constants.END_OF_CHAIN;
-
-        if (first_group == null) first_group = cloned_group_idx;
-        if (previous_group) |previous| {
-            page_ops.groupAt(graph, previous).next = cloned_group_idx;
-            previous_to_last = previous;
-        }
-
-        previous_group = cloned_group_idx;
-        last_group = cloned_group_idx;
-        group_idx = page_ops.groupAtConst(graph, group_idx).next;
-    }
-
-    return .{
-        .first_group = first_group.?,
-        .last_group = last_group,
-        .previous_to_last = if (side_adj.group_count > 1) previous_to_last else null,
-    };
-}
-
-fn removeLocated(
+fn removeSingleLocated(
     graph: *graph_core.GraphCore,
     endpoints: *const shared.EndpointState,
     remove_state: RemoveState,
     source: types.NodeId,
     destination: types.NodeId,
     forward_found: common.AdjSlot,
+    allow_structural_rebuild: bool,
 ) !bool {
     const reverse_found = common.findSlotInAdj(
         graph,
@@ -164,6 +123,11 @@ fn removeLocated(
     const forward_plan = try planRemovalSide(graph, &remove_state.source_pub, forward_found, .fwd);
     const reverse_plan = try planRemovalSide(graph, &remove_state.destination_pub, reverse_found, .rev);
 
+    if (!allow_structural_rebuild) {
+        if (!try local_side_edit.isRemovalLocal(graph, &remove_state.source_pub, forward_found.block_idx)) return error.RepairRequired;
+        if (!try local_side_edit.isRemovalLocal(graph, &remove_state.destination_pub, reverse_found.block_idx)) return error.RepairRequired;
+    }
+
     endpoints.source_node.copyPublishedToStagingFwd(endpoints.source_meta);
     endpoints.destination_node.copyPublishedToStagingRev(endpoints.destination_meta);
     const source_staging = endpoints.source_node.stagingFwd(endpoints.source_meta);
@@ -173,8 +137,8 @@ fn removeLocated(
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
 
-    const source_build = try applyRemovalPlanSide(graph, source_staging, &remove_state.source_pub, forward_plan, .fwd, &scratch);
-    const destination_build = try applyRemovalPlanSide(graph, destination_staging, &remove_state.destination_pub, reverse_plan, .rev, &scratch);
+    const source_build = try applyRemovalPlanSide(graph, source_staging, &remove_state.source_pub, forward_plan, .fwd, &scratch, allow_structural_rebuild);
+    const destination_build = try applyRemovalPlanSide(graph, destination_staging, &remove_state.destination_pub, reverse_plan, .rev, &scratch, allow_structural_rebuild);
 
     var source_publish_adj = common.nodeAdjForSide(source_staging.*, endpoints.source_flags, .fwd);
     repair.updateRepairDebtAfterEdgeMutation(graph, &source_publish_adj, source.index, .fwd, endpoints.source_flags.needs_repair_fwd);
@@ -190,7 +154,7 @@ fn removeLocated(
     return true;
 }
 
-fn removeAllDestinationMatches(
+fn removeBulkDestinationMatches(
     graph: *graph_core.GraphCore,
     endpoints: *const shared.EndpointState,
     remove_state: RemoveState,
@@ -199,7 +163,7 @@ fn removeAllDestinationMatches(
 ) !bool {
     const probe = try probeForwardDestinationMatches(graph, &remove_state.source_pub, destination.index);
     if (probe.found == null) return false;
-    if (!probe.has_multiple) return removeLocated(graph, endpoints, remove_state, source, destination, probe.found.?);
+    if (!probe.has_multiple) return removeSingleLocated(graph, endpoints, remove_state, source, destination, probe.found.?, false);
 
     endpoints.source_node.copyPublishedToStagingFwd(endpoints.source_meta);
     endpoints.destination_node.copyPublishedToStagingRev(endpoints.destination_meta);
@@ -304,7 +268,13 @@ fn applyRemovalPlanSide(
     plan: RemovalPlan,
     comptime side: adjacency.AdjSide,
     scratch: *common.MutationScratch,
+    allow_structural_rebuild: bool,
 ) !RemovalBuild {
+    if (!allow_structural_rebuild) {
+        const tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, published_side)) orelse return error.CorruptGraph;
+        if (published_side.block_count > 1 and plan.found.block_idx != tail_idx) return error.RepairRequired;
+    }
+
     const old_block = plan.found.block_idx;
     const new_block = try scratch.allocBlock(graph, side);
     if (new_block == old_block) return error.CorruptGraph;
@@ -337,139 +307,15 @@ fn applyRemovalPlanSide(
         },
     }
 
-    if (try tryApplyRemovalPlanSideFast(graph, staging_side, published_side, plan, new_block, new_live, scratch)) {
+    if (try local_side_edit.tryApplyRemovalPlanFast(graph, staging_side, published_side, plan.found.block_idx, new_block, new_live, scratch)) {
         return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
     }
 
-    var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
-    defer block_list.deinit(graph.allocator);
-    try common.collectBlockList(
-        graph,
-        published_side.*,
-        old_block,
-        if (new_live > 0) new_block else null,
-        null,
-        &block_list,
-    );
-    try common.buildSideFromBlocks(staging_side, graph, block_list.items, scratch);
+    if (!allow_structural_rebuild) return error.RepairRequired;
+
+    try structural_rebuild.rebuildAfterSingleRemoval(graph, staging_side, published_side, old_block, if (new_live > 0) new_block else null, scratch);
 
     return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
-}
-
-fn applySingleBlockRemovalFast(staging_side: *types.SideAdj, new_block: u32, new_live: u7) bool {
-    if (new_live == 0) {
-        staging_side.first_block = 0;
-        staging_side.block_count = 0;
-        staging_side.group_count = 0;
-        staging_side.first_group = 0;
-        return true;
-    }
-
-    staging_side.first_block = new_block;
-    staging_side.block_count = 1;
-    staging_side.group_count = 0;
-    staging_side.first_group = 0;
-    return true;
-}
-
-fn tryApplyContiguousTailRemovalFast(
-    graph: *graph_core.GraphCore,
-    staging_side: *types.SideAdj,
-    published_side: *const types.SideAdj,
-    new_block: u32,
-    new_live: u7,
-    scratch: *common.MutationScratch,
-) !bool {
-    if (new_live == 0) {
-        staging_side.block_count -= 1;
-        return true;
-    }
-
-    const prefix_group_idx = try scratch.allocGroup(graph);
-    const tail_group_idx = try scratch.allocGroup(graph);
-    page_ops.groupAt(graph, prefix_group_idx).* = .{
-        .start = published_side.first_block,
-        .count = published_side.block_count - 1,
-        .next = tail_group_idx,
-    };
-    page_ops.groupAt(graph, tail_group_idx).* = .{
-        .start = new_block,
-        .count = 1,
-        .next = constants.END_OF_CHAIN,
-    };
-    staging_side.first_group = prefix_group_idx;
-    staging_side.group_count = 2;
-    return true;
-}
-
-fn tryApplyGroupedTailRemovalFast(
-    graph: *graph_core.GraphCore,
-    staging_side: *types.SideAdj,
-    published_side: *const types.SideAdj,
-    new_block: u32,
-    new_live: u7,
-    scratch: *common.MutationScratch,
-) !bool {
-    const cloned = try cloneGroupChain(graph, published_side, scratch);
-    const last_group = page_ops.groupAt(graph, cloned.last_group);
-    staging_side.first_group = cloned.first_group;
-
-    if (new_live == 0) {
-        if (last_group.count > 1) {
-            last_group.count -= 1;
-            staging_side.block_count -= 1;
-            return true;
-        }
-
-        if (cloned.previous_to_last) |previous_group_idx| {
-            page_ops.groupAt(graph, previous_group_idx).next = constants.END_OF_CHAIN;
-            scratch.freeGroup(graph, cloned.last_group);
-            staging_side.group_count -= 1;
-            staging_side.block_count -= 1;
-            return true;
-        }
-
-        return false;
-    }
-
-    if (last_group.count == 1) {
-        last_group.start = new_block;
-        return true;
-    }
-
-    if (published_side.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
-
-    const tail_group_idx = try scratch.allocGroup(graph);
-    page_ops.groupAt(graph, tail_group_idx).* = .{
-        .start = new_block,
-        .count = 1,
-        .next = constants.END_OF_CHAIN,
-    };
-    last_group.count -= 1;
-    last_group.next = tail_group_idx;
-    staging_side.group_count += 1;
-    return true;
-}
-
-fn tryApplyRemovalPlanSideFast(
-    graph: *graph_core.GraphCore,
-    staging_side: *types.SideAdj,
-    published_side: *const types.SideAdj,
-    plan: RemovalPlan,
-    new_block: u32,
-    new_live: u7,
-    scratch: *common.MutationScratch,
-) !bool {
-    if (published_side.block_count == 1) return applySingleBlockRemovalFast(staging_side, new_block, new_live);
-
-    const tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, published_side)) orelse return error.CorruptGraph;
-    if (plan.found.block_idx != tail_idx) return false;
-
-    if (published_side.group_count == 0) {
-        return try tryApplyContiguousTailRemovalFast(graph, staging_side, published_side, new_block, new_live, scratch);
-    }
-
-    return try tryApplyGroupedTailRemovalFast(graph, staging_side, published_side, new_block, new_live, scratch);
 }
 
 fn rebuildForwardRemoveAll(
@@ -643,7 +489,20 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     defer writer_guard.end();
 
     const remove_state = loadRemoveState(&endpoints);
-    const removed = try removeAllDestinationMatches(graph, &endpoints, remove_state, source, destination);
+    const removed = if (graph.multigraph_enabled)
+        try removeBulkDestinationMatches(graph, &endpoints, remove_state, source, destination)
+    else blk: {
+        const forward_found = common.findSlotInAdj(
+            graph,
+            remove_state.source_pub.first_block,
+            remove_state.source_pub.block_count,
+            remove_state.source_pub.group_count,
+            remove_state.source_pub.first_group,
+            destination.index,
+            .fwd,
+        ) orelse break :blk false;
+        break :blk try removeSingleLocated(graph, &endpoints, remove_state, source, destination, forward_found, false);
+    };
     if (!removed) return false;
 
     rcu.bumpEpoch(graph);
@@ -671,7 +530,7 @@ pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, dest
         destination.index,
         edge_id.local,
     ) orelse return false;
-    const removed = try removeLocated(graph, &endpoints, remove_state, source, destination, forward_found);
+    const removed = try removeSingleLocated(graph, &endpoints, remove_state, source, destination, forward_found, false);
     if (!removed) return false;
 
     rcu.bumpEpoch(graph);

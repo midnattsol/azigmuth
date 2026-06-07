@@ -161,8 +161,7 @@ pub fn updateRepairDebtAfterEdgeMutation(
         return;
     }
 
-    const published_side = side_adj.sideAdjOfNode(adj.*, side);
-    const needs_repair = previous_flag or published_side.group_count > 0;
+    const needs_repair = previous_flag or computeNeedsRepair(graph, adj, side);
     setRepairFlag(adj, side, needs_repair);
     if (!previous_flag and needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
 }
@@ -175,7 +174,7 @@ pub fn computeNeedsRepair(
     const published_side = side_adj.sideAdjOfNode(adj.*, side);
     const report = layout_debt.analyzeSideLayout(graph, published_side, side) catch return true;
 
-    var needs_repair = published_side.block_count > 0 and rebuild_mod.hasAnyTombstone(
+    const needs_repair = published_side.block_count > 0 and rebuild_mod.hasAnyTombstone(
         graph,
         published_side.first_block,
         published_side.block_count,
@@ -185,9 +184,6 @@ pub fn computeNeedsRepair(
     );
 
     if (published_side.block_count <= 1) {
-        // A grouped single-block adjacency is always a canonicalization
-        // opportunity regardless of tombstones or occupancy.
-        if (report.grouped_single_block) needs_repair = true;
         return needs_repair;
     }
 
@@ -196,10 +192,8 @@ pub fn computeNeedsRepair(
     }
 
     return needs_repair or
-        report.has_small_non_tail_group or
         report.has_underfull_non_tail_block or
-        report.group_count_exceeded or
-        report.chain_is_contiguous;
+        report.group_count_exceeded;
 }
 
 /// Recomputes repair debt for the currently published adjacency of one side and

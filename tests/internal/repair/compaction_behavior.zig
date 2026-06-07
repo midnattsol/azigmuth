@@ -149,7 +149,7 @@ test "repair: repairNode consolidates a fragmented reverse adjacency into a vali
         try graph.addEdge(sources[source_index], target, 0, 0);
     }
 
-    const remove_indices = [_]usize{ 5, 10, 15, 20, 30, 40, 50, 60, 70, 75 };
+    const remove_indices = [_]usize{ 79, 78, 77, 76, 75, 74, 73, 72, 71, 70 };
     for (remove_indices) |remove_idx| {
         _ = try graph.removeEdge(sources[remove_idx], target);
     }

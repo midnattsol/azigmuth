@@ -6,6 +6,7 @@ const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../rcu.zig");
 const adjacency_mod = @import("../../adjacency.zig");
 const node_validity = @import("../../core/node_validity.zig");
+const side_runs = @import("../../side_runs.zig");
 
 const TombstoneScan = struct { found: bool = false };
 
@@ -41,16 +42,11 @@ pub fn forEachRunInAdj(
         .rev => .rev,
     });
 
-    if (side_adj.group_count == 0) {
-        return callback(graph, context, side_adj.first_block, side_adj.block_count, true);
-    }
-
-    var group_index = side_adj.first_group;
-    var visited_groups: u16 = 0;
-    while (visited_groups < side_adj.group_count) : (visited_groups += 1) {
-        const group = page_ops.groupAtConst(graph, group_index);
-        try callback(graph, context, group.start, group.count, visited_groups + 1 == side_adj.group_count);
-        group_index = group.next;
+    const total_runs = side_runs.runCount(side_adj);
+    var run_idx: u16 = 0;
+    while (run_idx < total_runs) : (run_idx += 1) {
+        const run_desc = side_runs.runAt(graph, side_adj, run_idx) orelse return error.CorruptGraph;
+        try callback(graph, context, run_desc.start, run_desc.count, run_idx + 1 == total_runs);
     }
 }
 

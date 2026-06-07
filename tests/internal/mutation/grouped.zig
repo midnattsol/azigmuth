@@ -140,36 +140,36 @@ fn buildGroupedReverseGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
     return destination;
 }
 
-test "mutation grouped: remove from first, middle, and tail forward groups" {
+test "mutation grouped: non-tail remove returns RepairRequired while tail remove succeeds" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try buildGroupedForwardGraph(&graph);
-    try testing.expect(try graph.removeEdge(source, .{ .index = 1 }));
-    try testing.expect(try graph.removeEdge(source, .{ .index = 50 }));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, .{ .index = 1 }));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, .{ .index = 50 }));
     try testing.expect(try graph.removeEdge(source, .{ .index = 99 }));
 
-    try testing.expectEqual(@as(u64, 96), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 96), try graph.outDegree(source));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(.{ .index = 1 }));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(.{ .index = 50 }));
+    try testing.expectEqual(@as(u64, 98), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 98), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = 1 }));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = 50 }));
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(.{ .index = 99 }));
     try graph.validate();
 }
 
-test "mutation grouped: remove from first, middle, and tail reverse groups" {
+test "mutation grouped: non-tail reverse remove returns RepairRequired while tail succeeds" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const destination = try buildGroupedReverseGraph(&graph);
-    try testing.expect(try graph.removeEdge(.{ .index = 1 }, destination));
-    try testing.expect(try graph.removeEdge(.{ .index = 50 }, destination));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(.{ .index = 1 }, destination));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(.{ .index = 50 }, destination));
     try testing.expect(try graph.removeEdge(.{ .index = 99 }, destination));
 
-    try testing.expectEqual(@as(u64, 96), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 96), try graph.inDegree(destination));
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(.{ .index = 1 }));
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(.{ .index = 50 }));
+    try testing.expectEqual(@as(u64, 98), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 98), try graph.inDegree(destination));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(.{ .index = 1 }));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(.{ .index = 50 }));
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(.{ .index = 99 }));
     try graph.validate();
 }

@@ -21,9 +21,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(1);
 
     const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
@@ -31,8 +29,6 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     publish.publishedFwdSide(source_node).group_count = 2;
     publish.publishedFwdSide(source_node).first_group = g0;
     publish.setPublishedFwdDegree(source_node, 2);
-    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
-
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
@@ -103,9 +99,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(1);
 
     const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
@@ -113,8 +107,6 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     publish.publishedFwdSide(source_node).group_count = 2;
     publish.publishedFwdSide(source_node).first_group = g0;
     publish.setPublishedFwdDegree(source_node, 2);
-    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
-
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
@@ -179,9 +171,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
     page_ops.edgeBlockAt(&graph.graph, r1, .rev).mask = constants.denseMask(1);
 
     const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = r1, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = constants.END_OF_CHAIN };
 
     const target_node = try graph.nodeAt(target);
     publish.clearPublishedSides(target_node);
@@ -189,8 +179,6 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
     publish.publishedRevSide(target_node).group_count = 2;
     publish.publishedRevSide(target_node).first_group = g0;
     publish.setPublishedRevDegree(target_node, 2);
-    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
-
     graph.graph.edge_count.store(2, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
     try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(src_a)).fwd);
@@ -223,9 +211,7 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     page_ops.edgeBlockAt(&graph.graph, r1, .rev).mask = constants.denseMask(1);
 
     const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = r1, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = constants.END_OF_CHAIN };
 
     const target_node = try graph.nodeAt(target);
     publish.clearPublishedSides(target_node);
@@ -233,8 +219,6 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     publish.publishedRevSide(target_node).group_count = 2;
     publish.publishedRevSide(target_node).first_group = g0;
     publish.setPublishedRevDegree(target_node, 2);
-    page_ops.groupAt(&graph.graph, g0).next = constants.END_OF_CHAIN;
-
     graph.graph.edge_count.store(1, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
 }

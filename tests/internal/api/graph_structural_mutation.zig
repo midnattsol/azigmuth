@@ -70,16 +70,16 @@ test "graph structure: removeEdge from first block in multi-block node" {
     }
     try graph.validate();
     try testing.expectEqual(@as(usize, target_count), try graph.outDegree(source));
-    try testing.expect(try graph.removeEdge(source, targets[0]));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
     try graph.validate();
-    try testing.expectEqual(@as(usize, target_count - 1), try graph.outDegree(source));
-    try testing.expectEqual(@as(u64, target_count - 1), graph.edgeCount());
+    try testing.expectEqual(@as(usize, target_count), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, target_count), graph.edgeCount());
     var iterator = try graph.neighbors(source);
     defer iterator.deinit();
     const slice = try graph_mod.materializeConsuming(&iterator, testing.allocator);
     defer testing.allocator.free(slice);
-    try testing.expectEqual(@as(usize, target_count - 1), slice.len);
-    try testing.expect(slice[0].index != targets[0].index);
+    try testing.expectEqual(@as(usize, target_count), slice.len);
+    try testing.expectEqual(targets[0].index, slice[0].index);
 }
 
 test "graph structure: removeEdge multiple edges from multi-block node" {
@@ -94,19 +94,19 @@ test "graph structure: removeEdge multiple edges from multi-block node" {
         try graph.addEdge(source, targets[target_idx], 0, 0);
     }
     try graph.validate();
-    try testing.expect(try graph.removeEdge(source, targets[0]));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
     try graph.validate();
-    try testing.expect(try graph.removeEdge(source, targets[34]));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[34]));
     try graph.validate();
     try testing.expect(try graph.removeEdge(source, targets[69]));
     try graph.validate();
-    try testing.expectEqual(@as(usize, target_count - 3), try graph.outDegree(source));
-    try testing.expectEqual(@as(u64, target_count - 3), graph.edgeCount());
+    try testing.expectEqual(@as(usize, target_count - 1), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, target_count - 1), graph.edgeCount());
     var iterator = try graph.neighbors(source);
     defer iterator.deinit();
     const slice = try graph_mod.materializeConsuming(&iterator, testing.allocator);
     defer testing.allocator.free(slice);
-    try testing.expectEqual(@as(usize, target_count - 3), slice.len);
+    try testing.expectEqual(@as(usize, target_count - 1), slice.len);
     for (1..slice.len) |target_idx| {
         try testing.expect(slice[target_idx - 1].index < slice[target_idx].index);
     }
@@ -224,7 +224,7 @@ test "graph structure: removeEdge preserves self-edge and unrelated incoming edg
     try testing.expectEqual(y.index, rev_node[1].index);
 }
 
-test "graph structure: removeEdge rejects non-tail occupancy below threshold without publishing" {
+test "graph structure: removeEdge rejects non-tail simple remove without publishing" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -237,16 +237,10 @@ test "graph structure: removeEdge rejects non-tail occupancy below threshold wit
     try graph.validate();
     try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
 
-    for (0..16) |target_idx| {
-        try testing.expect(try graph.removeEdge(source, targets[target_idx]));
-    }
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
     try graph.validate();
-    try testing.expectEqual(@as(usize, 49), try graph.outDegree(source));
-
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[16]));
-    try graph.validate();
-    try testing.expectEqual(@as(usize, 49), try graph.outDegree(source));
-    try testing.expectEqual(@as(u64, 49), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
 }
 
 test "graph structure: copy-on-write tail replacement preserves grouped adjacency" {
@@ -262,7 +256,7 @@ test "graph structure: copy-on-write tail replacement preserves grouped adjacenc
     try graph.validate();
     try testing.expectEqual(@as(usize, 70), try graph.outDegree(source));
 
-    _ = try graph.removeEdge(source, targets[0]);
+    _ = try graph.removeEdge(source, targets[69]);
     try graph.validate();
 
     const new_target = try graph.addNode();
@@ -276,8 +270,8 @@ test "graph structure: copy-on-write tail replacement preserves grouped adjacenc
     defer testing.allocator.free(slice);
     try testing.expectEqual(@as(usize, 70), slice.len);
 
-    for (1..70) |target_idx| {
-        if (targets[target_idx].index != targets[0].index) {
+    for (0..69) |target_idx| {
+        if (targets[target_idx].index != targets[69].index) {
             try testing.expectEqual(@as(usize, 1), try graph.inDegree(targets[target_idx]));
         }
     }
@@ -301,15 +295,10 @@ test "graph structure: rejected non-tail removal does not allocate or retire blo
         try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
-    for (0..16) |target_idx| {
-        try testing.expect(try graph.removeEdge(source, targets[target_idx]));
-    }
-    try graph.validate();
-
     const fwd_blocks_before = graph.graph.block_fwd_count;
     const rev_blocks_before = graph.graph.block_rev_count;
 
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[16]));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
 
     try testing.expectEqual(fwd_blocks_before, graph.graph.block_fwd_count);
     try testing.expectEqual(rev_blocks_before, graph.graph.block_rev_count);

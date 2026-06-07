@@ -8,12 +8,8 @@ const rcu = @import("../rcu.zig");
 const repair = @import("../maintenance/repair.zig");
 const common = @import("common.zig");
 const shared = @import("edge_shared.zig");
-
-const ClonedGroupChain = struct {
-    first_group: u32,
-    last_group: u32,
-    previous_to_last: ?u32,
-};
+const local_side_edit = @import("local_side_edit.zig");
+const structural_rebuild = @import("structural_rebuild.zig");
 
 fn prepareAppendBlockSide(
     graph: *graph_core.GraphCore,
@@ -54,24 +50,7 @@ fn ensureTailCowGroupConstraintSide(
     side_adj: *const types.SideAdj,
     prepared: shared.PreparedAppendBlock,
 ) !void {
-    if (prepared.old_block == null) return;
-    if (side_adj.block_count <= 1) return;
-    if (side_adj.group_count < constants.MAX_GROUPS_PER_NODE) return;
-
-    const tail_idx = prepared.tail_index.?;
-    var group_idx = side_adj.first_group;
-    var visited_constraint: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (visited_constraint >= side_adj.group_count or visited_constraint >= graph.group_count) return error.CorruptGraph;
-        visited_constraint += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        if (tail_idx >= group.start and tail_idx < group.start + group.count) {
-            if (group.count > 1) return error.RepairRequired;
-            break;
-        }
-        group_idx = group.next;
-    }
+    try local_side_edit.ensureTailCowGroupConstraint(graph, side_adj, prepared);
 }
 
 fn applyPreparedAppendSideTracked(
@@ -80,183 +59,9 @@ fn applyPreparedAppendSideTracked(
     prepared: shared.PreparedAppendBlock,
     scratch: *common.MutationScratch,
 ) !void {
-    if (try tryApplyPreparedAppendSideFast(graph, side_adj, prepared, scratch)) return;
-
+    if (try local_side_edit.tryApplyPreparedAppendFast(graph, side_adj, prepared, scratch)) return;
     if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
-
-    var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, side_adj.block_count + 1);
-    defer block_list.deinit(graph.allocator);
-    try common.collectBlockList(
-        graph,
-        side_adj.*,
-        prepared.old_block,
-        prepared.new_block,
-        if (prepared.old_block == null) prepared.new_block else null,
-        &block_list,
-    );
-    try common.buildSideFromBlocks(side_adj, graph, block_list.items, scratch);
-}
-
-fn cloneGroupChain(
-    graph: *graph_core.GraphCore,
-    side_adj: *const types.SideAdj,
-    scratch: *common.MutationScratch,
-) !ClonedGroupChain {
-    try adjacency.validateSideAdjLayout(graph, side_adj.*);
-    std.debug.assert(side_adj.group_count > 0);
-
-    var group_idx = side_adj.first_group;
-    var visited: u16 = 0;
-    var first_group: ?u32 = null;
-    var previous_group: ?u32 = null;
-    var previous_to_last: ?u32 = null;
-    var last_group: u32 = undefined;
-
-    while (visited < side_adj.group_count) : (visited += 1) {
-        const cloned_group_idx = try scratch.allocGroup(graph);
-        page_ops.groupAt(graph, cloned_group_idx).* = page_ops.groupAtConst(graph, group_idx).*;
-        page_ops.groupAt(graph, cloned_group_idx).next = constants.END_OF_CHAIN;
-
-        if (first_group == null) first_group = cloned_group_idx;
-        if (previous_group) |previous| {
-            page_ops.groupAt(graph, previous).next = cloned_group_idx;
-            previous_to_last = previous;
-        }
-
-        previous_group = cloned_group_idx;
-        last_group = cloned_group_idx;
-        group_idx = page_ops.groupAtConst(graph, group_idx).next;
-    }
-
-    return .{
-        .first_group = first_group.?,
-        .last_group = last_group,
-        .previous_to_last = if (side_adj.group_count > 1) previous_to_last else null,
-    };
-}
-
-fn tryAppendNewBlockFast(
-    graph: *graph_core.GraphCore,
-    side_adj: *types.SideAdj,
-    prepared: shared.PreparedAppendBlock,
-    scratch: *common.MutationScratch,
-) !bool {
-    if (side_adj.group_count == 0) {
-        if (prepared.new_block != side_adj.first_block + side_adj.block_count) return false;
-        side_adj.block_count += 1;
-        return true;
-    }
-
-    if (side_adj.block_count == 1) {
-        const group = page_ops.groupAtConst(graph, side_adj.first_group);
-        if (prepared.new_block == group.start + 1) {
-            side_adj.first_block = group.start;
-            side_adj.block_count = 2;
-            side_adj.group_count = 0;
-            side_adj.first_group = 0;
-            return true;
-        }
-    }
-
-    const cloned = try cloneGroupChain(graph, side_adj, scratch);
-    const last_group = page_ops.groupAt(graph, cloned.last_group);
-    side_adj.first_group = cloned.first_group;
-    if (prepared.new_block == last_group.start + last_group.count) {
-        last_group.count += 1;
-        side_adj.block_count += 1;
-        return true;
-    }
-
-    if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
-
-    const tail_group_idx = try scratch.allocGroup(graph);
-    page_ops.groupAt(graph, tail_group_idx).* = .{
-        .start = prepared.new_block,
-        .count = 1,
-        .next = constants.END_OF_CHAIN,
-    };
-    last_group.next = tail_group_idx;
-    side_adj.group_count += 1;
-    side_adj.block_count += 1;
-    return true;
-}
-
-fn tryReplaceTailBlockFast(
-    graph: *graph_core.GraphCore,
-    side_adj: *types.SideAdj,
-    prepared: shared.PreparedAppendBlock,
-    scratch: *common.MutationScratch,
-) !bool {
-    if (side_adj.group_count == 0) {
-        if (side_adj.block_count == 1) {
-            side_adj.first_block = prepared.new_block;
-            return true;
-        }
-
-        const prefix_group_idx = try scratch.allocGroup(graph);
-        const tail_group_idx = try scratch.allocGroup(graph);
-        page_ops.groupAt(graph, prefix_group_idx).* = .{
-            .start = side_adj.first_block,
-            .count = side_adj.block_count - 1,
-            .next = tail_group_idx,
-        };
-        page_ops.groupAt(graph, tail_group_idx).* = .{
-            .start = prepared.new_block,
-            .count = 1,
-            .next = constants.END_OF_CHAIN,
-        };
-        side_adj.first_group = prefix_group_idx;
-        side_adj.group_count = 2;
-        return true;
-    }
-
-    if (side_adj.block_count == 1) {
-        side_adj.first_block = prepared.new_block;
-        side_adj.group_count = 0;
-        side_adj.first_group = 0;
-        return true;
-    }
-
-    const cloned = try cloneGroupChain(graph, side_adj, scratch);
-    const last_group = page_ops.groupAt(graph, cloned.last_group);
-    side_adj.first_group = cloned.first_group;
-    if (last_group.count == 1) {
-        last_group.start = prepared.new_block;
-        return true;
-    }
-
-    if (side_adj.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
-
-    const tail_group_idx = try scratch.allocGroup(graph);
-    page_ops.groupAt(graph, tail_group_idx).* = .{
-        .start = prepared.new_block,
-        .count = 1,
-        .next = constants.END_OF_CHAIN,
-    };
-    last_group.count -= 1;
-    last_group.next = tail_group_idx;
-    side_adj.group_count += 1;
-    return true;
-}
-
-fn tryApplyPreparedAppendSideFast(
-    graph: *graph_core.GraphCore,
-    side_adj: *types.SideAdj,
-    prepared: shared.PreparedAppendBlock,
-    scratch: *common.MutationScratch,
-) !bool {
-    if (side_adj.block_count == 0) {
-        side_adj.first_block = prepared.new_block;
-        side_adj.block_count = 1;
-        side_adj.group_count = 0;
-        side_adj.first_group = 0;
-        return true;
-    }
-
-    if (@as(u22, side_adj.block_count) >= constants.MAX_BLOCKS_PER_SIDE) return error.BlockLimitReached;
-
-    if (prepared.old_block == null) return try tryAppendNewBlockFast(graph, side_adj, prepared, scratch);
-    return try tryReplaceTailBlockFast(graph, side_adj, prepared, scratch);
+    try structural_rebuild.rebuildAfterPreparedAppend(graph, side_adj, prepared, scratch);
 }
 
 fn insertForwardEdge(graph: *graph_core.GraphCore, block_idx: u32, destination: types.NodeId, relation: u16, flags: u16, edge_id: u32) !void {

@@ -121,7 +121,7 @@ test "mutation: reverse adjacency grows and iterates across multiple blocks" {
     try neighbors.expectNeighborSet(incoming_sources, &sources, graph.nodeCount(), testing.allocator);
 }
 
-test "mutation: removeEdge from grouped reverse adjacency preserves other incoming sources" {
+test "mutation: non-tail grouped reverse remove returns RepairRequired without publishing" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -135,19 +135,18 @@ test "mutation: removeEdge from grouped reverse adjacency preserves other incomi
     }
 
     try graph.validate();
-    try testing.expect(try graph.removeEdge(sources[0], destination));
+    try testing.expectError(error.RepairRequired, graph.removeEdge(sources[0], destination));
     try graph.validate();
 
-    try testing.expectEqual(@as(u64, source_count - 1), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(sources[0]));
-    try testing.expectEqual(source_count - 1, try graph.inDegree(destination));
+    try testing.expectEqual(@as(u64, source_count), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(sources[0]));
+    try testing.expectEqual(source_count, try graph.inDegree(destination));
 
     var iterator = try graph.inNeighbors(destination);
     const incoming_sources = try graph_mod.materializeConsuming(&iterator, testing.allocator);
     defer testing.allocator.free(incoming_sources);
 
-    try neighbors.expectNodeAbsent(incoming_sources, sources[0]);
-    try neighbors.expectNeighborSet(incoming_sources, sources[1..], graph.nodeCount(), testing.allocator);
+    try neighbors.expectNeighborSet(incoming_sources, &sources, graph.nodeCount(), testing.allocator);
 }
 
 test "mutation: removeEdge on self-loop preserves unrelated incoming and outgoing edges" {
@@ -251,7 +250,7 @@ test "mutation: addEdge works after removing the only edge from the same source"
     try neighbors.expectOutNeighbors(&graph, testing.allocator, source, &[_]u32{second_destination.index});
 }
 
-test "mutation: reverse underflow RepairRequired does not publish partial state" {
+test "mutation: non-tail grouped reverse remove does not publish partial state" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -264,22 +263,19 @@ test "mutation: reverse underflow RepairRequired does not publish partial state"
         try graph.addEdge(sources[source_index], destination, 0, 0);
     }
 
-    for (0..16) |source_index| {
-        try testing.expect(try graph.removeEdge(sources[source_index], destination));
-    }
     try graph.validate();
-    try testing.expectEqual(@as(u64, 49), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 49), try graph.inDegree(destination));
+    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 65), try graph.inDegree(destination));
 
     const forward_block_count_before = graph.graph.block_fwd_count;
     const reverse_block_count_before = graph.graph.block_rev_count;
-                    try testing.expectError(error.RepairRequired, graph.removeEdge(sources[16], destination));
+                    try testing.expectError(error.RepairRequired, graph.removeEdge(sources[0], destination));
 
     try testing.expectEqual(forward_block_count_before, graph.graph.block_fwd_count);
     try testing.expectEqual(reverse_block_count_before, graph.graph.block_rev_count);
-    try testing.expectEqual(@as(u64, 49), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 49), try graph.inDegree(destination));
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(sources[16]));
+    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 65), try graph.inDegree(destination));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(sources[0]));
     try graph.validate();
 }
 
@@ -355,7 +351,7 @@ test "mutation: self-edge removeEdge claims and releases both adjacencies atomic
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(node));
 }
 
-test "mutation: forward underflow RepairRequired does not publish partial state" {
+test "mutation: non-tail grouped forward remove does not publish partial state" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -368,23 +364,19 @@ test "mutation: forward underflow RepairRequired does not publish partial state"
         try graph.addEdge(source, destinations[destination_index], 0, 0);
     }
 
-    // Remove edges until the first non-tail forward block would go below MIN_OCCUPANCY.
-    for (0..16) |destination_index| {
-        try testing.expect(try graph.removeEdge(source, destinations[destination_index]));
-    }
     try graph.validate();
-    try testing.expectEqual(@as(u64, 49), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 49), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
 
     const forward_block_count_before = graph.graph.block_fwd_count;
     const reverse_block_count_before = graph.graph.block_rev_count;
-            try testing.expectError(error.RepairRequired, graph.removeEdge(source, destinations[16]));
+            try testing.expectError(error.RepairRequired, graph.removeEdge(source, destinations[0]));
 
     try testing.expectEqual(forward_block_count_before, graph.graph.block_fwd_count);
     try testing.expectEqual(reverse_block_count_before, graph.graph.block_rev_count);
-    try testing.expectEqual(@as(u64, 49), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 49), try graph.outDegree(source));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(destinations[16]));
+    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(destinations[0]));
     try graph.validate();
 }
 

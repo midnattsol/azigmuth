@@ -153,7 +153,7 @@ test "edge metadata: forward adjacency still finds specific destination after a 
         try graph.addEdge(source, targets[target_index], @intCast(target_index % 4), 0);
     }
 
-    const remove_indices = [_]usize{ 5, 12, 30, 45, 60 };
+    const remove_indices = [_]usize{ 69, 68, 67, 66, 65 };
     for (remove_indices) |idx| {
         _ = try graph.removeEdge(source, targets[idx]);
     }

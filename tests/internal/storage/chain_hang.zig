@@ -1,5 +1,5 @@
-//! Tests that cyclic or corrupt EdgeBlockGroup chains are detected by
-//! validate() and do NOT hang mutation/query APIs.
+//! Tests that corrupt grouped-run spans are detected by validate() and do NOT
+//! hang mutation/query APIs.
 
 const std = @import("std");
 const graph_mod = @import("graph_mod");
@@ -9,51 +9,26 @@ const publish = @import("publish");
 
 const testing = std.testing;
 
-fn makeAdjacencyGroupedWithCycle(graph: *graph_mod.Graph, node: graph_mod.NodeId) !void {
+fn makeAdjacencyGroupedWithInvalidDeclaredSpan(graph: *graph_mod.Graph, node: graph_mod.NodeId) !void {
     const published_adj = (try graph.nodeAtConst(node)).publishedAdj();
     if (published_adj.block_count_fwd == 0) return error.SkipZigTest;
 
     const existing_blocks = published_adj.block_count_fwd;
     const existing_groups = published_adj.group_count_fwd;
 
-    const dangling_block = try graph.allocBlockFwd();
-    var block_ptr = page_ops.edgeBlockAt(&graph.graph, dangling_block, .fwd);
-    block_ptr.mask = 0;
-
     if (existing_groups == 0) {
         const g0 = try graph.allocGroup();
-        const g1 = try graph.allocGroup();
         page_ops.groupAt(&graph.graph, g0).* = .{
             .start = published_adj.first_block_fwd,
             .count = existing_blocks,
-            .next = g1,
-        };
-        page_ops.groupAt(&graph.graph, g1).* = .{
-            .start = dangling_block,
-            .count = 1,
-            .next = g0,
+            .next = constants.END_OF_CHAIN,
         };
         const buf = try graph.nodeAt(node);
         publish.publishedFwdSide(buf).group_count = 2;
         publish.publishedFwdSide(buf).first_group = g0;
-        publish.publishedFwdSide(buf).block_count += 1;
     } else {
-        var tail_idx = published_adj.first_group_fwd;
-        while (true) {
-            const g = page_ops.groupAtConst(&graph.graph, tail_idx);
-            if (g.next == constants.END_OF_CHAIN) break;
-            tail_idx = g.next;
-        }
-        const cycle_group = try graph.allocGroup();
-        page_ops.groupAt(&graph.graph, cycle_group).* = .{
-            .start = dangling_block,
-            .count = 1,
-            .next = cycle_group,
-        };
-        page_ops.groupAt(&graph.graph, tail_idx).next = cycle_group;
         const buf = try graph.nodeAt(node);
         publish.publishedFwdSide(buf).group_count += 1;
-        publish.publishedFwdSide(buf).block_count += 1;
     }
 }
 
@@ -65,7 +40,7 @@ test "group chain: validate detects cyclic forward group chain on contiguous adj
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
     try testing.expectError(error.CorruptGraph, graph.validate());
 }
 
@@ -79,20 +54,6 @@ test "group chain: validate detects cyclic forward group chain on already-groupe
         try graph.addEdge(src, t, 0, 0);
     }
 
-    const published_adj = (try graph.nodeAtConst(src)).publishedAdj();
-    var tail_idx = published_adj.first_group_fwd;
-    while (true) {
-        const g = page_ops.groupAtConst(&graph.graph, tail_idx);
-        if (g.next == constants.END_OF_CHAIN) break;
-        tail_idx = g.next;
-    }
-    const cycle_group = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, cycle_group).* = .{
-        .start = 0,
-        .count = 1,
-        .next = cycle_group,
-    };
-    page_ops.groupAt(&graph.graph, tail_idx).next = cycle_group;
     const buf = try graph.nodeAt(src);
     publish.publishedFwdSide(buf).group_count += 1;
 
@@ -108,7 +69,7 @@ test "group chain: hasEdgeInAdj on cyclic chain with absent target does not hang
     const absent = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     // absent is not an edge destination — the cyclic scan should terminate
     // via bounded traversal and return false without hanging.
@@ -123,7 +84,7 @@ test "group chain: tailBlockIndex on cyclic chain returns null (does not hang)" 
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     const adj = (try graph.nodeAtConst(src)).publishedAdj();
     if (adj.group_count_fwd > 0) {
@@ -154,7 +115,7 @@ test "group chain: neighbors on cyclic chain does not hang" {
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     var iterator = try graph.neighbors(src);
     defer iterator.deinit();
@@ -170,7 +131,7 @@ test "group chain: neighbors on cyclic chain remains bounded" {
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     var iterator = try graph.neighbors(src);
     defer iterator.deinit();
@@ -186,7 +147,7 @@ test "group chain: repairNode on cyclic forward chain returns CorruptGraph" {
     const src = try graph.addNode();
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
     {
         const buf = try graph.nodeAt(src);
         publish.setPublishedFlags(buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
@@ -202,7 +163,7 @@ test "group chain: repairBudgeted on cyclic chain returns CorruptGraph" {
     const src = try graph.addNode();
     const dst = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
     {
         const buf = try graph.nodeAt(src);
         publish.setPublishedFlags(buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
@@ -220,7 +181,7 @@ test "group chain: removeEdge on cyclic grouped forward adjacency returns Corrup
     const dst = try graph.addNode();
     _ = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     // The edge against 'dst' still structurally exists.  removeEdge
     // finds it (lookup is bounded), but the grouped-chain rebuild
@@ -237,7 +198,7 @@ test "group chain: validate does not hang on cyclic chain with forward tombstone
     const removed = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     // Insert a tombstone entry pointing to the removed node into src's forward.
     const src_buf = try graph.nodeAt(src);
@@ -293,7 +254,7 @@ test "group chain: debugValidate terminates on cyclic chain with tombstone" {
     const removed = try graph.addNode();
     try graph.addEdge(src, dst, 0, 0);
 
-    try makeAdjacencyGroupedWithCycle(&graph, src);
+    try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
     const src_buf = try graph.nodeAt(src);
     const published_fwd = src_buf.publishedFwd();

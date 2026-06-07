@@ -15,7 +15,7 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
     }
 
     // Create grouped layout: COW a non-tail block.
-    _ = try graph.removeEdge(source, destinations[0]);
+    _ = try graph.removeEdge(source, destinations[199]);
 
     var source_adj = (try graph.nodeAtConst(source)).publishedAdj();
     try testing.expect(source_adj.group_count_fwd > 0);
@@ -60,7 +60,7 @@ test "repair: repairBudgeted discovers grouped forward tombstone debt without ex
     }
 
     // Trigger COW on non-tail block via removeEdge.
-    _ = try graph.removeEdge(source, destinations[0]);
+    _ = try graph.removeEdge(source, destinations[129]);
 
     // Create tombstones via removeNode.
     const extra = try graph.addNode();

@@ -36,18 +36,18 @@ pub const needsRepairFlag = common.needsRepairFlag;
 // ── Re-exports from shape.zig ──────────────────────────────────────────
 pub const validateBlockDense = shape.validateBlockDense;
 pub const validateDenseInContiguousBlocks = shape.validateDenseInContiguousBlocks;
-pub const validateDenseInGroupChain = shape.validateDenseInGroupChain;
+pub const validateDenseInGroupedRuns = shape.validateDenseInGroupedRuns;
 pub const validateDenseMasks = shape.validateDenseMasks;
 pub const validateBlockShapeFast = shape.validateBlockShapeFast;
 pub const validateContiguousBlocksFast = shape.validateContiguousBlocksFast;
-pub const validateGroupChainFast = shape.validateGroupChainFast;
+pub const validateGroupedRunsFast = shape.validateGroupedRunsFast;
 pub const validateAdjacencyBlocksFast = shape.validateAdjacencyBlocksFast;
 pub const validateOccupancyFast = shape.validateOccupancyFast;
 
 // ── Re-exports from sums.zig ───────────────────────────────────────────
 pub const sumBlockLive = sums.sumBlockLive;
 pub const sumContiguousBlocks = sums.sumContiguousBlocks;
-pub const sumGroupChain = sums.sumGroupChain;
+pub const sumGroupedRuns = sums.sumGroupedRuns;
 pub const sumAdjacency = sums.sumAdjacency;
 pub const countVisibleEntriesInBlock = sums.countVisibleEntriesInBlock;
 pub const sumVisibleAdjacency = sums.sumVisibleAdjacency;
@@ -56,7 +56,7 @@ pub const sumVisibleAdjacency = sums.sumVisibleAdjacency;
 pub const blockStackHeadIndex = stacks.blockStackHeadIndex;
 pub const blockMetaNextFast = stacks.blockMetaNextFast;
 pub const populateStackBitmapFast = stacks.populateStackBitmapFast;
-pub const groupStackHeadIndexFast = stacks.groupStackHeadIndexFast;
+pub const groupSpanStackHeadIndexFast = stacks.groupSpanStackHeadIndexFast;
 pub const groupMetaNextFast = stacks.groupMetaNextFast;
 pub const populateGroupStackBitmapFast = stacks.populateGroupStackBitmapFast;
 

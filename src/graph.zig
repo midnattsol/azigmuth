@@ -238,8 +238,16 @@ pub const Graph = struct {
         return page_ops.allocGroup(&self.graph);
     }
 
+    pub fn allocGroupSpan(self: *Graph, count: u16) !u32 {
+        return page_ops.allocGroupSpan(&self.graph, count);
+    }
+
     pub fn freeGroup(self: *Graph, idx: u32) void {
         page_ops.freeGroup(&self.graph, idx);
+    }
+
+    pub fn freeGroupSpan(self: *Graph, first_idx: u32, count: u16) void {
+        page_ops.freeGroupSpan(&self.graph, first_idx, count);
     }
 
     pub fn hasEdgeInAdj(self: *const Graph, adj: types.NodeAdj, target: u32) bool {

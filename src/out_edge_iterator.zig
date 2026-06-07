@@ -41,7 +41,7 @@ pub const OutEdgeIterator = struct {
 
     fn loadNextNonEmptyMask(self: *OutEdgeIterator) bool {
         while (true) {
-            if (self.blocks_remaining == 0) {
+            while (self.blocks_remaining == 0) {
                 if (!self.advanceToNextGroup()) return false;
             }
 

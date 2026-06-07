@@ -34,24 +34,20 @@ pub fn validateSideAdjLayoutForSide(
         return;
     }
 
-    var group_index = side_adj.first_group;
-    var visited: u16 = 0;
     var total_blocks: u32 = 0;
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return error.CorruptGraph;
-        if (visited >= side_adj.group_count or visited >= graph.group_count) return error.CorruptGraph;
-        visited += 1;
-
+    if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
+    const end_group = std.math.add(u32, side_adj.first_group, side_adj.group_count) catch return error.CorruptGraph;
+    if (end_group > graph.group_count) return error.CorruptGraph;
+    for (side_adj.first_group..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         if (group.count == 0) return error.CorruptGraph;
         if (group.start >= block_limit) return error.CorruptGraph;
         const end = std.math.add(u32, group.start, group.count) catch return error.CorruptGraph;
         if (end > block_limit) return error.CorruptGraph;
         total_blocks += group.count;
-        group_index = group.next;
     }
 
-    if (visited != side_adj.group_count) return error.CorruptGraph;
     if (total_blocks != side_adj.block_count) return error.CorruptGraph;
 }
 
@@ -62,21 +58,17 @@ pub fn validateSideAdjLayout(graph: *const graph_core.GraphCore, side_adj: types
     }
     if (side_adj.group_count == 0) return;
 
-    var group_index = side_adj.first_group;
-    var visited: u16 = 0;
     var total_blocks: u32 = 0;
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return error.CorruptGraph;
-        if (visited >= side_adj.group_count or visited >= graph.group_count) return error.CorruptGraph;
-        visited += 1;
-
+    if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
+    const end_group = std.math.add(u32, side_adj.first_group, side_adj.group_count) catch return error.CorruptGraph;
+    if (end_group > graph.group_count) return error.CorruptGraph;
+    for (side_adj.first_group..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         if (group.count == 0) return error.CorruptGraph;
         total_blocks += group.count;
-        group_index = group.next;
     }
 
-    if (visited != side_adj.group_count) return error.CorruptGraph;
     if (total_blocks != side_adj.block_count) return error.CorruptGraph;
 }
 
@@ -109,14 +101,8 @@ pub fn tailBlockIndexSideChecked(graph: *graph_core.GraphCore, side_adj: *const 
 
     try validateSideAdjLayout(graph, side_adj.*);
 
-    var group_index = side_adj.first_group;
-    var visited: u16 = 0;
-    while (visited < side_adj.group_count) : (visited += 1) {
-        const group = page_ops.groupAt(graph, group_index);
-        if (group.next == constants.END_OF_CHAIN) return group.start + group.count - 1;
-        group_index = group.next;
-    }
-    return null;
+    const tail_group = page_ops.groupAt(graph, side_adj.first_group + side_adj.group_count - 1);
+    return tail_group.start + tail_group.count - 1;
 }
 
 pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) ?u32 {
@@ -130,12 +116,11 @@ pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: typ
         return hasEdgeInForwardRun(graph, side_adj.first_block, side_adj.block_count, target);
     }
 
-    var group_index = side_adj.first_group;
-    var visited: u16 = 0;
-    while (visited < side_adj.group_count) : (visited += 1) {
+    const end_group = side_adj.first_group + side_adj.group_count;
+    for (side_adj.first_group..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         if (hasEdgeInForwardRun(graph, group.start, group.count, target)) return true;
-        group_index = group.next;
     }
     return false;
 }
@@ -275,15 +260,14 @@ pub fn countForwardDestinationMatchesChecked(
         return total;
     }
 
-    var group_idx = first_group;
-    var visited: u16 = 0;
-    while (visited < group_count) : (visited += 1) {
+    const end_group = first_group + group_count;
+    for (first_group..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             total += countForwardInBlock(block, destination_index);
         }
-        group_idx = group.next;
     }
     return total;
 }

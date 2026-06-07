@@ -279,11 +279,11 @@ test "multigraph: removeEdge preserves grouped reverse entries after duplicates"
     }
 
     try testing.expectEqual(@as(usize, 82), try g.inDegree(destination));
-    try testing.expect(try g.removeEdge(others[0], destination));
-    try testing.expectEqual(@as(usize, 81), try g.inDegree(destination));
+    try testing.expectError(error.RepairRequired, g.removeEdge(others[0], destination));
+    try testing.expectEqual(@as(usize, 82), try g.inDegree(destination));
 
     try testing.expect(try g.removeEdge(source, destination));
-    try testing.expectEqual(@as(usize, 79), try g.inDegree(destination));
+    try testing.expectEqual(@as(usize, 80), try g.inDegree(destination));
     try g.validate();
 }
 
@@ -322,9 +322,9 @@ test "multigraph: repair preserves multiblock duplicate EdgeIds" {
     try g.repairNode(source);
     try g.validate();
 
-    try testing.expect(try g.removeEdgeWithId(source, destination, ids[65]));
-    try testing.expectEqual(@as(usize, 69), try g.outDegree(source));
-    try testing.expectEqual(@as(usize, 69), try g.inDegree(destination));
+    try testing.expectError(error.RepairRequired, g.removeEdgeWithId(source, destination, ids[65]));
+    try testing.expectEqual(@as(usize, 70), try g.outDegree(source));
+    try testing.expectEqual(@as(usize, 70), try g.inDegree(destination));
     try g.validate();
 }
 

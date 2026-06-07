@@ -359,9 +359,10 @@ pub const EdgeBlockFwdIds = struct {
 
 // ── Contiguous edge block group ──────────────────────────────────────
 
-/// A chainable span of physically contiguous edge blocks. 0xFFFF_FFFF = end.
-/// 12 bytes aligned: avoids cache-line splits during chain traversal.
-/// Nodes with contiguous blocks use `group_count_* = 0` (fast path).
+/// One physically contiguous run of edge blocks within a grouped side.
+/// Grouped sides publish `group_count` consecutive descriptors starting at
+/// `first_group`; `next` is no longer structural and remains reserved so the
+/// layout stays 12 bytes.
 pub const EdgeBlockGroup = struct {
     start: u32,
     next: u32,

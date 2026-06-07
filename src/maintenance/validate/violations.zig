@@ -99,20 +99,18 @@ pub fn collectAdjacencyBlocks(
     var seen_spans: [64]DebugGroupSpan = undefined;
     var seen_count: usize = 0;
     const expected_groups = common.groupCount(adjacency, side);
-    var visited_groups: u32 = 0;
-    var group_index = common.firstGroup(adjacency, side);
+    const first_group_idx = common.firstGroup(adjacency, side);
+    const end_group = std.math.add(u32, first_group_idx, expected_groups) catch {
+        try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = first_group_idx } });
+        return;
+    };
+    if (end_group > graph.group_count) {
+        try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = first_group_idx } });
+        return;
+    }
 
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) {
-            try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
-            return;
-        }
-        if (visited_groups >= graph.group_count or visited_groups > expected_groups) {
-            try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = group_index } });
-            return;
-        }
-        visited_groups += 1;
-
+    for (first_group_idx..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         const current_span = DebugGroupSpan{ .group = group_index, .start = group.start, .count = group.count };
         const comparable_count = @min(seen_count, seen_spans.len);
@@ -127,8 +125,6 @@ pub fn collectAdjacencyBlocks(
         for (group.start..group.start + group.count) |block_index_usize| {
             try blocks.append(allocator, .{ .block_index = @intCast(block_index_usize) });
         }
-
-        group_index = group.next;
     }
 }
 
@@ -172,12 +168,17 @@ pub fn buildFreeGroupSet(
 ) !std.DynamicBitSetUnmanaged {
     const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
     var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
-    var current = stacks.groupStackHeadIndexFast(graph, .free);
-    var visited: u32 = 0;
-    while (current != constants.END_OF_CHAIN) : (visited += 1) {
-        if (visited >= limit) break;
-        if (current < limit) set.set(current);
-        current = stacks.groupMetaNextFast(graph, current) catch break;
+    var span_count: u16 = 1;
+    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
+        var current = stacks.groupSpanStackHeadIndexFast(graph, .free, span_count);
+        var visited: u32 = 0;
+        while (current != constants.END_OF_CHAIN) : (visited += 1) {
+            if (visited >= limit) break;
+            for (current..@min(current + span_count, limit)) |group_idx_usize| {
+                set.set(@intCast(group_idx_usize));
+            }
+            current = stacks.groupMetaNextFast(graph, current) catch break;
+        }
     }
     return set;
 }
@@ -188,12 +189,17 @@ pub fn buildRetiredGroupSet(
 ) !std.DynamicBitSetUnmanaged {
     const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
     var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
-    var current = stacks.groupStackHeadIndexFast(graph, .retired);
-    var visited: u32 = 0;
-    while (current != constants.END_OF_CHAIN) : (visited += 1) {
-        if (visited >= limit) break;
-        if (current < limit) set.set(current);
-        current = stacks.groupMetaNextFast(graph, current) catch break;
+    var span_count: u16 = 1;
+    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
+        var current = stacks.groupSpanStackHeadIndexFast(graph, .retired, span_count);
+        var visited: u32 = 0;
+        while (current != constants.END_OF_CHAIN) : (visited += 1) {
+            if (visited >= limit) break;
+            for (current..@min(current + span_count, limit)) |group_idx_usize| {
+                set.set(@intCast(group_idx_usize));
+            }
+            current = stacks.groupMetaNextFast(graph, current) catch break;
+        }
     }
     return set;
 }

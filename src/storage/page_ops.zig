@@ -175,10 +175,12 @@ fn stackHead(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime si
     };
 }
 
-fn groupStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind) *std.atomic.Value(u64) {
+fn groupSpanStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind, span_count: u16) *std.atomic.Value(u64) {
+    std.debug.assert(span_count > 0 and span_count <= constants.MAX_GROUPS_PER_NODE);
+    const span_idx: usize = @intCast(span_count - 1);
     return switch (kind) {
-        .free => &graph.free_groups_head,
-        .retired => &graph.retired_groups_head,
+        .free => &graph.free_group_spans_head[span_idx],
+        .retired => &graph.retired_group_spans_head[span_idx],
     };
 }
 
@@ -220,12 +222,12 @@ fn detachStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime 
     return detachHeadIndex(stackHead(graph, kind, side));
 }
 
-fn pushGroupStack(graph: *graph_core.GraphCore, group_index: u32, comptime kind: StackKind) void {
-    pushHeadIndex(groupStackHead(graph, kind), groupMetaAt(graph, group_index), group_index);
+fn pushGroupSpanStack(graph: *graph_core.GraphCore, first_group_idx: u32, span_count: u16, comptime kind: StackKind) void {
+    pushHeadIndex(groupSpanStackHead(graph, kind, span_count), groupMetaAt(graph, first_group_idx), first_group_idx);
 }
 
-fn popGroupStack(graph: *graph_core.GraphCore, comptime kind: StackKind) ?u32 {
-    const head = groupStackHead(graph, kind);
+fn popGroupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, span_count: u16) ?u32 {
+    const head = groupSpanStackHead(graph, kind, span_count);
     while (true) {
         const old_head = head.load(.acquire);
         const group_index = headIndex(old_head);
@@ -237,8 +239,8 @@ fn popGroupStack(graph: *graph_core.GraphCore, comptime kind: StackKind) ?u32 {
     }
 }
 
-fn detachGroupStack(graph: *graph_core.GraphCore, comptime kind: StackKind) u32 {
-    return detachHeadIndex(groupStackHead(graph, kind));
+fn detachGroupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, span_count: u16) u32 {
+    return detachHeadIndex(groupSpanStackHead(graph, kind, span_count));
 }
 
 fn pageEntryAt(
@@ -313,6 +315,23 @@ pub fn groupAt(graph: *graph_core.GraphCore, group_index: u32) *types.EdgeBlockG
 
 pub fn groupAtConst(graph: *const graph_core.GraphCore, group_index: u32) *const types.EdgeBlockGroup {
     return pageEntryAtConst(types.EdgeBlockGroup, graph.edge_block_group_pages[0..], group_index, constants.EDGE_GROUPS_PER_PAGE);
+}
+
+fn ensureGroupPage(graph: *graph_core.GraphCore, page_index: u32) !void {
+    _ = try ensurePage(graph, types.EdgeBlockGroup, graph.edge_block_group_pages[0..], page_index, constants.EDGE_GROUPS_PER_PAGE);
+    _ = try ensureGroupMetaPage(graph, page_index);
+}
+
+fn ensureGroupCapacity(graph: *graph_core.GraphCore, required_group_count: u32) !void {
+    if (required_group_count == 0) return;
+
+    const last_group_index = required_group_count - 1;
+    const last_page_index = pageOf(last_group_index, constants.EDGE_GROUPS_PER_PAGE);
+
+    var page_index: u32 = 0;
+    while (page_index <= last_page_index) : (page_index += 1) {
+        try ensureGroupPage(graph, page_index);
+    }
 }
 
 fn ensureBlockPage(graph: *graph_core.GraphCore, page_index: u32, comptime side: adjacency.AdjSide) !void {
@@ -402,45 +421,71 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime si
     }
 }
 
-pub fn allocGroup(graph: *graph_core.GraphCore) !u32 {
-    if (popGroupStack(graph, .free)) |group_index| {
-        groupAt(graph, group_index).* = std.mem.zeroes(types.EdgeBlockGroup);
-        return group_index;
-    }
+fn allocFreshGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
     while (true) {
-        const group_index = @atomicLoad(u32, &graph.group_count, .acquire);
-        const page_index = pageOf(group_index, constants.EDGE_GROUPS_PER_PAGE);
-        _ = try ensurePage(graph, types.EdgeBlockGroup, graph.edge_block_group_pages[0..], page_index, constants.EDGE_GROUPS_PER_PAGE);
-        _ = try ensureGroupMetaPage(graph, page_index);
-        if (@cmpxchgWeak(u32, &graph.group_count, group_index, group_index + 1, .acq_rel, .acquire) == null) {
-            const page = loadPageMut(types.EdgeBlockGroup, graph.edge_block_group_pages[0..], page_index, constants.EDGE_GROUPS_PER_PAGE);
-            page[slotOf(group_index, constants.EDGE_GROUPS_PER_PAGE)] = std.mem.zeroes(types.EdgeBlockGroup);
-            return group_index;
+        const first_group_idx = @atomicLoad(u32, &graph.group_count, .acquire);
+        const end_group_idx = std.math.add(u32, first_group_idx, span_count) catch return error.OutOfMemory;
+        try ensureGroupCapacity(graph, end_group_idx);
+        if (@cmpxchgWeak(u32, &graph.group_count, first_group_idx, end_group_idx, .acq_rel, .acquire) == null) {
+            for (first_group_idx..end_group_idx) |group_idx_usize| {
+                const group_idx: u32 = @intCast(group_idx_usize);
+                groupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
+            }
+            return first_group_idx;
         }
     }
+}
+
+pub fn allocGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
+    std.debug.assert(span_count > 0 and span_count <= constants.MAX_GROUPS_PER_NODE);
+    if (popGroupSpanStack(graph, .free, span_count)) |first_group_idx| {
+        const end_group_idx = first_group_idx + span_count;
+        for (first_group_idx..end_group_idx) |group_idx_usize| {
+            const group_idx: u32 = @intCast(group_idx_usize);
+            groupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
+        }
+        return first_group_idx;
+    }
+
+    return try allocFreshGroupSpan(graph, span_count);
+}
+
+pub fn allocGroup(graph: *graph_core.GraphCore) !u32 {
+    return allocGroupSpan(graph, 1);
+}
+
+pub fn freeGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, span_count: u16) void {
+    pushGroupSpanStack(graph, first_group_idx, span_count, .free);
 }
 
 pub fn freeGroup(graph: *graph_core.GraphCore, group_index: u32) void {
-    pushGroupStack(graph, group_index, .free);
+    freeGroupSpan(graph, group_index, 1);
+}
+
+pub fn retireGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, span_count: u16, epoch: u64) void {
+    const meta = groupMetaAt(graph, first_group_idx);
+    meta.epoch.store(epoch, .release);
+    pushGroupSpanStack(graph, first_group_idx, span_count, .retired);
 }
 
 pub fn retireGroup(graph: *graph_core.GraphCore, group_index: u32, epoch: u64) void {
-    const meta = groupMetaAt(graph, group_index);
-    meta.epoch.store(epoch, .release);
-    pushGroupStack(graph, group_index, .retired);
+    retireGroupSpan(graph, group_index, 1, epoch);
 }
 
 pub fn reclaimRetiredGroups(graph: *graph_core.GraphCore, safe_epoch: u64) void {
-    var group_index = detachGroupStack(graph, .retired);
-    while (group_index != EMPTY_INDEX) {
-        const meta = groupMetaAt(graph, group_index);
-        const next = meta.next.load(.acquire);
-        const retired_epoch = meta.epoch.load(.acquire);
-        if (retired_epoch < safe_epoch) {
-            freeGroup(graph, group_index);
-        } else {
-            pushGroupStack(graph, group_index, .retired);
+    var span_count: u16 = 1;
+    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
+        var group_index = detachGroupSpanStack(graph, .retired, span_count);
+        while (group_index != EMPTY_INDEX) {
+            const meta = groupMetaAt(graph, group_index);
+            const next = meta.next.load(.acquire);
+            const retired_epoch = meta.epoch.load(.acquire);
+            if (retired_epoch < safe_epoch) {
+                freeGroupSpan(graph, group_index, span_count);
+            } else {
+                pushGroupSpanStack(graph, group_index, span_count, .retired);
+            }
+            group_index = next;
         }
-        group_index = next;
     }
 }

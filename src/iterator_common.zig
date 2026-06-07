@@ -86,18 +86,13 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
         return false;
     }
 
-    const current_group = page_ops.groupAtConst(graph, iterator.current_group_index);
-    if (current_group.next == constants.END_OF_CHAIN) {
+    if (iterator.groups_visited + 1 >= iterator.group_count_bound) {
         iterator.current_group_index = constants.END_OF_CHAIN;
         return false;
     }
 
-    iterator.current_group_index = current_group.next;
+    iterator.current_group_index += 1;
     iterator.groups_visited += 1;
-    if (iterator.groups_visited >= iterator.group_count_bound) {
-        iterator.current_group_index = constants.END_OF_CHAIN;
-        return false;
-    }
 
     const next_group = page_ops.groupAtConst(graph, iterator.current_group_index);
     iterator.current_block_index = next_group.start;

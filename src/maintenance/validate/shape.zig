@@ -28,22 +28,18 @@ pub fn validateDenseInContiguousBlocks(
     }
 }
 
-pub fn validateDenseInGroupChain(
+pub fn validateDenseInGroupedRuns(
     graph: *const graph_core.GraphCore,
     first_group: u32,
+    group_count: u16,
     comptime side: common.Side,
 ) !void {
-    var group_index = first_group;
-    var visited_groups: u32 = 0;
-
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return error.CorruptGraph;
-        if (visited_groups > graph.group_count) return error.CorruptGraph;
-        visited_groups += 1;
-
+    const end_group = std.math.add(u32, first_group, group_count) catch return error.CorruptGraph;
+    if (end_group > graph.group_count) return error.CorruptGraph;
+    for (first_group..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         try validateDenseInContiguousBlocks(graph, group.start, group.count, side);
-        group_index = group.next;
     }
 }
 
@@ -117,28 +113,21 @@ pub fn validateContiguousBlocksFast(
     return total;
 }
 
-pub fn validateGroupChainFast(
+pub fn validateGroupedRunsFast(
     graph: *const graph_core.GraphCore,
     first_group: u32,
     expected_group_count: u16,
     comptime side: common.Side,
 ) !u64 {
     var total: u64 = 0;
-    var group_index = first_group;
-    var visited_groups: u32 = 0;
-
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return error.CorruptGraph;
-        if (visited_groups >= graph.group_count) return error.CorruptGraph;
-        visited_groups += 1;
-
+    const end_group = std.math.add(u32, first_group, expected_group_count) catch return error.CorruptGraph;
+    if (end_group > graph.group_count) return error.CorruptGraph;
+    for (first_group..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         if (group.count == 0) return error.CorruptGraph;
         total += try validateContiguousBlocksFast(graph, group.start, group.count, side);
-        group_index = group.next;
     }
-
-    if (visited_groups != expected_group_count) return error.CorruptGraph;
     return total;
 }
 

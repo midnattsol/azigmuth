@@ -32,16 +32,13 @@ pub fn forEachRunInAdj(
         return;
     }
 
-    var group_idx = common.firstGroup(adjacency, side);
-    var visited_groups: u32 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (visited_groups >= graph.group_count or visited_groups >= group_count) return error.CorruptGraph;
-        visited_groups += 1;
-
+    const first_group_idx = common.firstGroup(adjacency, side);
+    const end_group = std.math.add(u32, first_group_idx, group_count) catch return error.CorruptGraph;
+    if (end_group > graph.group_count) return error.CorruptGraph;
+    for (first_group_idx..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
         try callback(graph, context, group.start, group.count);
-        group_idx = group.next;
     }
 }
 

@@ -23,13 +23,12 @@ pub fn forEachGroupInSide(
     if (side_view.group_count == 0) return;
     try adjacency.validateSideAdjLayoutForSide(graph, side_view, side);
 
-    var group_idx = side_view.first_group;
-    var visited: u16 = 0;
-    while (visited < side_view.group_count) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) return error.CorruptGraph;
+    const end_group = side_view.first_group + side_view.group_count;
+    for (side_view.first_group..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
-        try callback(graph, context, group_idx, group.*, visited + 1 == side_view.group_count);
-        group_idx = group.next;
+        const run_idx: u16 = @intCast(group_idx - side_view.first_group);
+        try callback(graph, context, group_idx, group.*, run_idx + 1 == side_view.group_count);
     }
 }
 
@@ -68,13 +67,14 @@ pub fn analyzeSideLayout(
     report.chain_is_contiguous = true;
     report.group_count_exceeded = side_view.group_count > constants.MAX_GROUPS_PER_NODE;
 
-    var group_idx = side_view.first_group;
     var visited: u16 = 0;
     var previous_group_end: ?u32 = null;
-    while (group_idx != constants.END_OF_CHAIN) {
+    const end_group = side_view.first_group + side_view.group_count;
+    for (side_view.first_group..end_group) |group_idx_usize| {
         visited += 1;
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
-        const is_last_group = group.next == constants.END_OF_CHAIN;
+        const is_last_group = visited == side_view.group_count;
         if (previous_group_end) |expected_start| {
             if (group.start != expected_start) report.chain_is_contiguous = false;
         }
@@ -95,7 +95,6 @@ pub fn analyzeSideLayout(
         if (report.has_underfull_non_tail_block and report.has_small_non_tail_group and !report.chain_is_contiguous) {
             // Keep scanning only for counted_groups.
         }
-        group_idx = group.next;
     }
     report.counted_groups = visited;
     return report;

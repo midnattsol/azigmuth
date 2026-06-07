@@ -106,12 +106,11 @@ fn edgeIdAppearsLater(
         return false;
     }
 
-    var group_idx = common.firstGroup(adjacency, .fwd);
-    var visited_groups: u32 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count or visited_groups >= graph.group_count) return false;
-        visited_groups += 1;
-
+    const first_group_idx = common.firstGroup(adjacency, .fwd);
+    const end_group = first_group_idx + common.groupCount(adjacency, .fwd);
+    if (end_group > graph.group_count) return false;
+    for (first_group_idx..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
@@ -122,7 +121,6 @@ fn edgeIdAppearsLater(
                 if (id_block.ids[slot] == edge_id) return true;
             }
         }
-        group_idx = group.next;
     }
     return false;
 }

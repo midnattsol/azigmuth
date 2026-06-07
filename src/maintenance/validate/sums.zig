@@ -25,19 +25,14 @@ pub fn sumContiguousBlocks(
     return total;
 }
 
-pub fn sumGroupChain(graph: *const graph_core.GraphCore, first_group: u32, comptime side: common.Side) u64 {
+pub fn sumGroupedRuns(graph: *const graph_core.GraphCore, first_group: u32, group_count: u16, comptime side: common.Side) u64 {
     var total: u64 = 0;
-    var group_index = first_group;
-    var visited_groups: u32 = 0;
-
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return total;
-        if (visited_groups > graph.group_count) return total;
-        visited_groups += 1;
-
+    const end_group = std.math.add(u32, first_group, group_count) catch return total;
+    if (end_group > graph.group_count) return total;
+    for (first_group..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
         total += sumContiguousBlocks(graph, group.start, group.count, side);
-        group_index = group.next;
     }
 
     return total;

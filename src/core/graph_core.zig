@@ -54,9 +54,13 @@ pub const GraphCore = struct {
     retired_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
 
-    /// Tagged stack heads for group retirement/reuse.
-    free_groups_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
-    retired_groups_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    /// Tagged stack heads for grouped-run retirement/reuse, indexed by
+    /// (span_len - 1). Published grouped sides own a contiguous span of up to
+    /// MAX_GROUPS_PER_NODE run descriptors.
+    free_group_spans_head: [constants.MAX_GROUPS_PER_NODE]std.atomic.Value(u64) =
+        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_GROUPS_PER_NODE,
+    retired_group_spans_head: [constants.MAX_GROUPS_PER_NODE]std.atomic.Value(u64) =
+        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_GROUPS_PER_NODE,
 
     /// Repair debt queues — node indices below occupancy threshold.
     /// These are best-effort single-writer queues.  Concurrent writers

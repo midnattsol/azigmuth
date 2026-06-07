@@ -167,41 +167,8 @@ pub fn appendLayoutDebtViolations(
         return;
     };
 
-    if (!common.needsRepairFlag(adjacency, side)) {
-        const ViolationContext = struct {
-            allocator: std.mem.Allocator,
-            violations: *std.ArrayList(types.Violation),
-            node_id: u32,
-        };
-        var context = ViolationContext{
-            .allocator = allocator,
-            .violations = violations,
-            .node_id = node_id,
-        };
-        try layout_debt.forEachGroupInSide(graph, side_view, side_tag, &context, struct {
-            fn callback(
-                _: *const graph_core.GraphCore,
-                violation_context: *ViolationContext,
-                group_idx: u32,
-                group: types.EdgeBlockGroup,
-                is_last_group: bool,
-            ) !void {
-                if (!is_last_group and group.count < 4) {
-                    try violation_context.violations.append(violation_context.allocator, .{ .run_fragmentation_requires_repair = .{
-                        .node = violation_context.node_id,
-                        .group = group_idx,
-                        .count = group.count,
-                    } });
-                }
-            }
-        }.callback);
-    }
-
-    if (report.chain_is_contiguous and !common.needsRepairFlag(adjacency, side)) {
-        try violations.append(allocator, .{ .grouped_layout_needs_canonicalization = .{
-            .node = node_id,
-            .first_group = common.firstGroup(adjacency, side),
-        } });
+    if (report.group_count_exceeded and !common.needsRepairFlag(adjacency, side) and !adjacency.flags.removed) {
+        try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
     }
 }
 

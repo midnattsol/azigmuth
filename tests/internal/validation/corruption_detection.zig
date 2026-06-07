@@ -231,7 +231,7 @@ test "validation: detects underfull non-tail blocks" {
     try testing.expect(containsViolation(violations, .occupancy_below_threshold));
 }
 
-test "validation: detects block group cycles without hanging" {
+test "validation: detects grouped span declared past allocated runs" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -240,8 +240,8 @@ test "validation: detects block group cycles without hanging" {
     const group = try graph.allocGroup();
 
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = group };
-    try publishForwardGroups(&graph, node, group, 1, 1);
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+    try publishForwardGroups(&graph, node, group, 1, 2);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(testing.allocator);

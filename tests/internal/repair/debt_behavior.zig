@@ -12,14 +12,9 @@ test "repair debt: needs_repair flag alone is sufficient for repairBudgeted disc
     defer graph.deinit();
 
     const source = try graph.addNode();
-    for (0..65) |_| {
-        const destination = try graph.addNode();
-        try graph.addEdge(source, destination, 0, 0);
-    }
-
-    for (1..1 + 20) |destination_idx| {
-        _ = graph.removeEdge(source, .{ .index = @intCast(destination_idx) }) catch {};
-    }
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+    _ = try graph.removeNode(destination);
 
     graph.graph.repair_fwd.clearRetainingCapacity();
     graph.graph.repair_rev.clearRetainingCapacity();
@@ -34,13 +29,9 @@ test "repair debt: stale entries in repair queue do not break repairBudgeted" {
     defer graph.deinit();
 
     const source = try graph.addNode();
-    for (0..65) |_| {
-        const destination = try graph.addNode();
-        try graph.addEdge(source, destination, 0, 0);
-    }
-    for (1..1 + 20) |destination_idx| {
-        _ = graph.removeEdge(source, .{ .index = @intCast(destination_idx) }) catch {};
-    }
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+    _ = try graph.removeNode(destination);
 
     try graph.graph.repair_fwd.append(graph.graph.allocator, 99999);
     try graph.graph.repair_rev.append(graph.graph.allocator, 99998);
@@ -322,7 +313,7 @@ test "repair: repairBudgeted with max_steps zero returns zero" {
     try testing.expectEqual(@as(usize, 0), compacted);
 }
 
-test "repair debt: grouped non-tail runs below 4 blocks trigger repair debt" {
+test "repair debt: grouped non-tail runs below 4 blocks are valid layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -354,10 +345,10 @@ test "repair debt: grouped non-tail runs below 4 blocks trigger repair debt" {
 
     var staging_adj = node_buffer.publishedAdj();
     graph_mod.repair_mod.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
-    try testing.expect(staging_adj.flags.needs_repair_fwd);
+    try testing.expect(!staging_adj.flags.needs_repair_fwd);
 }
 
-test "repair debt: validate requires run fragmentation debt to be marked" {
+test "repair debt: validate accepts run fragmentation without repair flag" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -394,15 +385,10 @@ test "repair debt: validate requires run fragmentation debt to be marked" {
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
     graph.graph.edge_count.store(129, .release);
 
-    try testing.expectError(error.CorruptGraph, graph.validate());
-
-    var staging_adj = node_buffer.publishedAdj();
-    staging_adj.flags.needs_repair_fwd = true;
-    publish.setPublishedAdjSnapshot(node_buffer, staging_adj);
     try graph.validate();
 }
 
-test "repair debt: contiguous MAX_GROUPS_PER_NODE groups trigger canonical repair debt" {
+test "repair debt: contiguous MAX_GROUPS_PER_NODE groups do not trigger canonical repair debt" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -434,14 +420,12 @@ test "repair debt: contiguous MAX_GROUPS_PER_NODE groups trigger canonical repai
     publish.publishedFwdSide(node_buffer).group_count = 4;
     publish.publishedFwdSide(node_buffer).first_group = g0;
 
-    // Even at exactly MAX_GROUPS_PER_NODE, a fully contiguous grouped chain
-    // should be canonicalized back to contiguous representation.
     var staging_adj = node_buffer.publishedAdj();
     graph_mod.repair_mod.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
-    try testing.expect(staging_adj.flags.needs_repair_fwd);
+    try testing.expect(!staging_adj.flags.needs_repair_fwd);
 }
 
-test "repair debt: repairNode canonicalizes grouped contiguous layout even when occupancy is fine" {
+test "repair debt: repairNode clears flag without canonicalizing grouped contiguous layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -480,7 +464,7 @@ test "repair debt: repairNode canonicalizes grouped contiguous layout even when 
     try graph.validate();
 
     const repaired = try graph.publishedNodeAdj(node);
-    try testing.expectEqual(@as(u16, 0), repaired.group_count_fwd);
+    try testing.expectEqual(@as(u16, 3), repaired.group_count_fwd);
     try testing.expectEqual(@as(u16, 3), repaired.block_count_fwd);
     try testing.expect(!repaired.flags.needs_repair_fwd);
 }
@@ -562,7 +546,7 @@ test "repair debt: repairBudgeted skips removed queue entries and still compacts
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
 }
 
-test "repair debt: repairNode canonicalizes single-block grouped contiguous adjacency" {
+test "repair debt: repairNode clears flag on single-block grouped adjacency without canonicalizing" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -600,7 +584,7 @@ test "repair debt: repairNode canonicalizes single-block grouped contiguous adja
     try graph.validate();
 
     const repaired = (try graph.nodeAtConst(.{ .index = 0 })).publishedAdj();
-    try testing.expectEqual(@as(u16, 0), repaired.group_count_fwd);
+    try testing.expectEqual(@as(u16, 1), repaired.group_count_fwd);
     try testing.expectEqual(@as(u16, 1), repaired.block_count_fwd);
     try testing.expect(!repaired.flags.needs_repair_fwd);
 }
