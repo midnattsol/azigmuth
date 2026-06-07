@@ -63,7 +63,7 @@ test "repair debt: repairBudgeted ignores removed nodes" {
     try graph.graph.repair_fwd.append(graph.graph.allocator, source.index);
 
     const repaired = try graph.repairBudgeted(5);
-    try testing.expectEqual(@as(usize, 0), repaired);
+    try testing.expectEqual(@as(usize, 1), repaired);
     try graph.validate();
 }
 

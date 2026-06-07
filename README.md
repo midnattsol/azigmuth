@@ -89,13 +89,18 @@ an implementation detail.
 ## RemoveNode And Repair
 
 `removeNode()` is logically complete when it returns, but it may leave
-structural repair debt behind for live predecessors. The return value
+structural repair debt behind for live predecessors and live destinations.
+The return value
 `NodeRemovalSummary` reports that aftermath so embeddings can decide whether to
 repair now or later.
 
+Live destinations may keep reverse structural tombstones until explicit
+maintenance, so `needs_repair_rev` is part of the normal post-`removeNode()`
+surface, not a hidden inconsistency.
+
 ```zig
 const summary = try g.removeNode(node);
-if (summary.left_forward_repair_debt) {
+if (summary.left_repair_debt) {
     _ = try g.repairBudgeted(summary.related_live_nodes_touched);
 }
 ```

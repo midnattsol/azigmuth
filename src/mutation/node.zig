@@ -10,22 +10,12 @@ const repair = @import("../maintenance/repair.zig");
 const common = @import("common.zig");
 const node_validity = @import("../core/node_validity.zig");
 
-const DestinationUpdate = struct {
-    node_index: u32,
-    node_buffer: *types.NodeBuffer,
-    published_adj_before: types.NodeAdj,
-    staging_adj_after: types.NodeAdj,
-    new_degree_rev: u22,
-    fwd_degree_delta: u22,
-    needs_reverse_retire: bool = false,
-};
-
 const RelatedNode = struct {
     node_index: u32,
     node_buffer: *types.NodeBuffer,
     claims: common.ClaimedNodeSides,
-    needs_reverse_cleanup: bool = false,
-    fwd_degree_delta: u22 = 0,
+    fwd_degree_delta: u22,
+    rev_degree_delta: u22,
 };
 
 const RemovalScan = struct {
@@ -142,16 +132,14 @@ fn markRelatedNode(
     related_node_index: *std.AutoHashMap(u32, usize),
     node_index: u32,
     need_rev_claim: bool,
-    needs_reverse_cleanup: bool,
     fwd_degree_delta: u22,
+    rev_degree_delta: u22,
 ) !void {
     if (related_node_index.get(node_index)) |entry_idx| {
         const entry = &related_nodes.items[entry_idx];
         if (need_rev_claim) try entry.claims.ensureRev();
-        // fwd_claim is NOT needed for visible_fwd_decrement — CAS on
-        // published_meta provides the atomicity directly.
-        entry.needs_reverse_cleanup = entry.needs_reverse_cleanup or needs_reverse_cleanup;
         entry.fwd_degree_delta += fwd_degree_delta;
+        entry.rev_degree_delta += rev_degree_delta;
         return;
     }
 
@@ -161,10 +149,19 @@ fn markRelatedNode(
         .node_index = node_index,
         .node_buffer = node_buffer,
         .claims = claims,
-        .needs_reverse_cleanup = needs_reverse_cleanup,
         .fwd_degree_delta = fwd_degree_delta,
+        .rev_degree_delta = rev_degree_delta,
     });
     try related_node_index.put(node_index, related_nodes.items.len - 1);
+}
+
+fn releaseRelatedNodes(related_nodes: *std.ArrayList(RelatedNode), allocator: std.mem.Allocator) void {
+    var remaining = related_nodes.items.len;
+    while (remaining > 0) {
+        remaining -= 1;
+        related_nodes.items[remaining].claims.release();
+    }
+    related_nodes.deinit(allocator);
 }
 
 fn scanNode(graph: *const graph_core.GraphCore, node: types.NodeId) !RemovalScan {
@@ -185,6 +182,39 @@ fn validateForwardDestinations(graph: *graph_core.GraphCore, forward_destination
     for (forward_destinations) |destination_idx| {
         const entry = try seen.getOrPut(destination_idx);
         if (entry.found_existing) return error.CorruptGraph;
+    }
+}
+
+fn validateForwardView(
+    graph: *graph_core.GraphCore,
+    node: types.NodeId,
+    scan: *const RemovalScan,
+) !void {
+    var destination_counts = std.AutoHashMap(u32, u32).init(graph.allocator);
+    defer destination_counts.deinit();
+
+    for (scan.forward_destinations.items) |destination_idx| {
+        if (destination_idx == node.index) continue;
+        if (!node_validity.isNodeLiveIndex(graph, destination_idx)) continue;
+
+        const entry = try destination_counts.getOrPut(destination_idx);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        entry.value_ptr.* += 1;
+    }
+
+    var destination_iter = destination_counts.iterator();
+    while (destination_iter.next()) |kv| {
+        const destination_idx = kv.key_ptr.*;
+        const destination_adj = page_ops.nodeAtConst(graph, .{ .index = destination_idx }).publishedAdj();
+        const reverse_count = try repair.countReverseMatches(
+            graph,
+            destination_adj.first_block_rev,
+            destination_adj.block_count_rev,
+            destination_adj.group_count_rev,
+            destination_adj.first_group_rev,
+            node.index,
+        );
+        if (reverse_count != kv.value_ptr.*) return error.CorruptGraph;
     }
 }
 
@@ -265,15 +295,6 @@ fn validateReverseView(
     if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
 }
 
-fn releaseRelatedNodes(related_nodes: *std.ArrayList(RelatedNode), allocator: std.mem.Allocator) void {
-    var remaining = related_nodes.items.len;
-    while (remaining > 0) {
-        remaining -= 1;
-        related_nodes.items[remaining].claims.release();
-    }
-    related_nodes.deinit(allocator);
-}
-
 fn collectRelated(
     graph: *graph_core.GraphCore,
     node: types.NodeId,
@@ -281,7 +302,7 @@ fn collectRelated(
 ) !struct { nodes: std.ArrayList(RelatedNode), index: std.AutoHashMap(u32, usize) } {
     var related_nodes = try std.ArrayList(RelatedNode).initCapacity(
         graph.allocator,
-        scan.forward_destinations.items.len - scan.self_edge_count + scan.visible_incoming,
+        scan.forward_destinations.items.len + scan.visible_incoming,
     );
     errdefer releaseRelatedNodes(&related_nodes, graph.allocator);
 
@@ -290,86 +311,22 @@ fn collectRelated(
 
     for (scan.forward_destinations.items) |destination_idx| {
         if (destination_idx == node.index) continue;
-        try markRelatedNode(graph, &related_nodes, &related_index, destination_idx, true, true, 0);
+        if (!node_validity.isNodeLiveIndex(graph, destination_idx)) continue;
+        try markRelatedNode(graph, &related_nodes, &related_index, destination_idx, true, 0, 1);
     }
     for (scan.reverse_sources.items) |source_idx| {
         if (source_idx == node.index) continue;
         if (!node_validity.isNodeLiveIndex(graph, source_idx)) continue;
-        // Claim predecessor rev to serialize against concurrent removeNode on
-        // that endpoint without requiring its fwd_claim.
-        try markRelatedNode(graph, &related_nodes, &related_index, source_idx, true, false, 1);
+        try markRelatedNode(graph, &related_nodes, &related_index, source_idx, true, 1, 0);
     }
 
     return .{ .nodes = related_nodes, .index = related_index };
 }
 
-fn buildUpdates(
-    graph: *graph_core.GraphCore,
-    node: types.NodeId,
-    related_nodes: []RelatedNode,
-    scratch: *common.MutationScratch,
-) !std.ArrayList(DestinationUpdate) {
-    var updates = try std.ArrayList(DestinationUpdate).initCapacity(graph.allocator, related_nodes.len);
-    errdefer updates.deinit(graph.allocator);
-
-    for (related_nodes) |*related| {
-        if (related.needs_reverse_cleanup) {
-            const destination_adj = related.node_buffer.publishedAdj();
-            const reverse_rebuild = try repair.rebuildReverseDrop(
-                graph,
-                related.node_index,
-                destination_adj,
-                node.index,
-                scratch,
-            );
-
-            const new_rev_degree = if (destination_adj.flags.removed) @as(u22, 0) else @as(u22, @intCast(reverse_rebuild.live_after));
-            try updates.append(graph.allocator, .{
-                .node_index = related.node_index,
-                .node_buffer = related.node_buffer,
-                .published_adj_before = destination_adj,
-                .staging_adj_after = reverse_rebuild.staging_adj,
-                .new_degree_rev = new_rev_degree,
-                .fwd_degree_delta = related.fwd_degree_delta,
-                .needs_reverse_retire = true,
-            });
-            continue;
-        }
-
-        if (related.fwd_degree_delta > 0) {
-            try updates.append(graph.allocator, .{
-                .node_index = related.node_index,
-                .node_buffer = related.node_buffer,
-                .published_adj_before = related.node_buffer.publishedAdj(),
-                .staging_adj_after = related.node_buffer.publishedAdj(),
-                .new_degree_rev = related.node_buffer.loadPublishedMeta().degree_rev,
-                .fwd_degree_delta = related.fwd_degree_delta,
-            });
-        }
-    }
-
-    return updates;
-}
-
 fn buildRemovedAdj(
-    graph: *graph_core.GraphCore,
-    node: types.NodeId,
     source_adj: types.NodeAdj,
-    self_edge_count: u32,
-    scratch: *common.MutationScratch,
-) !types.NodeAdj {
+) types.NodeAdj {
     var removed_adj = source_adj;
-    if (self_edge_count > 0) {
-        const reverse_rebuild = try repair.rebuildReverseDrop(
-            graph,
-            node.index,
-            source_adj,
-            node.index,
-            scratch,
-        );
-        removed_adj = reverse_rebuild.staging_adj;
-    }
-
     removed_adj.first_block_fwd = 0;
     removed_adj.block_count_fwd = 0;
     removed_adj.group_count_fwd = 0;
@@ -380,17 +337,29 @@ fn buildRemovedAdj(
     return removed_adj;
 }
 
-fn publishUpdates(updates: []const DestinationUpdate) RemoveCounts {
+fn publishUpdates(related_nodes: []const RelatedNode) RemoveCounts {
     var counts = RemoveCounts{};
-    for (updates) |update| {
-        if (update.fwd_degree_delta > 0) {
-            counts.predecessors += 1;
-            const meta = update.node_buffer.loadPublishedMeta();
-            _ = common.publishMetaFwdDeltaUpdated(update.node_buffer, meta, meta.needs_repair_fwd, update.fwd_degree_delta);
+    for (related_nodes) |related| {
+        if (related.fwd_degree_delta > 0) counts.predecessors += 1;
+        if (related.rev_degree_delta > 0) counts.destinations += 1;
+        if (related.fwd_degree_delta == 0 and related.rev_degree_delta == 0) continue;
+
+        const meta = related.node_buffer.loadPublishedMeta();
+        if (meta.removed) continue;
+        if (related.fwd_degree_delta > 0 and related.rev_degree_delta > 0) {
+            _ = common.publishMetaBothDeltaUpdated(related.node_buffer, meta, .{
+                .needs_repair_fwd = true,
+                .needs_repair_rev = true,
+                .removed = false,
+            }, related.fwd_degree_delta, related.rev_degree_delta);
+            continue;
         }
-        if (update.needs_reverse_retire) {
-            counts.destinations += 1;
-            common.publishRevAdj(update.node_buffer, update.staging_adj_after, update.new_degree_rev);
+
+        if (related.fwd_degree_delta > 0) {
+            _ = common.publishMetaFwdDeltaUpdated(related.node_buffer, meta, true, related.fwd_degree_delta);
+        }
+        if (related.rev_degree_delta > 0) {
+            _ = common.publishMetaRevDeltaUpdated(related.node_buffer, meta, true, related.rev_degree_delta);
         }
     }
     return counts;
@@ -399,16 +368,8 @@ fn publishUpdates(updates: []const DestinationUpdate) RemoveCounts {
 fn retireRemoveNode(
     graph: *graph_core.GraphCore,
     source_adj: types.NodeAdj,
-    self_edge_count: u32,
-    updates: []const DestinationUpdate,
 ) !void {
-    for (updates) |update| {
-        if (update.needs_reverse_retire) {
-            try common.retireSide(graph, update.published_adj_before, .rev);
-        }
-    }
     try common.retireSide(graph, source_adj, .fwd);
-    if (self_edge_count > 0) try common.retireSide(graph, source_adj, .rev);
 }
 
 pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeRemovalSummary {
@@ -428,6 +389,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     defer scan.deinit(graph.allocator);
 
     try validateForwardDestinations(graph, scan.forward_destinations.items);
+    try validateForwardView(graph, node, &scan);
     try validateReverseView(graph, node, source_node, &scan);
 
     var related = try collectRelated(graph, node, &scan);
@@ -436,21 +398,12 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
         related.index.deinit();
     }
 
-    var scratch = common.MutationScratch{};
-    defer {
-        scratch.cleanup(graph);
-        scratch.deinit(graph.allocator);
-    }
-
     var writer_guard = common.beginWriter(graph);
     defer writer_guard.end();
 
-    var destination_updates = try buildUpdates(graph, node, related.nodes.items, &scratch);
-    defer destination_updates.deinit(graph.allocator);
-
     const removed_visible_edge_count = scan.visible_forward + scan.visible_incoming;
 
-    const source_staging_adj = try buildRemovedAdj(graph, node, source_adj_before, scan.self_edge_count, &scratch);
+    const source_staging_adj = buildRemovedAdj(source_adj_before);
 
     // Publish predecessor-side degree/repair updates before tombstoning the
     // removed node. Readers may therefore observe a transient mixed-version
@@ -461,23 +414,11 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // (`publishMetaFwdDeltaUpdated`) which does NOT require `fwd_claim` on the
     // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
     // (RFC Phase 2 §concurrency note).
-    const counts = publishUpdates(destination_updates.items);
+    const counts = publishUpdates(related.nodes.items);
 
     common.publishBothAdj(source_node, source_staging_adj, 0, 0);
 
-    // With the target node now marked removed, recompute forward repair debt
-    // on each live predecessor.  Their forward adjacency still contains a
-    // tombstoned reference that needs compaction, and the flag makes it
-    // immediately discoverable by repairBudgeted.
-    for (destination_updates.items) |update| {
-        if (update.fwd_degree_delta > 0) {
-            repair.updateRepairDebtSide(graph, update.node_buffer, update.node_index, .fwd);
-        }
-    }
-
-    try retireRemoveNode(graph, source_adj_before, scan.self_edge_count, destination_updates.items);
-
-    scratch.disarm();
+    try retireRemoveNode(graph, source_adj_before);
     _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);
     rcu.bumpEpoch(graph);
     writer_guard.end();
@@ -485,9 +426,9 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
 
     return .{
         .removed_visible_edges = @intCast(removed_visible_edge_count),
-        .related_live_nodes_touched = @intCast(destination_updates.items.len),
+        .related_live_nodes_touched = @intCast(related.nodes.items.len),
         .predecessor_nodes_with_forward_tombstone = counts.predecessors,
-        .destination_nodes_with_reverse_cleanup = counts.destinations,
-        .left_forward_repair_debt = counts.predecessors > 0,
+        .destination_nodes_with_reverse_tombstone = counts.destinations,
+        .left_repair_debt = counts.predecessors > 0 or counts.destinations > 0,
     };
 }

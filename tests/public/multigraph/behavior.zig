@@ -238,6 +238,29 @@ test "multigraph: builder freeze seeds next EdgeId by source max" {
     try g.validate();
 }
 
+test "multigraph: builder freeze seeds next EdgeId independently per source" {
+    var builder = try gz.GraphBuilder.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer builder.deinit();
+    const a = try builder.addNode();
+    const b = try builder.addNode();
+    const c = try builder.addNode();
+    const d = try builder.addNode();
+    const e = try builder.addNode();
+
+    try builder.addEdge(a, c, 0, .{});
+    try builder.addEdge(a, d, 0, .{});
+    try builder.addEdge(b, e, 0, .{});
+
+    var g = try builder.freeze();
+    defer g.deinit();
+
+    const next_a = try g.addEdgeWithId(a, e, 1, .{});
+    const next_b = try g.addEdgeWithId(b, c, 1, .{});
+    try testing.expectEqual(@as(u32, 3), next_a.local);
+    try testing.expectEqual(@as(u32, 2), next_b.local);
+    try g.validate();
+}
+
 test "multigraph: removeEdge preserves grouped reverse entries after duplicates" {
     var g = try gz.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
     defer g.deinit();

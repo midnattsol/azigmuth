@@ -1,3 +1,5 @@
+const std = @import("std");
+const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const types = @import("core/types.zig");
@@ -38,9 +40,38 @@ pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
     };
 }
 
+pub fn validateReadSideQuick(
+    graph: *const graph_core.GraphCore,
+    side_adj: types.SideAdj,
+    comptime side: adjacency.AdjSide,
+) !void {
+    const block_limit = switch (side) {
+        .fwd => @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire),
+        .rev => @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire),
+    };
+
+    if (side_adj.block_count == 0) {
+        if (side_adj.group_count != 0) return error.CorruptGraph;
+        return;
+    }
+
+    if (side_adj.group_count == 0) {
+        if (side_adj.first_block >= block_limit) return error.CorruptGraph;
+        const end = std.math.add(u32, side_adj.first_block, side_adj.block_count) catch return error.CorruptGraph;
+        if (end > block_limit) return error.CorruptGraph;
+        return;
+    }
+
+    if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
+}
+
 pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (iterator.contiguous_mode) return;
     if (iterator.current_group_index == constants.END_OF_CHAIN) return;
+    if (iterator.current_group_index >= graph.group_count) {
+        iterator.current_group_index = constants.END_OF_CHAIN;
+        return;
+    }
 
     const first_group = page_ops.groupAtConst(graph, iterator.current_group_index);
     iterator.current_block_index = first_group.start;
@@ -50,6 +81,10 @@ pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCo
 pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     if (iterator.contiguous_mode) return false;
     if (iterator.current_group_index == constants.END_OF_CHAIN) return false;
+    if (iterator.current_group_index >= graph.group_count) {
+        iterator.current_group_index = constants.END_OF_CHAIN;
+        return false;
+    }
 
     const current_group = page_ops.groupAtConst(graph, iterator.current_group_index);
     if (current_group.next == constants.END_OF_CHAIN) {
@@ -71,6 +106,7 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
 }
 
 pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_index: u32) bool {
+    if (candidate_index >= graph.publishedNodeCount()) return true;
     const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
     if (iterator.cached_node_page == null or iterator.cached_node_page_index != page_index) {
         iterator.cached_node_page = page_ops.nodePageAtConst(graph, page_index);

@@ -79,9 +79,8 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
             if (@as(usize, meta.degree_rev) != rev_visible) {
                 return error.CorruptGraph;
             }
-            if (!adjacency.flags.needs_repair_fwd and common.forwardHasTombstone(graph, adjacency)) {
-                return error.CorruptGraph;
-            }
+            if (!adjacency.flags.needs_repair_fwd and common.forwardHasTombstone(graph, adjacency)) return error.CorruptGraph;
+            if (!adjacency.flags.needs_repair_rev and common.reverseHasTombstone(graph, adjacency)) return error.CorruptGraph;
         }
     }
 

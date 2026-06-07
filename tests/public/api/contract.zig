@@ -279,8 +279,8 @@ test "contract: removeNode returns summary for repair policy decisions" {
     try testing.expectEqual(@as(u64, 2), summary.removed_visible_edges);
     try testing.expectEqual(@as(u32, 2), summary.related_live_nodes_touched);
     try testing.expectEqual(@as(u32, 1), summary.predecessor_nodes_with_forward_tombstone);
-    try testing.expectEqual(@as(u32, 1), summary.destination_nodes_with_reverse_cleanup);
-    try testing.expect(summary.left_forward_repair_debt);
+    try testing.expectEqual(@as(u32, 1), summary.destination_nodes_with_reverse_tombstone);
+    try testing.expect(summary.left_repair_debt);
 }
 
 test "contract: removeNode clears outgoing edges" {

@@ -4,7 +4,6 @@
 //! unsupported.
 
 const std = @import("std");
-const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const iterator_common = @import("iterator_common.zig");
@@ -31,6 +30,8 @@ pub const NeighborIterator = struct {
     cached_rev_block: ?*const types.EdgeBlockRev = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const types.NodeBuffer = null,
+
+    degree_snapshot: usize,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
@@ -114,7 +115,7 @@ pub const NeighborIterator = struct {
     /// The iterator is exhausted after this call (`next()` returns `null`), but
     /// `deinit()` is still required to release the RCU reader token.
     pub fn materialize(self: *NeighborIterator, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
-        var out: std.ArrayList(types.NodeId) = .empty;
+        var out = try std.ArrayList(types.NodeId).initCapacity(allocator, snapshotDegree(self));
         errdefer out.deinit(allocator);
         while (self.next()) |neighbor| {
             try out.append(allocator, neighbor);
@@ -129,10 +130,7 @@ pub fn snapshotDegree(iterator: *const NeighborIterator) usize {
         @constCast(iterator).reader_active = false;
         return 0;
     }
-    return switch (iterator.direction) {
-        .fwd => sumVisibleCount(iterator.core, iterator.node_adj_snapshot, .fwd),
-        .rev => sumVisibleCount(iterator.core, iterator.node_adj_snapshot, .rev),
-    };
+    return iterator.degree_snapshot;
 }
 
 /// Drains all remaining items into a caller-owned slice and consumes the
@@ -141,8 +139,9 @@ pub fn snapshotDegree(iterator: *const NeighborIterator) usize {
 pub fn materializeConsuming(iterator: *NeighborIterator, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
     defer iterator.deinit();
     var out = try std.ArrayList(types.NodeId).initCapacity(allocator, snapshotDegree(iterator));
+    errdefer out.deinit(allocator);
     while (iterator.next()) |neighbor| {
-        out.appendAssumeCapacity(neighbor);
+        try out.append(allocator, neighbor);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -151,8 +150,9 @@ pub fn materializeExactConsuming(iterator: *NeighborIterator, allocator: std.mem
     defer iterator.deinit();
     const snapshot_capacity = snapshotDegree(iterator);
     var out = try std.ArrayList(types.NodeId).initCapacity(allocator, @max(capacity, snapshot_capacity));
+    errdefer out.deinit(allocator);
     while (iterator.next()) |neighbor| {
-        out.appendAssumeCapacity(neighbor);
+        try out.append(allocator, neighbor);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -181,15 +181,17 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const node_adj_snapshot = node_buffer.publishedAdj();
+    const meta = node_buffer.loadPublishedMeta();
+    const node_adj_snapshot = node_buffer.publishedAdjFromMeta(meta);
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
+    const side_snapshot = sideAdj(direction, node_adj_snapshot);
     if (direction == .fwd) {
-        try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .fwd);
+        try iterator_common.validateReadSideQuick(graph, side_snapshot, .fwd);
     } else {
-        try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .rev);
+        try iterator_common.validateReadSideQuick(graph, side_snapshot, .rev);
     }
 
-    const initial = iterator_common.buildTraversalState(sideAdj(direction, node_adj_snapshot));
+    const initial = iterator_common.buildTraversalState(side_snapshot);
 
     var iterator = NeighborIterator{
         .core = graph,
@@ -200,6 +202,10 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .blocks_remaining = initial.blocks_remaining,
         .current_group_index = initial.current_group_index,
         .current_mask = 0,
+        .degree_snapshot = switch (direction) {
+            .fwd => meta.degree_fwd,
+            .rev => meta.degree_rev,
+        },
         .reader_active = true,
         .reader_token = reader_token,
         .groups_visited = 0,
@@ -220,65 +226,6 @@ pub fn neighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types.G
 
 pub fn inNeighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!NeighborIterator {
     return initNeighborIterator(graph, node, .rev);
-}
-
-fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Direction) usize {
-    const block = page_ops.edgeBlockAtConst(graph, block_index, switch (side) {
-        .fwd => .fwd,
-        .rev => .rev,
-    });
-    const live = @popCount(block.mask);
-    var total: usize = 0;
-    for (0..live) |slot| {
-        const candidate_index = switch (side) {
-            .fwd => block.edges[slot].destination,
-            .rev => block.sources[slot],
-        };
-        if (node_validity.isNodeLiveIndex(graph, candidate_index)) total += 1;
-    }
-    return total;
-}
-
-fn sumVisibleCount(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, comptime side: Direction) usize {
-    const block_count: u32 = switch (side) {
-        .fwd => node_adj.block_count_fwd,
-        .rev => node_adj.block_count_rev,
-    };
-    const group_count: u32 = switch (side) {
-        .fwd => node_adj.group_count_fwd,
-        .rev => node_adj.group_count_rev,
-    };
-
-    if (block_count == 0) return 0;
-
-    var total: usize = 0;
-
-    if (group_count == 0) {
-        const start: u32 = switch (side) {
-            .fwd => node_adj.first_block_fwd,
-            .rev => node_adj.first_block_rev,
-        };
-        for (start..start + block_count) |block_index| {
-            total += countVisibleEntriesInBlock(graph, @intCast(block_index), side);
-        }
-        return total;
-    }
-
-    var group_idx: u32 = switch (side) {
-        .fwd => node_adj.first_group_fwd,
-        .rev => node_adj.first_group_rev,
-    };
-    var visited: u16 = 0;
-    while (visited < group_count) : (visited += 1) {
-        if (group_idx == constants.END_OF_CHAIN) break;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_index| {
-            total += countVisibleEntriesInBlock(graph, @intCast(block_index), side);
-        }
-        group_idx = group.next;
-    }
-
-    return total;
 }
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {

@@ -97,9 +97,31 @@ fn scanForwardTombstone(
     }
 }
 
+fn scanReverseTombstone(
+    graph: *const graph_core.GraphCore,
+    scan: *TombstoneScan,
+    block_idx: u32,
+    slot: usize,
+) !void {
+    const source_idx = page_ops.edgeBlockAtConst(graph, block_idx, .rev).sources[slot];
+    if (source_idx < graph.publishedNodeCount() and node_validity.isNodeRemovedIndex(graph, source_idx)) {
+        scan.found = true;
+        return error.TombstoneFound;
+    }
+}
+
 pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj) bool {
     var scan = TombstoneScan{};
     forEachLiveSlotInAdj(graph, adjacency, .fwd, &scan, scanForwardTombstone) catch |err| {
+        if (err == error.TombstoneFound) return true;
+        return false;
+    };
+    return scan.found;
+}
+
+pub fn reverseHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj) bool {
+    var scan = TombstoneScan{};
+    forEachLiveSlotInAdj(graph, adjacency, .rev, &scan, scanReverseTombstone) catch |err| {
         if (err == error.TombstoneFound) return true;
         return false;
     };

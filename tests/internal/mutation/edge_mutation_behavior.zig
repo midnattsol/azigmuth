@@ -41,6 +41,20 @@ test "mutation: invalid endpoints do not mutate graph" {
     try graph.validate();
 }
 
+test "mutation: addEdgeWithId returns EdgeIdExhausted before counter wraps" {
+    var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    const source_node = try graph.nodeAt(source);
+    source_node.next_local_edge_id.store(std.math.maxInt(u32), .monotonic);
+
+    try testing.expectError(error.EdgeIdExhausted, graph.addEdgeWithId(source, destination, 0, 0));
+    try testing.expectEqual(std.math.maxInt(u32), source_node.next_local_edge_id.load(.acquire));
+    try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+}
+
 test "mutation: addEdge keeps out-of-order insertions sorted inside the block" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

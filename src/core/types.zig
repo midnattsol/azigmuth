@@ -29,8 +29,8 @@ pub const NodeRemovalSummary = struct {
     removed_visible_edges: u64,
     related_live_nodes_touched: u32,
     predecessor_nodes_with_forward_tombstone: u32,
-    destination_nodes_with_reverse_cleanup: u32,
-    left_forward_repair_debt: bool,
+    destination_nodes_with_reverse_tombstone: u32,
+    left_repair_debt: bool,
 };
 
 pub const RepairFlushSummary = struct {
@@ -60,6 +60,7 @@ pub const DebtStats = struct {
 pub const GraphError = error{
     OutOfMemory,
     DegreeLimitReached,
+    EdgeIdExhausted,
     BlockLimitReached,
     InvalidNode,
     EdgeAlreadyExists,
@@ -184,9 +185,19 @@ pub const NodeBuffer = extern struct {
     next_local_edge_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 
     /// Allocates and returns the next edge ID local to this node.
-    pub fn nextEdgeId(self: *NodeBuffer) EdgeId {
-        const local = self.next_local_edge_id.fetchAdd(1, .monotonic);
-        return .{ .local = local };
+    ///
+    /// `0` is reserved as invalid/unset, so the counter never wraps through 0.
+    /// Once it reaches `maxInt(u32)`, the next allocation fails cleanly.
+    pub fn nextEdgeId(self: *NodeBuffer) GraphError!EdgeId {
+        var expected = self.next_local_edge_id.load(.acquire);
+        while (true) {
+            if (expected == std.math.maxInt(u32)) return error.EdgeIdExhausted;
+            const desired = expected + 1;
+            if (self.next_local_edge_id.cmpxchgWeak(expected, desired, .acq_rel, .acquire) == null) {
+                return .{ .local = expected };
+            }
+            expected = self.next_local_edge_id.load(.acquire);
+        }
     }
 
     pub fn loadPublishedMeta(self: *const NodeBuffer) PublishedMeta {
@@ -271,6 +282,23 @@ pub const NodeBuffer = extern struct {
         var desired = meta.bumpedVersion();
         desired.needs_repair_fwd = needs_repair_fwd;
         desired.degree_fwd = new_degree_fwd;
+        return desired;
+    }
+
+    pub fn desiredMetaForUpdateRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) PublishedMeta {
+        var desired = meta.bumpedVersion();
+        desired.needs_repair_rev = needs_repair_rev;
+        desired.degree_rev = new_degree_rev;
+        return desired;
+    }
+
+    pub fn desiredMetaForUpdateBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u22, rev_degree: u22) PublishedMeta {
+        var desired = meta.bumpedVersion();
+        desired.needs_repair_fwd = flags.needs_repair_fwd;
+        desired.needs_repair_rev = flags.needs_repair_rev;
+        desired.removed = flags.removed;
+        desired.degree_fwd = fwd_degree;
+        desired.degree_rev = rev_degree;
         return desired;
     }
 
@@ -378,6 +406,7 @@ pub const Violation = union(enum) {
     removed_node_has_reverse_residual: struct { node: u32, degree_rev: u22 },
     removed_node_marked_for_repair: struct { node: u32 },
     forward_tombstone_missing_repair_flag: struct { node: u32 },
+    reverse_tombstone_missing_repair_flag: struct { node: u32 },
     edge_count_mismatch: struct { expected: u64, actual: u64 },
     retired_block_reachable: struct { block: u32, node: u32 },
     forward_reverse_count_mismatch: struct { forward_total: u64, reverse_total: u64 },

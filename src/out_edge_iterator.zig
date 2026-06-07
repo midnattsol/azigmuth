@@ -4,7 +4,6 @@
 //! NeighborIterator and is likewise a logically single-owner value.
 
 const std = @import("std");
-const adjacency = @import("adjacency.zig");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const iterator_common = @import("iterator_common.zig");
@@ -117,11 +116,13 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
     const node_buffer = page_ops.nodeAtConst(graph, node);
-    const node_adj_snapshot = node_buffer.publishedAdj();
+    const meta = node_buffer.loadPublishedMeta();
+    const node_adj_snapshot = node_buffer.publishedAdjFromMeta(meta);
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
-    try adjacency.validateNodeAdjLayout(graph, node_adj_snapshot, .fwd);
+    const side_snapshot = forwardSideAdj(node_adj_snapshot);
+    try iterator_common.validateReadSideQuick(graph, side_snapshot, .fwd);
 
-    const initial = iterator_common.buildTraversalState(forwardSideAdj(node_adj_snapshot));
+    const initial = iterator_common.buildTraversalState(side_snapshot);
 
     var iterator = OutEdgeIterator{
         .core = graph,

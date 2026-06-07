@@ -1,12 +1,12 @@
-//! removeNode and tombstone handling — structural invariants after
-//! node removal, tombstone visibility, and repair compaction.
+//! removeNode and tombstone handling — logical removal semantics,
+//! tombstone visibility, and explicit repair compaction.
 
 const std = @import("std");
 const graphz = @import("graphz");
 
 const testing = std.testing;
 
-test "tombstone regression: removeNode clears outgoing from all destinations" {
+test "tombstone regression: removeNode decrements destination inDegree without immediate reverse cleanup" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -117,7 +117,8 @@ test "tombstone regression: removeNode with incoming from already-removed nodes"
     try graph.addEdge(a, b, 0, .{});
     try graph.addEdge(c, b, 0, .{});
 
-    // Remove A first — this clears A's forward and B's reverse for A.
+    // Remove A first — A becomes logically absent, but B may retain
+    // structural reverse tombstones until explicit repair.
     _ = try graph.removeNode(a);
     try graph.validate();
 

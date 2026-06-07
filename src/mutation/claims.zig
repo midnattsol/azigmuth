@@ -159,3 +159,44 @@ pub fn publishMetaFwdDeltaUpdated(
         expected = actual;
     }
 }
+
+pub fn publishMetaRevDeltaUpdated(
+    node: *types.NodeBuffer,
+    expected_meta: types.PublishedMeta,
+    needs_repair_rev: bool,
+    delta: u22,
+) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        std.debug.assert(delta > 0);
+        std.debug.assert(expected.degree_rev >= delta);
+        const new_degree: u22 = @as(u22, @intCast(@as(u64, expected.degree_rev) - delta));
+        const desired = types.NodeBuffer.desiredMetaForUpdateRev(expected, needs_repair_rev or expected.needs_repair_rev, new_degree);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
+}
+
+pub fn publishMetaBothDeltaUpdated(
+    node: *types.NodeBuffer,
+    expected_meta: types.PublishedMeta,
+    flags: types.NodeFlags,
+    fwd_delta: u22,
+    rev_delta: u22,
+) types.PublishedMeta {
+    var expected = expected_meta;
+    while (true) {
+        std.debug.assert(fwd_delta > 0 or rev_delta > 0);
+        std.debug.assert(expected.degree_fwd >= fwd_delta);
+        std.debug.assert(expected.degree_rev >= rev_delta);
+        const new_fwd: u22 = @as(u22, @intCast(@as(u64, expected.degree_fwd) - fwd_delta));
+        const new_rev: u22 = @as(u22, @intCast(@as(u64, expected.degree_rev) - rev_delta));
+        var merged_flags = flags;
+        merged_flags.needs_repair_fwd = merged_flags.needs_repair_fwd or expected.needs_repair_fwd;
+        merged_flags.needs_repair_rev = merged_flags.needs_repair_rev or expected.needs_repair_rev;
+        merged_flags.removed = merged_flags.removed or expected.removed;
+        const desired = types.NodeBuffer.desiredMetaForUpdateBoth(expected, merged_flags, new_fwd, new_rev);
+        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
+        expected = actual;
+    }
+}

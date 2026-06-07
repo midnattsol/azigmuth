@@ -346,7 +346,7 @@ fn addEdgeImpl(
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
 
-    const edge_id = if (graph.multigraph_enabled) endpoints.source_node.nextEdgeId() else types.EdgeId{ .local = 0 };
+    const edge_id = if (graph.multigraph_enabled) try endpoints.source_node.nextEdgeId() else types.EdgeId{ .local = 0 };
 
     const forward_prepared = try prepareAppendBlockSide(graph, source_staging, .fwd, &scratch);
     const reverse_prepared = try prepareAppendBlockSide(graph, destination_staging, .rev, &scratch);

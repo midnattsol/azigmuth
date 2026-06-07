@@ -148,20 +148,6 @@ pub fn updateRepairDebt(
     if (!previous_flag and needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
 }
 
-fn mutationShapeNeedsRepair(
-    graph: *const graph_core.GraphCore,
-    adj: *const types.NodeAdj,
-    comptime side: adjacency.AdjSide,
-) bool {
-    const published_side = side_adj.sideAdjOfNode(adj.*, side);
-    const report = layout_debt.analyzeSideLayout(graph, published_side, side) catch return true;
-
-    if (published_side.block_count <= 1) return report.grouped_single_block;
-    if (published_side.group_count == 0) return false;
-
-    return report.group_count_exceeded or report.has_small_non_tail_group or report.chain_is_contiguous;
-}
-
 pub fn updateRepairDebtAfterEdgeMutation(
     graph: *graph_core.GraphCore,
     adj: *types.NodeAdj,
@@ -175,7 +161,8 @@ pub fn updateRepairDebtAfterEdgeMutation(
         return;
     }
 
-    const needs_repair = previous_flag or mutationShapeNeedsRepair(graph, adj, side);
+    const published_side = side_adj.sideAdjOfNode(adj.*, side);
+    const needs_repair = previous_flag or published_side.group_count > 0;
     setRepairFlag(adj, side, needs_repair);
     if (!previous_flag and needs_repair) enqueueRepairDebtBestEffort(graph, node_index, side);
 }
@@ -188,13 +175,13 @@ pub fn computeNeedsRepair(
     const published_side = side_adj.sideAdjOfNode(adj.*, side);
     const report = layout_debt.analyzeSideLayout(graph, published_side, side) catch return true;
 
-    var needs_repair = side == .fwd and published_side.block_count > 0 and rebuild_mod.hasAnyTombstone(
+    var needs_repair = published_side.block_count > 0 and rebuild_mod.hasAnyTombstone(
         graph,
         published_side.first_block,
         published_side.block_count,
         published_side.group_count,
         published_side.first_group,
-        .fwd,
+        side,
     );
 
     if (published_side.block_count <= 1) {

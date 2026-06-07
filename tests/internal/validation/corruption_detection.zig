@@ -494,6 +494,53 @@ test "validation: debugValidate reports missing needs_repair_fwd on predecessor 
     try testing.expect(violations.len > 0);
 }
 
+test "validation: detects destination with reverse tombstone but missing needs_repair_rev flag" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+
+    _ = try graph.removeNode(source);
+    try graph.validate();
+
+    var destination_node = try graph.nodeAt(destination);
+    {
+        var flags = destination_node.loadPublishedMeta().flags();
+        flags.needs_repair_rev = false;
+        publish.setPublishedFlags(destination_node, flags);
+    }
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .reverse_tombstone_missing_repair_flag));
+}
+
+test "validation: debugValidate reports missing needs_repair_rev on destination with reverse tombstone" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+
+    _ = try graph.removeNode(source);
+
+    var destination_node = try graph.nodeAt(destination);
+    {
+        var flags = destination_node.loadPublishedMeta().flags();
+        flags.needs_repair_rev = false;
+        publish.setPublishedFlags(destination_node, flags);
+    }
+
+    const violations = try graph.debugValidate(testing.allocator);
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .reverse_tombstone_missing_repair_flag));
+}
+
 test "validation: removed node with non-zero published degree is flagged" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

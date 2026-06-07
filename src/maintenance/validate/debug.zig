@@ -153,6 +153,9 @@ pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allo
             if (!adjacency.flags.needs_repair_fwd and common.forwardHasTombstone(graph, adjacency)) {
                 try list.append(allocator, .{ .forward_tombstone_missing_repair_flag = .{ .node = node_id } });
             }
+            if (!adjacency.flags.needs_repair_rev and common.reverseHasTombstone(graph, adjacency)) {
+                try list.append(allocator, .{ .reverse_tombstone_missing_repair_flag = .{ .node = node_id } });
+            }
         }
 
         if (adjacency.flags.removed and (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or meta.degree_fwd != 0)) {

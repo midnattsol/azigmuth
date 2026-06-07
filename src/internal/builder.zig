@@ -15,7 +15,7 @@ const BuilderEdge = struct {
     destination: u32,
     relation: u16,
     flags: u16,
-    edge_id: u32,
+    insertion_order: u64,
 
     fn key(source: types.NodeId, destination: types.NodeId) u64 {
         return (@as(u64, source.index) << 32) | @as(u64, destination.index);
@@ -24,7 +24,7 @@ const BuilderEdge = struct {
     fn lessForward(_: void, lhs: BuilderEdge, rhs: BuilderEdge) bool {
         if (lhs.source != rhs.source) return lhs.source < rhs.source;
         if (lhs.destination != rhs.destination) return lhs.destination < rhs.destination;
-        return lhs.edge_id < rhs.edge_id;
+        return lhs.insertion_order < rhs.insertion_order;
     }
 
     fn lessReverse(_: void, lhs: BuilderEdge, rhs: BuilderEdge) bool {
@@ -77,7 +77,6 @@ pub const GraphBuilder = struct {
     edges: std.ArrayList(BuilderEdge) = .empty,
     edge_keys: std.AutoHashMap(u64, void),
     frozen: bool = false,
-    next_edge_id: u32 = 1,
 
     fn initGraph(allocator: std.mem.Allocator, options: ?types.GraphOptions) !Graph {
         var graph = if (options) |graph_options|
@@ -134,15 +133,12 @@ pub const GraphBuilder = struct {
             errdefer _ = self.edge_keys.remove(key);
         }
 
-        const edge_id = self.next_edge_id;
-        self.next_edge_id += 1;
-
         try self.edges.append(self.graph.graph.allocator, .{
             .source = source.index,
             .destination = destination.index,
             .relation = relation,
             .flags = flags,
-            .edge_id = edge_id,
+            .insertion_order = self.edges.items.len,
         });
     }
 
@@ -204,7 +200,7 @@ pub const GraphBuilder = struct {
         if (run.len == 0) return;
 
         var edge_index: usize = 0;
-        var max_edge_id: u32 = 0;
+        var next_edge_id: u32 = 1;
 
         for (0..block_count) |block_offset| {
             const block_index = first_block + @as(u32, @intCast(block_offset));
@@ -223,13 +219,15 @@ pub const GraphBuilder = struct {
             const live = @min(remaining, 64);
             for (0..live) |slot| {
                 const edge = run[edge_index + slot];
-                max_edge_id = @max(max_edge_id, edge.edge_id);
                 block.edges[slot] = .{
                     .destination = edge.destination,
                     .relation = edge.relation,
                     .flags = @bitCast(edge.flags),
                 };
-                if (id_block) |fwd_ids| fwd_ids.ids[slot] = edge.edge_id;
+                if (id_block) |fwd_ids| {
+                    fwd_ids.ids[slot] = next_edge_id;
+                    next_edge_id += 1;
+                }
             }
             block.mask = constants.denseMask(@intCast(live));
             edge_index += live;
@@ -237,7 +235,7 @@ pub const GraphBuilder = struct {
 
         const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = source_index });
         if (self.graph.graph.multigraph_enabled) {
-            node_buffer.next_local_edge_id.store(max_edge_id + 1, .monotonic);
+            node_buffer.next_local_edge_id.store(next_edge_id, .monotonic);
         }
         setContiguousSide(&node_buffer.fwd_buffers[0], first_block, block_count);
     }
