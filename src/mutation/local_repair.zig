@@ -2,11 +2,11 @@ const std = @import("std");
 const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
-const adjacency = @import("../adjacency.zig");
+const adjacency = @import("../adjacency/mod.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const common = @import("common.zig");
-const shared = @import("edge_shared.zig");
-const side_runs = @import("../side_runs.zig");
+const shared = @import("edge/shared.zig");
+const side_runs = @import("../adjacency/runs.zig");
 
 pub fn ensureTailCowGroupConstraint(
     graph: *graph_core.GraphCore,

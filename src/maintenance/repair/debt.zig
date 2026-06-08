@@ -6,8 +6,8 @@ const graph_core = @import("../../core/graph_core.zig");
 const node_bitmap = @import("../../core/node_bitmap.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const adjacency = @import("../../adjacency.zig");
-const side_adj = @import("../../side_adj.zig");
+const adjacency = @import("../../adjacency/mod.zig");
+const side_adj = @import("../../adjacency/side_ops.zig");
 const layout_debt = @import("../layout_debt.zig");
 const rebuild_mod = @import("rebuild.zig");
 

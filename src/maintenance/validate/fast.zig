@@ -5,7 +5,7 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const rcu = @import("../../rcu.zig");
+const rcu = @import("../../concurrency/rcu.zig");
 
 const common = @import("common.zig");
 const shape = @import("shape.zig");

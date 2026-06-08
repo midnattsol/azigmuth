@@ -4,8 +4,8 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const rcu = @import("../../rcu.zig");
-const adjacency_mod = @import("../../adjacency.zig");
+const rcu = @import("../../concurrency/rcu.zig");
+const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
 
 const LiveTotal = struct { value: u64 = 0 };

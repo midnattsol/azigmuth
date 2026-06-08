@@ -1,11 +1,11 @@
 //! Adjacency chain manipulation — groups, block traversal, and edge search.
 
 const std = @import("std");
-const constants = @import("core/constants.zig");
-const graph_core = @import("core/graph_core.zig");
-const types = @import("core/types.zig");
-const page_ops = @import("storage/page_ops.zig");
-const node_validity = @import("core/node_validity.zig");
+const constants = @import("../core/constants.zig");
+const graph_core = @import("../core/graph_core.zig");
+const types = @import("../core/types.zig");
+const page_ops = @import("../storage/page_ops.zig");
+const node_validity = @import("../core/node_validity.zig");
 
 pub const AdjSide = enum { fwd, rev };
 

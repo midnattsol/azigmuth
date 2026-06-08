@@ -1,9 +1,9 @@
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const page_ops = @import("../storage/page_ops.zig");
-const common = @import("common.zig");
-const node_validity = @import("../core/node_validity.zig");
-const remove_types = @import("node_remove_types.zig");
+const graph_core = @import("../../core/graph_core.zig");
+const types = @import("../../core/types.zig");
+const page_ops = @import("../../storage/page_ops.zig");
+const common = @import("../common.zig");
+const node_validity = @import("../../core/node_validity.zig");
+const remove_types = @import("remove_types.zig");
 
 const ForwardDestinationCollection = struct {
     source_idx: u32,

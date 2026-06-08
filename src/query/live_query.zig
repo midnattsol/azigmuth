@@ -1,5 +1,5 @@
-const graph_core = @import("core/graph_core.zig");
-const types = @import("core/types.zig");
+const graph_core = @import("../core/graph_core.zig");
+const types = @import("../core/types.zig");
 const neighbor_iter = @import("neighbor_iterator.zig");
 const out_edge_iter = @import("out_edge_iterator.zig");
 

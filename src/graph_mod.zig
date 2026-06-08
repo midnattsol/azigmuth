@@ -5,11 +5,11 @@ const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const types = @import("core/types.zig");
 const page_ops = @import("storage/page_ops.zig");
-const adjacency = @import("adjacency.zig");
+const adjacency = @import("adjacency/mod.zig");
 const mutation = @import("mutation.zig");
 const repair = @import("maintenance/repair.zig");
 const graph = @import("graph.zig");
-const neighbor_iter = @import("neighbor_iterator.zig");
+const neighbor_iter = @import("query/neighbor_iterator.zig");
 
 pub const constants_mod = constants;
 pub const types_mod = types;

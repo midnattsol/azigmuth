@@ -6,10 +6,10 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const adjacency = @import("../../adjacency.zig");
-const rcu = @import("../../rcu.zig");
+const adjacency = @import("../../adjacency/mod.zig");
+const rcu = @import("../../concurrency/rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
-const side_adj = @import("../../side_adj.zig");
+const side_adj = @import("../../adjacency/side_ops.zig");
 const mutation_common = @import("../../mutation/common.zig");
 const debt_mod = @import("debt.zig");
 

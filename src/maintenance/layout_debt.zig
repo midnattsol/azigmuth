@@ -2,7 +2,7 @@ const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const adjacency = @import("../adjacency.zig");
+const adjacency = @import("../adjacency/mod.zig");
 
 pub const LayoutShapeReport = struct {
     grouped_single_block: bool = false,

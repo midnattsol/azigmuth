@@ -1,6 +1,6 @@
 const std = @import("std");
 const graph_core = @import("../core/graph_core.zig");
-const adjacency = @import("../adjacency.zig");
+const adjacency = @import("../adjacency/mod.zig");
 const page_ops = @import("../storage/page_ops.zig");
 
 pub const MutationScratch = struct {

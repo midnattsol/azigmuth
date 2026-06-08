@@ -1,10 +1,10 @@
 //! RCU-style reader/writer synchronization and block retirement.
 
 const std = @import("std");
-const constants = @import("core/constants.zig");
-const graph_core = @import("core/graph_core.zig");
-const types = @import("core/types.zig");
-const page_ops = @import("storage/page_ops.zig");
+const constants = @import("../core/constants.zig");
+const graph_core = @import("../core/graph_core.zig");
+const types = @import("../core/types.zig");
+const page_ops = @import("../storage/page_ops.zig");
 
 pub const NO_READER_SLOT: u32 = std.math.maxInt(u32);
 

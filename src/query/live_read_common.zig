@@ -1,10 +1,10 @@
-const graph_core = @import("core/graph_core.zig");
+const graph_core = @import("../core/graph_core.zig");
 const iterator_common = @import("iterator_common.zig");
-const types = @import("core/types.zig");
-const page_ops = @import("storage/page_ops.zig");
-const rcu = @import("rcu.zig");
-const node_validity = @import("core/node_validity.zig");
-const adjacency = @import("adjacency.zig");
+const types = @import("../core/types.zig");
+const page_ops = @import("../storage/page_ops.zig");
+const rcu = @import("../concurrency/rcu.zig");
+const node_validity = @import("../core/node_validity.zig");
+const adjacency = @import("../adjacency/mod.zig");
 
 pub const LiveReadSnapshot = struct {
     reader_token: rcu.ReaderToken,

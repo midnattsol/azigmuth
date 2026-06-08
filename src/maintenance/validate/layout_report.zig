@@ -3,7 +3,7 @@ const layout_debt = @import("../layout_debt.zig");
 const std = @import("std");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
-const adjacency_mod = @import("../../adjacency.zig");
+const adjacency_mod = @import("../../adjacency/mod.zig");
 
 fn sideViewOf(adjacency: types.NodeAdj, comptime side: common.Side) types.SideAdj {
     return switch (side) {

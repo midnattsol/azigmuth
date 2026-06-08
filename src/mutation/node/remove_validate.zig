@@ -1,12 +1,12 @@
 const std = @import("std");
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const page_ops = @import("../storage/page_ops.zig");
-const adjacency = @import("../adjacency.zig");
-const rcu = @import("../rcu.zig");
-const repair = @import("../maintenance/repair.zig");
-const node_validity = @import("../core/node_validity.zig");
-const remove_types = @import("node_remove_types.zig");
+const graph_core = @import("../../core/graph_core.zig");
+const types = @import("../../core/types.zig");
+const page_ops = @import("../../storage/page_ops.zig");
+const adjacency = @import("../../adjacency/mod.zig");
+const rcu = @import("../../concurrency/rcu.zig");
+const repair = @import("../../maintenance/repair.zig");
+const node_validity = @import("../../core/node_validity.zig");
+const remove_types = @import("remove_types.zig");
 
 fn validateForwardDestinations(graph: *graph_core.GraphCore, forward_destinations: []const u32) !void {
     if (graph.multigraph_enabled) return;

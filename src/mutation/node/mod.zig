@@ -1,17 +1,17 @@
 //! Node-oriented mutation helpers and node removal implementation.
 
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const page_ops = @import("../storage/page_ops.zig");
-const adjacency = @import("../adjacency.zig");
-const rcu = @import("../rcu.zig");
-const common = @import("common.zig");
-const remove_types = @import("node_remove_types.zig");
-const remove_scan = @import("node_remove_scan.zig");
-const remove_validate = @import("node_remove_validate.zig");
-const remove_plan = @import("node_remove_plan.zig");
-const remove_publish = @import("node_remove_publish.zig");
-const node_validity = @import("../core/node_validity.zig");
+const graph_core = @import("../../core/graph_core.zig");
+const types = @import("../../core/types.zig");
+const page_ops = @import("../../storage/page_ops.zig");
+const adjacency = @import("../../adjacency/mod.zig");
+const rcu = @import("../../concurrency/rcu.zig");
+const common = @import("../common.zig");
+const remove_types = @import("remove_types.zig");
+const remove_scan = @import("remove_scan.zig");
+const remove_validate = @import("remove_validate.zig");
+const remove_plan = @import("remove_plan.zig");
+const remove_publish = @import("remove_publish.zig");
+const node_validity = @import("../../core/node_validity.zig");
 
 pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeRemovalSummary {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;

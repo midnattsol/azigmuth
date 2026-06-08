@@ -1,7 +1,7 @@
 //! Edge mutation facade.
 
-const add = @import("edge_add.zig");
-const remove = @import("edge_remove.zig");
+const add = @import("add.zig");
+const remove = @import("remove.zig");
 
 pub const addEdge = add.addEdge;
 pub const addEdgeWithId = add.addEdgeWithId;

@@ -4,7 +4,7 @@ const std = @import("std");
 const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
-const adjacency = @import("../adjacency.zig");
+const adjacency = @import("../adjacency/mod.zig");
 
 const EMPTY_INDEX: u32 = constants.END_OF_CHAIN;
 const StackKind = enum { free, retired };
@@ -348,6 +348,78 @@ fn ensureBlockPage(graph: *graph_core.GraphCore, page_index: u32, comptime side:
     }
 }
 
+fn zeroForwardIdsIfNeeded(graph: *graph_core.GraphCore, block_idx: u32) void {
+    if (!graph.multigraph_enabled) return;
+    edgeBlockFwdIdsAt(graph, block_idx).* = std.mem.zeroes(types.EdgeBlockFwdIds);
+}
+
+fn zeroBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) void {
+    edgeBlockAt(graph, block_idx, side).* = std.mem.zeroes(switch (side) {
+        .fwd => types.EdgeBlockFwd,
+        .rev => types.EdgeBlockRev,
+    });
+    if (side == .fwd) zeroForwardIdsIfNeeded(graph, block_idx);
+}
+
+fn zeroBlockRange(graph: *graph_core.GraphCore, first_block_idx: u32, end_block_idx: u32, comptime side: adjacency.AdjSide) void {
+    for (first_block_idx..end_block_idx) |block_idx_usize| {
+        const block_idx: u32 = @intCast(block_idx_usize);
+        zeroBlock(graph, block_idx, side);
+    }
+}
+
+fn reserveFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, comptime side: adjacency.AdjSide) !?struct { first_block_idx: u32, end_block_idx: u32 } {
+    const first_block_idx = switch (side) {
+        .fwd => @atomicLoad(u32, &graph.block_fwd_count, .acquire),
+        .rev => @atomicLoad(u32, &graph.block_rev_count, .acquire),
+    };
+    const end_block_idx = std.math.add(u32, first_block_idx, span_count) catch return error.OutOfMemory;
+
+    try ensureBlockCapacity(graph, end_block_idx, side);
+    const published = switch (side) {
+        .fwd => @cmpxchgWeak(u32, &graph.block_fwd_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
+        .rev => @cmpxchgWeak(u32, &graph.block_rev_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
+    };
+    if (published != null) return null;
+
+    return .{ .first_block_idx = first_block_idx, .end_block_idx = end_block_idx };
+}
+
+fn zeroGroupRange(graph: *graph_core.GraphCore, first_group_idx: u32, end_group_idx: u32) void {
+    for (first_group_idx..end_group_idx) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
+        groupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
+    }
+}
+
+fn reserveFreshGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !?struct { first_group_idx: u32, end_group_idx: u32 } {
+    const first_group_idx = @atomicLoad(u32, &graph.group_count, .acquire);
+    const end_group_idx = std.math.add(u32, first_group_idx, span_count) catch return error.OutOfMemory;
+    try ensureGroupCapacity(graph, end_group_idx);
+    if (@cmpxchgWeak(u32, &graph.group_count, first_group_idx, end_group_idx, .acq_rel, .acquire) != null) return null;
+    return .{ .first_group_idx = first_group_idx, .end_group_idx = end_group_idx };
+}
+
+fn requeueOrFreeRetiredBlock(graph: *graph_core.GraphCore, block_idx: u32, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
+    const meta = metaAt(graph, block_idx, side);
+    const retired_epoch = meta.epoch.load(.acquire);
+    if (retired_epoch < safe_epoch) {
+        freeBlock(graph, block_idx, side);
+    } else {
+        pushStack(graph, block_idx, .retired, side);
+    }
+}
+
+fn requeueOrFreeRetiredGroupSpan(graph: *graph_core.GraphCore, group_idx: u32, span_count: u16, safe_epoch: u64) void {
+    const meta = groupMetaAt(graph, group_idx);
+    const retired_epoch = meta.epoch.load(.acquire);
+    if (retired_epoch < safe_epoch) {
+        freeGroupSpan(graph, group_idx, span_count);
+    } else {
+        pushGroupSpanStack(graph, group_idx, span_count, .retired);
+    }
+}
+
 fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
     while (true) {
         const block_index = switch (side) {
@@ -368,35 +440,9 @@ pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, compti
     std.debug.assert(span_count > 0);
 
     while (true) {
-        const first_block_idx = switch (side) {
-            .fwd => @atomicLoad(u32, &graph.block_fwd_count, .acquire),
-            .rev => @atomicLoad(u32, &graph.block_rev_count, .acquire),
-        };
-        const end_block_idx = std.math.add(u32, first_block_idx, span_count) catch return error.OutOfMemory;
-
-        try ensureBlockCapacity(graph, end_block_idx, side);
-        const published = switch (side) {
-            .fwd => @cmpxchgWeak(u32, &graph.block_fwd_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
-            .rev => @cmpxchgWeak(u32, &graph.block_rev_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
-        };
-        if (published != null) continue;
-
-        for (first_block_idx..end_block_idx) |block_idx_usize| {
-            const block_idx: u32 = @intCast(block_idx_usize);
-            edgeBlockAt(graph, block_idx, side).* = std.mem.zeroes(switch (side) {
-                .fwd => types.EdgeBlockFwd,
-                .rev => types.EdgeBlockRev,
-            });
-            switch (side) {
-                .fwd => {
-                    if (graph.multigraph_enabled) {
-                        edgeBlockFwdIdsAt(graph, block_idx).* = std.mem.zeroes(types.EdgeBlockFwdIds);
-                    }
-                },
-                .rev => {},
-            }
-        }
-        return first_block_idx;
+        const reservation = (try reserveFreshBlockSpan(graph, span_count, side)) orelse continue;
+        zeroBlockRange(graph, reservation.first_block_idx, reservation.end_block_idx, side);
+        return reservation.first_block_idx;
     }
 }
 
@@ -414,18 +460,7 @@ pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u
 
 pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
     if (popStack(graph, .free, side)) |block_index| {
-        edgeBlockAt(graph, block_index, side).* = std.mem.zeroes(switch (side) {
-            .fwd => types.EdgeBlockFwd,
-            .rev => types.EdgeBlockRev,
-        });
-        switch (side) {
-            .fwd => {
-                if (graph.multigraph_enabled) {
-                    edgeBlockFwdIdsAt(graph, block_index).* = std.mem.zeroes(types.EdgeBlockFwdIds);
-                }
-            },
-            .rev => {},
-        }
+        zeroBlock(graph, block_index, side);
         return block_index;
     }
 
@@ -447,28 +482,16 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime si
     while (block_index != EMPTY_INDEX) {
         const meta = metaAt(graph, block_index, side);
         const next = meta.next.load(.acquire);
-        const retired_epoch = meta.epoch.load(.acquire);
-        if (retired_epoch < safe_epoch) {
-            freeBlock(graph, block_index, side);
-        } else {
-            pushStack(graph, block_index, .retired, side);
-        }
+        requeueOrFreeRetiredBlock(graph, block_index, safe_epoch, side);
         block_index = next;
     }
 }
 
 fn allocFreshGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
     while (true) {
-        const first_group_idx = @atomicLoad(u32, &graph.group_count, .acquire);
-        const end_group_idx = std.math.add(u32, first_group_idx, span_count) catch return error.OutOfMemory;
-        try ensureGroupCapacity(graph, end_group_idx);
-        if (@cmpxchgWeak(u32, &graph.group_count, first_group_idx, end_group_idx, .acq_rel, .acquire) == null) {
-            for (first_group_idx..end_group_idx) |group_idx_usize| {
-                const group_idx: u32 = @intCast(group_idx_usize);
-                groupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
-            }
-            return first_group_idx;
-        }
+        const reservation = (try reserveFreshGroupSpan(graph, span_count)) orelse continue;
+        zeroGroupRange(graph, reservation.first_group_idx, reservation.end_group_idx);
+        return reservation.first_group_idx;
     }
 }
 
@@ -476,10 +499,7 @@ pub fn allocGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
     std.debug.assert(span_count > 0 and span_count <= constants.MAX_GROUPS_PER_NODE);
     if (popGroupSpanStack(graph, .free, span_count)) |first_group_idx| {
         const end_group_idx = first_group_idx + span_count;
-        for (first_group_idx..end_group_idx) |group_idx_usize| {
-            const group_idx: u32 = @intCast(group_idx_usize);
-            groupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
-        }
+        zeroGroupRange(graph, first_group_idx, end_group_idx);
         return first_group_idx;
     }
 
@@ -515,12 +535,7 @@ pub fn reclaimRetiredGroups(graph: *graph_core.GraphCore, safe_epoch: u64) void 
         while (group_index != EMPTY_INDEX) {
             const meta = groupMetaAt(graph, group_index);
             const next = meta.next.load(.acquire);
-            const retired_epoch = meta.epoch.load(.acquire);
-            if (retired_epoch < safe_epoch) {
-                freeGroupSpan(graph, group_index, span_count);
-            } else {
-                pushGroupSpanStack(graph, group_index, span_count, .retired);
-            }
+            requeueOrFreeRetiredGroupSpan(graph, group_index, span_count, safe_epoch);
             group_index = next;
         }
     }

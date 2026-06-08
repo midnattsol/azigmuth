@@ -1,14 +1,14 @@
 const std = @import("std");
-const constants = @import("../core/constants.zig");
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const page_ops = @import("../storage/page_ops.zig");
-const adjacency = @import("../adjacency.zig");
-const rcu = @import("../rcu.zig");
-const repair = @import("../maintenance/repair.zig");
-const common = @import("common.zig");
-const shared = @import("edge_shared.zig");
-const local_side_edit = @import("local_side_edit.zig");
+const constants = @import("../../core/constants.zig");
+const graph_core = @import("../../core/graph_core.zig");
+const types = @import("../../core/types.zig");
+const page_ops = @import("../../storage/page_ops.zig");
+const adjacency = @import("../../adjacency/mod.zig");
+const rcu = @import("../../concurrency/rcu.zig");
+const repair = @import("../../maintenance/repair.zig");
+const common = @import("../common.zig");
+const shared = @import("shared.zig");
+const local_side_edit = @import("../local_side_edit.zig");
 
 fn prepareAppendBlockSide(
     graph: *graph_core.GraphCore,

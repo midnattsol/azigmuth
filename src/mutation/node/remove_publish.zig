@@ -1,7 +1,7 @@
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const common = @import("common.zig");
-const remove_types = @import("node_remove_types.zig");
+const graph_core = @import("../../core/graph_core.zig");
+const types = @import("../../core/types.zig");
+const common = @import("../common.zig");
+const remove_types = @import("remove_types.zig");
 
 pub fn buildRemovedAdjEmpty(source_adj: types.NodeAdj) types.NodeAdj {
     var removed_adj = source_adj;
