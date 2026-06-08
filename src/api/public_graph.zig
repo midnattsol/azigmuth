@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const internal = @import("../graph.zig");
+const public_snapshot = @import("public_snapshot.zig");
 
 pub const Graph = opaque {
     fn inner(self: *Graph) *internal.Graph {
@@ -136,6 +137,13 @@ pub const Graph = opaque {
     /// Returns edge-aware outgoing iterator. Multigraph mode only.
     pub fn outEdges(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.OutEdgeIterator {
         return self.innerConst().outEdges(node);
+    }
+
+    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!*public_snapshot.ReadSnapshot {
+        const snapshot_handle = try allocator.create(internal.ReadSnapshot);
+        errdefer allocator.destroy(snapshot_handle);
+        snapshot_handle.* = try self.innerConst().snapshot(allocator);
+        return @ptrCast(snapshot_handle);
     }
 
     pub fn repairNode(self: *Graph, node: internal.NodeId) internal.GraphError!void {

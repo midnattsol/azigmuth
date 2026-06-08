@@ -131,14 +131,28 @@ defer allocator.free(all);
 ## Algorithms
 
 ```zig
-const order = try graphz.algorithms.bfs(g, start, allocator);
-defer allocator.free(order);  // may be empty (len == 0)
+var snapshot = try g.snapshot(allocator);
+defer snapshot.deinit();
 
-const depth_order = try graphz.algorithms.dfs(g, start, allocator);
-defer allocator.free(depth_order);  // may be empty (len == 0)
+try std.testing.expectEqual(@as(usize, 2), try snapshot.outDegree(start));
 
-const has_cycle = try graphz.algorithms.hasCycle(g, allocator);
+var neighbors = try snapshot.neighbors(start);
+const all = try neighbors.materialize(allocator);
+defer allocator.free(all);
+
+const snap_has_cycle = try snapshot.hasCycle(allocator);
+_ = snap_has_cycle;
+
+const snap_bfs = try snapshot.bfs(start, allocator);
+defer allocator.free(snap_bfs);
+
+const snap_dfs = try snapshot.dfs(start, allocator);
+defer allocator.free(snap_dfs);
 ```
+
+`ReadSnapshot` is a reusable sealed in-memory graph view. Its algorithms run
+against that fixed captured view and do not perform repair or other hidden
+maintenance.
 
 ## Commands
 

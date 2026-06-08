@@ -12,7 +12,8 @@ const query = @import("query.zig");
 const repair = @import("maintenance/repair.zig");
 const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
-const read_session_mod = @import("algorithms/read_session.zig");
+const read_session_mod = @import("query/read_session.zig");
+const snapshot_mod = @import("algorithms/snapshot.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
 const out_edge_iter = @import("out_edge_iterator.zig");
@@ -34,6 +35,8 @@ pub const NodeRemovalSummary = types.NodeRemovalSummary;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
 pub const ReadSession = read_session_mod.ReadSession;
+pub const ReadSnapshot = snapshot_mod.ReadSnapshot;
+pub const SnapshotNeighborIterator = read_session_mod.SnapshotNeighborIterator;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -338,6 +341,12 @@ pub const Graph = struct {
 
         const reader_token = try rcu.readerEnter(core);
         return ReadSession.init(core, reader_token);
+    }
+
+    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) GraphError!ReadSnapshot {
+        var read = try self.beginReadSession();
+        errdefer read.deinit();
+        return snapshot_mod.ReadSnapshot.init(read, allocator);
     }
 
     // ── Repair API ────────────────────────────────────────────────────

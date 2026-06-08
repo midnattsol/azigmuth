@@ -1,6 +1,5 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const algorithms = graphz.algorithms;
 
 const testing = std.testing;
 
@@ -77,7 +76,9 @@ test "GraphBuilder: frozen graph passes validation and algorithms" {
 
     try graph.validate();
 
-    const bfs_order = try algorithms.bfs(graph, node0, testing.allocator);
+    var snapshot = try graph.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    const bfs_order = try snapshot.bfs(node0, testing.allocator);
     defer testing.allocator.free(bfs_order);
     try testing.expect(bfs_order.len >= 4);
 }

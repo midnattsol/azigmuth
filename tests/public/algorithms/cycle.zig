@@ -1,6 +1,11 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const algorithms = graphz.algorithms;
+
+fn hasCycleOnGraph(graph: *graphz.Graph, allocator: std.mem.Allocator) !bool {
+    var snapshot = try graph.snapshot(allocator);
+    defer snapshot.deinit();
+    return snapshot.hasCycle(allocator);
+}
 
 test "empty graph has no cycle" {
     var builder = try graphz.GraphBuilder.init(std.testing.allocator);
@@ -8,7 +13,7 @@ test "empty graph has no cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "single node without edges has no cycle" {
@@ -19,7 +24,7 @@ test "single node without edges has no cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "single node with self-loop has cycle" {
@@ -31,7 +36,7 @@ test "single node with self-loop has cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(true, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(true, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "two nodes no cycle" {
@@ -44,7 +49,7 @@ test "two nodes no cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "two nodes with cycle" {
@@ -58,7 +63,7 @@ test "two nodes with cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(true, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(true, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "three nodes triangle" {
@@ -73,7 +78,7 @@ test "three nodes triangle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(true, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(true, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "disconnected graph, one component has cycle" {
@@ -88,7 +93,7 @@ test "disconnected graph, one component has cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(true, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(true, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "disconnected graph, no cycles" {
@@ -102,7 +107,7 @@ test "disconnected graph, no cycles" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "dag with diamond shape has no cycle" {
@@ -118,7 +123,7 @@ test "dag with diamond shape has no cycle" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "cycle reached after an acyclic prefix is detected" {
@@ -135,7 +140,7 @@ test "cycle reached after an acyclic prefix is detected" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(true, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(true, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "cycle detection handles duplicate paths to completed nodes" {
@@ -152,7 +157,7 @@ test "cycle detection handles duplicate paths to completed nodes" {
 
     var graph = try builder.freeze();
     defer graph.deinit();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "cycle detection ignores removed nodes" {
@@ -166,7 +171,7 @@ test "cycle detection ignores removed nodes" {
     _ = try graph.removeNode(a);
 
     try graph.validate();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "cycle detection handles nodes with more than 64 outgoing edges" {
@@ -186,7 +191,7 @@ test "cycle detection handles nodes with more than 64 outgoing edges" {
 
     try graph.validate();
     try std.testing.expectEqual(@as(u64, 70), graph.edgeCount());
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "cycle detection handles nodes with more than 64 outgoing edges and a self-cycle" {
@@ -207,7 +212,7 @@ test "cycle detection handles nodes with more than 64 outgoing edges and a self-
 
     try graph.validate();
     try std.testing.expectEqual(@as(u64, 71), graph.edgeCount());
-    try std.testing.expectEqual(true, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(true, try hasCycleOnGraph(graph, std.testing.allocator));
 }
 
 test "cycle detection with dense hub and many tombstoned sources is correct" {
@@ -227,7 +232,7 @@ test "cycle detection with dense hub and many tombstoned sources is correct" {
     }
 
     try graph.validate();
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 
     const visible = try graph.inDegree(hub);
     try std.testing.expect(visible > 0);
@@ -249,5 +254,5 @@ test "cycle detection with tombstoned self-loop node returns false" {
     _ = try graph.removeNode(a);
     try graph.validate();
 
-    try std.testing.expectEqual(false, try algorithms.hasCycle(graph, std.testing.allocator));
+    try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 }
