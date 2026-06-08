@@ -116,6 +116,14 @@ pub const Graph = opaque {
         return self.inner().repairBudgeted(max_nodes);
     }
 
+    pub fn flushRepairs(self: *Graph) internal.GraphError!internal.RepairFlushSummary {
+        return self.inner().flushRepairs();
+    }
+
+    pub fn debtStats(self: *const Graph) internal.GraphError!internal.DebtStats {
+        return self.innerConst().debtStats();
+    }
+
     pub fn reclaimRetired(self: *Graph) void {
         return self.inner().reclaimRetired();
     }

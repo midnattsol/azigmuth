@@ -131,7 +131,6 @@ pub fn repairNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
 
     if (try repairBothSides(graph, node)) {
         rcu.bumpEpoch(graph);
-        rcu.reclaimRetired(graph);
     }
 }
 
@@ -239,7 +238,6 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
 
     if (total_compacted > 0) {
         rcu.bumpEpoch(graph);
-        rcu.reclaimRetired(graph);
     }
 
     return total_compacted;
@@ -271,7 +269,6 @@ pub fn flushRepairs(graph: *graph_core.GraphCore) !types.RepairFlushSummary {
 
     if (repaired_nodes > 0) {
         rcu.bumpEpoch(graph);
-        rcu.reclaimRetired(graph);
     }
 
     const remaining_repair_fwd = debt_mod.countNodesWithRepairFlag(graph, .fwd);

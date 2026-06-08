@@ -507,7 +507,6 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     rcu.bumpEpoch(graph);
     writer_guard.end();
-    rcu.reclaimRetired(graph);
     return removed;
 }
 
@@ -535,6 +534,5 @@ pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, dest
 
     rcu.bumpEpoch(graph);
     writer_guard.end();
-    rcu.reclaimRetired(graph);
     return removed;
 }

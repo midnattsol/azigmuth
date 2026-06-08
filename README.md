@@ -86,9 +86,10 @@ an implementation detail.
   also return `error.GraphBusy` instead of entering the graph.
 - Non-fallible accessors (`hasNode`, `nodeCount`, `edgeCount`) return safe
   defaults during that brief closing window.
-- Heavy maintenance is explicit. Use `repairNode()`, `repairBudgeted()`, and
-  `reclaimRetired()` when you want to pay maintenance costs deliberately before
-  `deinitChecked()`.
+- Structural repair and retired-memory reclamation are explicit. Use
+  `repairNode()`, `repairBudgeted()`, `flushRepairs()`, `debtStats()`, and
+  `reclaimRetired()` when you want to inspect or pay maintenance costs
+  deliberately before `deinitChecked()`.
 
 ## RemoveNode And Repair
 
@@ -96,7 +97,14 @@ an implementation detail.
 structural repair debt behind for live predecessors and live destinations.
 The return value
 `NodeRemovalSummary` reports that aftermath so embeddings can decide whether to
-repair now or later.
+repair now or later. `left_repair_debt` refers to debt left on related live
+nodes, not to residual structure on the removed node itself.
+
+`removeNode()` does not perform hidden structural repair or hidden retired-block
+reclamation before returning. Repair and reclaim remain caller-driven.
+
+The removed node itself publishes empty forward and reverse adjacency on return;
+any remaining tombstone debt lives only on related live nodes.
 
 Live destinations may keep reverse structural tombstones until explicit
 maintenance, so `needs_repair_rev` is part of the normal post-`removeNode()`
@@ -114,6 +122,16 @@ call `reclaimRetired()` explicitly:
 
 ```zig
 g.reclaimRetired();
+```
+
+When you want debt observability or an explicit repair flush:
+
+```zig
+const stats = try g.debtStats();
+_ = stats;
+
+const flush = try g.flushRepairs();
+_ = flush;
 ```
 
 ## Snapshot Read Path

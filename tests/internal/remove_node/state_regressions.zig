@@ -25,7 +25,7 @@ test "removeNode regression: reverse-only publish does not flip forward index of
     try graph.validate();
 }
 
-test "removeNode regression: validate and debugValidate agree on removed node with residual reverse" {
+test "removeNode regression: validate and debugValidate agree on removed node with empty reverse" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -45,6 +45,14 @@ test "removeNode regression: validate and debugValidate agree on removed node wi
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
+
+    for (0..spoke_count) |spoke_idx| {
+        if (spoke_idx % 2 == 0) {
+            const removed_adj = page_ops.nodeAtConst(&graph.graph, spokes[spoke_idx]).publishedAdj();
+            try testing.expectEqual(@as(u16, 0), removed_adj.block_count_rev);
+            try testing.expectEqual(@as(u16, 0), removed_adj.group_count_rev);
+        }
+    }
 }
 
 test "removeNode regression: validate and debugValidate agree on grouped chain shorter than declared group count" {
