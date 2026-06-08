@@ -52,7 +52,7 @@ test "tombstone regression: removeNode leaves invisible incoming tombstones" {
     try graph.validate();
 }
 
-test "tombstone regression: reverse residual on removed node is allowed before compaction" {
+test "tombstone regression: removed node publishes empty reverse side immediately" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -73,19 +73,12 @@ test "tombstone regression: reverse residual on removed node is allowed before c
         try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, source, testing.allocator));
     }
 
-    // Structural reverse residuals on the removed node are allowed until
-    // repair compacts them away. They must not be reported as public logical
-    // mismatches or visible count mismatches.
     try graph.validate();
     var snapshot = try graph.snapshot(testing.allocator);
     defer snapshot.deinit();
     const violations = try snapshot.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
-    for (violations) |violation| {
-        try testing.expect(violation != .forward_reverse_mismatch);
-        try testing.expect(violation != .forward_reverse_count_mismatch);
-        try testing.expect(violation != .edge_count_mismatch);
-    }
+    try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
 test "tombstone regression: removeNode self-edge works correctly" {

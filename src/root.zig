@@ -45,6 +45,8 @@ pub const EdgeId = graph.EdgeId;
 pub const EdgeRef = graph.EdgeRef;
 pub const GraphOptions = graph.GraphOptions;
 pub const NodeRemovalSummary = graph.NodeRemovalSummary;
+pub const RepairFlushSummary = graph.RepairFlushSummary;
+pub const DebtStats = graph.DebtStats;
 
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;

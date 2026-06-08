@@ -61,6 +61,37 @@ test "api repair: repairBudgeted drains flagged repair debt" {
     try graph.validate();
 }
 
+test "api repair: debtStats exposes explicit repair debt" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, target, 0, .{});
+
+    const summary = try graph.removeNode(target);
+    try testing.expect(summary.left_repair_debt);
+
+    const stats = try graph.debtStats();
+    try testing.expect(stats.nodes_with_repair_fwd > 0 or stats.nodes_with_repair_rev > 0);
+}
+
+test "api repair: flushRepairs performs explicit repair pass" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, target, 0, .{});
+
+    const summary = try graph.removeNode(target);
+    try testing.expect(summary.left_repair_debt);
+
+    const flush = try graph.flushRepairs();
+    try testing.expect(flush.repaired_nodes > 0);
+    try graph.validate();
+}
+
 test "api repair: repairBudgeted with max_nodes=0 returns 0" {
     var graph = try graphz.Graph.init(testing.allocator);
     defer graph.deinit();

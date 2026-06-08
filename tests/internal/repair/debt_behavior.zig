@@ -24,6 +24,35 @@ test "repair debt: needs_repair flag alone is sufficient for repairBudgeted disc
     try graph.validate();
 }
 
+test "repair debt: repairBudgeted repairs without implicit reclaim" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+    _ = try graph.removeNode(destination);
+
+    // Clear any retired memory from the removeNode phase so the assertion
+    // below only observes the explicit repair pass.
+    graph.reclaimRetired();
+
+    const free_head_before = graph.graph.free_blocks_fwd_head.load(.acquire);
+    const retired_head_before = graph.graph.retired_blocks_fwd_head.load(.acquire);
+
+    const repaired = try graph.repairBudgeted(1);
+    try testing.expect(repaired > 0);
+    try graph.validate();
+
+    const free_head_after_repair = graph.graph.free_blocks_fwd_head.load(.acquire);
+    const retired_head_after_repair = graph.graph.retired_blocks_fwd_head.load(.acquire);
+    try testing.expectEqual(free_head_before, free_head_after_repair);
+    try testing.expect(retired_head_after_repair != retired_head_before);
+
+    graph.reclaimRetired();
+    try testing.expect(graph.graph.free_blocks_fwd_head.load(.acquire) != free_head_after_repair);
+}
+
 test "repair debt: stale entries in repair queue do not break repairBudgeted" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();

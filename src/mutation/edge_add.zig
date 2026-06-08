@@ -178,7 +178,6 @@ fn addEdgeImpl(
     _ = graph.edge_count.fetchAdd(1, .release);
     rcu.bumpEpoch(graph);
     writer_guard.end();
-    rcu.reclaimRetired(graph);
 
     return edge_id;
 }

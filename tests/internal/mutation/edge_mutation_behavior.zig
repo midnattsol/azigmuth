@@ -424,16 +424,26 @@ test "mutation: removeEdge of last edge clears adjacency and retires block" {
     try graph.addEdge(source, destination, 0, 0);
     try graph.validate();
 
-    // Snapshot the state before removal. Retired blocks are cleaned up
-    // synchronously by reclaimRetired in single-writer mode, so we track
-    // retired block growth indirectly by checking the free list.
-        try testing.expect(try graph.removeEdge(source, destination));
+    const free_head_before = graph.graph.free_blocks_fwd_head.load(.acquire);
+    const retired_head_before = graph.graph.retired_blocks_fwd_head.load(.acquire);
+
+    try testing.expect(try graph.removeEdge(source, destination));
     try graph.validate();
 
-    // Removing the last edge retires the block, which ends up on the free list.
+    const retired_head_after = graph.graph.retired_blocks_fwd_head.load(.acquire);
+    const free_head_after = graph.graph.free_blocks_fwd_head.load(.acquire);
+
+    // Removing the last edge retires the block but does not reclaim it
+    // implicitly; reclaim remains caller-driven.
+    try testing.expect(retired_head_after != retired_head_before);
+    try testing.expectEqual(free_head_before, free_head_after);
+
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(destination));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
+
+    graph.reclaimRetired();
+    try testing.expect(graph.graph.free_blocks_fwd_head.load(.acquire) != free_head_after);
 }
 
 test "mutation: removeEdge of last edge from multi-block adjacency retires both blocks" {
