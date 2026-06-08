@@ -59,10 +59,11 @@ fn sumVisibleAdjacencySnapshot(
     return context.total;
 }
 
-fn forwardHasTombstoneSnapshot(
+fn hasTombstoneSnapshot(
     graph: *const graph_core.GraphCore,
     view: *const snapshot_view.CapturedGraphView,
     adjacency: types.NodeAdj,
+    comptime side: common.Side,
 ) bool {
     if (adjacency.flags.removed) return false;
 
@@ -71,7 +72,7 @@ fn forwardHasTombstoneSnapshot(
     };
 
     var context = TombstoneContext{ .view = view };
-    common.forEachRunInAdj(graph, adjacency, .fwd, &context, struct {
+    common.forEachRunInAdj(graph, adjacency, side, &context, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
             inner_context: *TombstoneContext,
@@ -80,11 +81,18 @@ fn forwardHasTombstoneSnapshot(
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
-                const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .fwd);
+                const block_idx: u32 = @intCast(block_idx_usize);
+                const block = switch (side) {
+                    .fwd => page_ops.edgeBlockAtConst(inner_graph, block_idx, .fwd),
+                    .rev => page_ops.edgeBlockAtConst(inner_graph, block_idx, .rev),
+                };
                 const live = @popCount(block.mask);
                 for (0..live) |slot| {
-                    const destination_idx = block.edges[slot].destination;
-                    if (destination_idx < inner_context.view.nodeCount() and !inner_context.view.isLiveIndex(destination_idx)) return error.TombstoneFound;
+                    const candidate_idx = switch (side) {
+                        .fwd => block.edges[slot].destination,
+                        .rev => block.sources[slot],
+                    };
+                    if (candidate_idx < inner_context.view.nodeCount() and !inner_context.view.isLiveIndex(candidate_idx)) return error.TombstoneFound;
                 }
             }
         }
@@ -95,40 +103,20 @@ fn forwardHasTombstoneSnapshot(
     return false;
 }
 
+fn forwardHasTombstoneSnapshot(
+    graph: *const graph_core.GraphCore,
+    view: *const snapshot_view.CapturedGraphView,
+    adjacency: types.NodeAdj,
+) bool {
+    return hasTombstoneSnapshot(graph, view, adjacency, .fwd);
+}
+
 fn reverseHasTombstoneSnapshot(
     graph: *const graph_core.GraphCore,
     view: *const snapshot_view.CapturedGraphView,
     adjacency: types.NodeAdj,
 ) bool {
-    if (adjacency.flags.removed) return false;
-
-    const TombstoneContext = struct {
-        view: *const snapshot_view.CapturedGraphView,
-    };
-
-    var context = TombstoneContext{ .view = view };
-    common.forEachRunInAdj(graph, adjacency, .rev, &context, struct {
-        fn callback(
-            inner_graph: *const graph_core.GraphCore,
-            inner_context: *TombstoneContext,
-            start: u32,
-            count: u16,
-            _: bool,
-        ) !void {
-            for (start..start + count) |block_idx_usize| {
-                const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .rev);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    const source_idx = block.sources[slot];
-                    if (source_idx < inner_context.view.nodeCount() and !inner_context.view.isLiveIndex(source_idx)) return error.TombstoneFound;
-                }
-            }
-        }
-    }.callback) catch |err| {
-        if (err == error.TombstoneFound) return true;
-        return false;
-    };
-    return false;
+    return hasTombstoneSnapshot(graph, view, adjacency, .rev);
 }
 
 fn adjacencyContainsSnapshot(

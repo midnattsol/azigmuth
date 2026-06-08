@@ -4,7 +4,7 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const adjacency_mod = @import("../../adjacency.zig");
+const adjacency_mod = @import("../../adjacency/mod.zig");
 
 const CountContext = struct {
     target: u32,

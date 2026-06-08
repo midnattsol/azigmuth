@@ -2,7 +2,7 @@ const std = @import("std");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const common = @import("common.zig");
-const shared = @import("edge_shared.zig");
+const shared = @import("edge/shared.zig");
 
 pub fn rebuildAfterPreparedAppend(
     graph: *graph_core.GraphCore,

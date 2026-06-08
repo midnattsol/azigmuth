@@ -5,14 +5,14 @@ const types = @import("core/types.zig");
 
 // ── Implementation modules ───────────────────────────────────────────────
 const page_ops = @import("storage/page_ops.zig");
-const adjacency = @import("adjacency.zig");
-const rcu = @import("rcu.zig");
+const adjacency = @import("adjacency/mod.zig");
+const rcu = @import("concurrency/rcu.zig");
 const mutation = @import("mutation.zig");
-const graph_live_query = @import("graph_live_query.zig");
+const graph_live_query = @import("query/live_query.zig");
 const repair = @import("maintenance/repair.zig");
 const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
-const graph_snapshot_api = @import("graph_snapshot_api.zig");
+const graph_snapshot_api = @import("query/snapshot_api.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
 

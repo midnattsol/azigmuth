@@ -1,6 +1,6 @@
 const std = @import("std");
-const types = @import("../core/types.zig");
-const common = @import("common.zig");
+const types = @import("../../core/types.zig");
+const common = @import("../common.zig");
 
 pub const RelatedNode = struct {
     node_index: u32,

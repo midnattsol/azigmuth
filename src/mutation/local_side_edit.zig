@@ -2,9 +2,9 @@ const std = @import("std");
 const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
-const adjacency = @import("../adjacency.zig");
+const adjacency = @import("../adjacency/mod.zig");
 const common = @import("common.zig");
-const shared = @import("edge_shared.zig");
+const shared = @import("edge/shared.zig");
 const local_repair = @import("local_repair.zig");
 
 pub fn ensureTailCowGroupConstraint(

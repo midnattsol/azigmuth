@@ -1,13 +1,13 @@
 const std = @import("std");
-const constants = @import("core/constants.zig");
-const graph_core = @import("core/graph_core.zig");
-const types = @import("core/types.zig");
-const page_ops = @import("storage/page_ops.zig");
-const adjacency = @import("adjacency.zig");
-const rcu = @import("rcu.zig");
-const scratch_mod = @import("mutation/scratch.zig");
-const claims_mod = @import("mutation/claims.zig");
-const side_runs = @import("side_runs.zig");
+const constants = @import("../core/constants.zig");
+const graph_core = @import("../core/graph_core.zig");
+const types = @import("../core/types.zig");
+const page_ops = @import("../storage/page_ops.zig");
+const adjacency = @import("mod.zig");
+const rcu = @import("../concurrency/rcu.zig");
+const scratch_mod = @import("../mutation/scratch.zig");
+const claims_mod = @import("../mutation/claims.zig");
+const side_runs = @import("runs.zig");
 
 pub const AdjSlot = struct {
     block_idx: u32,

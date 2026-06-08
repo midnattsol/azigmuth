@@ -1,10 +1,10 @@
 const std = @import("std");
-const graph_core = @import("../core/graph_core.zig");
-const types = @import("../core/types.zig");
-const page_ops = @import("../storage/page_ops.zig");
-const common = @import("common.zig");
-const node_validity = @import("../core/node_validity.zig");
-const remove_types = @import("node_remove_types.zig");
+const graph_core = @import("../../core/graph_core.zig");
+const types = @import("../../core/types.zig");
+const page_ops = @import("../../storage/page_ops.zig");
+const common = @import("../common.zig");
+const node_validity = @import("../../core/node_validity.zig");
+const remove_types = @import("remove_types.zig");
 
 /// Forward-degree decrements on predecessors are published via CAS on
 /// `published_meta`, so claiming `fwd_claim` on the predecessor is unnecessary

@@ -1,8 +1,8 @@
 const std = @import("std");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
-const adjacency = @import("../adjacency.zig");
-const iterator_common = @import("../iterator_common.zig");
+const adjacency = @import("../adjacency/mod.zig");
+const iterator_common = @import("iterator_common.zig");
 const page_ops = @import("../storage/page_ops.zig");
 
 const state_live_bit: u32 = 1 << 0;
@@ -35,6 +35,95 @@ fn sideAdjOfSnapshot(snapshot_side: SnapshotSide) types.SideAdj {
     };
 }
 
+fn advanceTraversalBlock(iterator: anytype) ?u32 {
+    while (iterator.blocks_remaining == 0) {
+        if (!iterator.advanceToNextGroup()) return null;
+    }
+
+    const block_idx = iterator.current_block_index;
+    iterator.current_block_index += 1;
+    iterator.blocks_remaining -= 1;
+    return block_idx;
+}
+
+fn loadNeighborMask(iterator: *SnapshotNeighborIterator, block_idx: u32) bool {
+    switch (iterator.direction) {
+        .fwd => {
+            const block = page_ops.edgeBlockAtConst(iterator.view.core, block_idx, .fwd);
+            if (block.mask == 0) return false;
+            iterator.current_mask = block.mask;
+            iterator.cached_fwd_block = block;
+            iterator.cached_rev_block = null;
+        },
+        .rev => {
+            const block = page_ops.edgeBlockAtConst(iterator.view.core, block_idx, .rev);
+            if (block.mask == 0) return false;
+            iterator.current_mask = block.mask;
+            iterator.cached_rev_block = block;
+            iterator.cached_fwd_block = null;
+        },
+    }
+    return true;
+}
+
+fn loadOutEdgeMask(iterator: *SnapshotOutEdgeIterator, block_idx: u32) bool {
+    const block = page_ops.edgeBlockAtConst(iterator.view.core, block_idx, .fwd);
+    if (block.mask == 0) return false;
+
+    iterator.current_mask = block.mask;
+    iterator.cached_fwd_block = block;
+    iterator.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(iterator.view.core, block_idx);
+    return true;
+}
+
+fn ensureLiveSnapshotNode(view: *const CapturedGraphView, node: types.NodeId) ?u32 {
+    if (node.index >= view.node_state.len) return null;
+    if (!view.isLiveIndex(node.index)) return null;
+    return node.index;
+}
+
+fn initNeighborCursor(
+    view: *const CapturedGraphView,
+    direction: adjacency.AdjSide,
+    side_snapshot: types.SideAdj,
+    check_removed_candidates: bool,
+) SnapshotNeighborIterator {
+    const initial = iterator_common.buildTraversalState(side_snapshot);
+    var cursor = SnapshotNeighborIterator{
+        .view = view,
+        .direction = direction,
+        .contiguous_mode = initial.contiguous_mode,
+        .current_block_index = initial.current_block_index,
+        .blocks_remaining = initial.blocks_remaining,
+        .current_group_index = initial.current_group_index,
+        .current_mask = 0,
+        .check_removed_candidates = check_removed_candidates,
+        .group_count_bound = side_snapshot.group_count,
+    };
+    iterator_common.primeGroupedTraversal(&cursor, view.core);
+    return cursor;
+}
+
+fn initOutEdgeCursor(
+    view: *const CapturedGraphView,
+    side_snapshot: types.SideAdj,
+    check_removed_destinations: bool,
+) SnapshotOutEdgeIterator {
+    const initial = iterator_common.buildTraversalState(side_snapshot);
+    var iterator = SnapshotOutEdgeIterator{
+        .view = view,
+        .contiguous_mode = initial.contiguous_mode,
+        .current_block_index = initial.current_block_index,
+        .blocks_remaining = initial.blocks_remaining,
+        .current_group_index = initial.current_group_index,
+        .current_mask = 0,
+        .check_removed_destinations = check_removed_destinations,
+        .group_count_bound = side_snapshot.group_count,
+    };
+    iterator_common.primeGroupedTraversal(&iterator, view.core);
+    return iterator;
+}
+
 pub const SnapshotNeighborIterator = struct {
     view: *const CapturedGraphView,
     direction: adjacency.AdjSide,
@@ -58,31 +147,8 @@ pub const SnapshotNeighborIterator = struct {
 
     fn loadNextNonEmptyMask(self: *SnapshotNeighborIterator) bool {
         while (true) {
-            while (self.blocks_remaining == 0) {
-                if (!self.advanceToNextGroup()) return false;
-            }
-
-            const block_idx = self.current_block_index;
-            self.current_block_index += 1;
-            self.blocks_remaining -= 1;
-
-            switch (self.direction) {
-                .fwd => {
-                    const block = page_ops.edgeBlockAtConst(self.view.core, block_idx, .fwd);
-                    if (block.mask == 0) continue;
-                    self.current_mask = block.mask;
-                    self.cached_fwd_block = block;
-                    self.cached_rev_block = null;
-                },
-                .rev => {
-                    const block = page_ops.edgeBlockAtConst(self.view.core, block_idx, .rev);
-                    if (block.mask == 0) continue;
-                    self.current_mask = block.mask;
-                    self.cached_rev_block = block;
-                    self.cached_fwd_block = null;
-                },
-            }
-            return true;
+            const block_idx = advanceTraversalBlock(self) orelse return false;
+            if (loadNeighborMask(self, block_idx)) return true;
         }
     }
 
@@ -141,20 +207,8 @@ pub const SnapshotOutEdgeIterator = struct {
 
     fn loadNextNonEmptyMask(self: *SnapshotOutEdgeIterator) bool {
         while (true) {
-            while (self.blocks_remaining == 0) {
-                if (!self.advanceToNextGroup()) return false;
-            }
-
-            const block_idx = self.current_block_index;
-            self.current_block_index += 1;
-            self.blocks_remaining -= 1;
-
-            const block = page_ops.edgeBlockAtConst(self.view.core, block_idx, .fwd);
-            if (block.mask == 0) continue;
-            self.current_mask = block.mask;
-            self.cached_fwd_block = block;
-            self.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(self.view.core, block_idx);
-            return true;
+            const block_idx = advanceTraversalBlock(self) orelse return false;
+            if (loadOutEdgeMask(self, block_idx)) return true;
         }
     }
 
@@ -252,69 +306,22 @@ pub const CapturedGraphView = struct {
     }
 
     pub fn neighborsCursor(self: *const CapturedGraphView, node: types.NodeId) !?SnapshotNeighborIterator {
-        if (node.index >= self.node_state.len) return null;
-        if (!self.isLiveIndex(node.index)) return null;
-
-        const side_snapshot = sideAdjOfSnapshot(self.fwd_side[node.index]);
-        const initial = iterator_common.buildTraversalState(side_snapshot);
-
-        var cursor = SnapshotNeighborIterator{
-            .view = self,
-            .direction = .fwd,
-            .contiguous_mode = initial.contiguous_mode,
-            .current_block_index = initial.current_block_index,
-            .blocks_remaining = initial.blocks_remaining,
-            .current_group_index = initial.current_group_index,
-            .current_mask = 0,
-            .check_removed_candidates = self.needsRepairFwd(node.index),
-            .group_count_bound = side_snapshot.group_count,
-        };
-        iterator_common.primeGroupedTraversal(&cursor, self.core);
-        return cursor;
+        const node_idx = ensureLiveSnapshotNode(self, node) orelse return null;
+        const side_snapshot = sideAdjOfSnapshot(self.fwd_side[node_idx]);
+        return initNeighborCursor(self, .fwd, side_snapshot, self.needsRepairFwd(node_idx));
     }
 
     pub fn inNeighborsCursor(self: *const CapturedGraphView, node: types.NodeId) !?SnapshotNeighborIterator {
-        if (node.index >= self.node_state.len) return null;
-        if (!self.isLiveIndex(node.index)) return null;
-
-        const side_snapshot = sideAdjOfSnapshot(self.rev_side[node.index]);
-        const initial = iterator_common.buildTraversalState(side_snapshot);
-
-        var cursor = SnapshotNeighborIterator{
-            .view = self,
-            .direction = .rev,
-            .contiguous_mode = initial.contiguous_mode,
-            .current_block_index = initial.current_block_index,
-            .blocks_remaining = initial.blocks_remaining,
-            .current_group_index = initial.current_group_index,
-            .current_mask = 0,
-            .check_removed_candidates = self.needsRepairRev(node.index),
-            .group_count_bound = side_snapshot.group_count,
-        };
-        iterator_common.primeGroupedTraversal(&cursor, self.core);
-        return cursor;
+        const node_idx = ensureLiveSnapshotNode(self, node) orelse return null;
+        const side_snapshot = sideAdjOfSnapshot(self.rev_side[node_idx]);
+        return initNeighborCursor(self, .rev, side_snapshot, self.needsRepairRev(node_idx));
     }
 
     pub fn outEdges(self: *const CapturedGraphView, node: types.NodeId) !?SnapshotOutEdgeIterator {
         if (!self.core.multigraph_enabled) return error.UnsupportedOperation;
-        if (node.index >= self.node_state.len) return null;
-        if (!self.isLiveIndex(node.index)) return null;
-
-        const side_snapshot = sideAdjOfSnapshot(self.fwd_side[node.index]);
-        const initial = iterator_common.buildTraversalState(side_snapshot);
-
-        var iterator = SnapshotOutEdgeIterator{
-            .view = self,
-            .contiguous_mode = initial.contiguous_mode,
-            .current_block_index = initial.current_block_index,
-            .blocks_remaining = initial.blocks_remaining,
-            .current_group_index = initial.current_group_index,
-            .current_mask = 0,
-            .check_removed_destinations = self.needsRepairFwd(node.index),
-            .group_count_bound = side_snapshot.group_count,
-        };
-        iterator_common.primeGroupedTraversal(&iterator, self.core);
-        return iterator;
+        const node_idx = ensureLiveSnapshotNode(self, node) orelse return null;
+        const side_snapshot = sideAdjOfSnapshot(self.fwd_side[node_idx]);
+        return initOutEdgeCursor(self, side_snapshot, self.needsRepairFwd(node_idx));
     }
 
     pub fn outDegree(self: *const CapturedGraphView, node: types.NodeId) types.GraphError!usize {

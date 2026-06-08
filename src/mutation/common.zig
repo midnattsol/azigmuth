@@ -1,6 +1,6 @@
 const claims_mod = @import("claims.zig");
 const scratch_mod = @import("scratch.zig");
-const side_adj = @import("../side_adj.zig");
+const side_adj = @import("../adjacency/side_ops.zig");
 
 pub const ClaimedAdjacencies = claims_mod.ClaimedAdjacencies;
 pub const ClaimedNodeSides = claims_mod.ClaimedNodeSides;

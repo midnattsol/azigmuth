@@ -5,8 +5,8 @@
 //!   - `mutation/edge.zig` for edge mutations
 //!   - `mutation/node.zig` for node-oriented mutations
 
-const edge = @import("mutation/edge.zig");
-const node = @import("mutation/node.zig");
+const edge = @import("mutation/edge/mod.zig");
+const node = @import("mutation/node/mod.zig");
 
 pub const addEdge = edge.addEdge;
 pub const addEdgeWithId = edge.addEdgeWithId;

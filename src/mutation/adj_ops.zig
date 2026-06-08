@@ -1,4 +1,4 @@
-const side_adj_ops = @import("../side_adj.zig");
+const side_adj_ops = @import("../adjacency/side_ops.zig");
 
 pub const AdjSlot = side_adj_ops.AdjSlot;
 pub const BlockCursor = side_adj_ops.BlockCursor;
