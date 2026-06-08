@@ -1,6 +1,6 @@
 const std = @import("std");
 const gz = @import("graphz");
-const snapshot_support = @import("snapshot_support.zig");
+const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 
 test "multigraph: init with multigraph option creates graph" {

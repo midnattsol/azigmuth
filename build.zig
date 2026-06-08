@@ -49,10 +49,17 @@ pub fn build(b: *std.Build) void {
     });
     neighbors_mod.addImport("graph_mod", graph_mod);
 
+    const public_snapshot_support_mod = b.createModule(.{
+        .root_source_file = b.path("tests/public/helpers/snapshot_support.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    public_snapshot_support_mod.addImport("graphz", mod);
+
     const test_step = b.step("test", "Run the default test suite");
-    addTestRunners(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
+    addTestRunners(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod);
     if (include_stress) {
-        addStressFiles(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
+        addStressFiles(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod);
     }
 
     const bench_mod = b.createModule(.{
@@ -71,7 +78,7 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&bench_run.step);
 
     const stress_step = b.step("stress", "Run long-running stress tests");
-    addStressFiles(b, stress_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod);
+    addStressFiles(b, stress_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod);
 }
 
 fn addTestModule(
@@ -84,6 +91,7 @@ fn addTestModule(
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
+    public_snapshot_support_mod: *std.Build.Module,
     module_path: []const u8,
 ) void {
     const test_mod = b.createModule(.{
@@ -92,6 +100,7 @@ fn addTestModule(
         .optimize = optimize,
     });
     test_mod.addImport("graphz", graphz_mod);
+    test_mod.addImport("snapshot_support", public_snapshot_support_mod);
 
     if (testNeedsInternals(module_path)) {
         test_mod.addImport("graph_mod", graph_mod);
@@ -142,10 +151,11 @@ fn addRunnerList(
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
+    public_snapshot_support_mod: *std.Build.Module,
     comptime runner_paths: []const []const u8,
 ) void {
     inline for (runner_paths) |runner_path| {
-        addTestModule(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, runner_path);
+        addTestModule(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, runner_path);
     }
 }
 
@@ -159,8 +169,9 @@ fn addTestRunners(
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
+    public_snapshot_support_mod: *std.Build.Module,
 ) void {
-    addRunnerList(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, &test_runners);
+    addRunnerList(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, &test_runners);
 }
 
 fn isStressTest(test_path: []const u8) bool {
@@ -179,6 +190,7 @@ fn addStressFiles(
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
+    public_snapshot_support_mod: *std.Build.Module,
 ) void {
     const tests_dir_path = b.pathFromRoot("tests");
     var tests_dir = std.Io.Dir.cwd().openDir(b.graph.io, tests_dir_path, .{ .iterate = true }) catch |err| {
@@ -200,6 +212,6 @@ fn addStressFiles(
         if (std.mem.endsWith(u8, entry.path, "/all.zig")) continue;
         if (!isStressTest(entry.path)) continue;
 
-        addTestModule(b, stress_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, entry.path);
+        addTestModule(b, stress_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, entry.path);
     }
 }

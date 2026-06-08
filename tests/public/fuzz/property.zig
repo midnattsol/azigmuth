@@ -1,6 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_support = @import("snapshot_support.zig");
+const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 
 fn shrinkAndReplay(
