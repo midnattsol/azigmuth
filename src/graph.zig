@@ -13,7 +13,6 @@ const repair = @import("maintenance/repair.zig");
 const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
 const graph_snapshot_api = @import("graph_snapshot_api.zig");
-const read_session_mod = @import("query/read_session.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
 
@@ -33,10 +32,10 @@ pub const GraphOptions = types.GraphOptions;
 pub const NodeRemovalSummary = types.NodeRemovalSummary;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
-pub const ReadSession = read_session_mod.ReadSession;
+pub const ReadSession = graph_snapshot_api.ReadSession;
 pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
-pub const SnapshotNeighborIterator = read_session_mod.SnapshotNeighborIterator;
-pub const SnapshotOutEdgeIterator = read_session_mod.SnapshotOutEdgeIterator;
+pub const SnapshotNeighborIterator = graph_snapshot_api.SnapshotNeighborIterator;
+pub const SnapshotOutEdgeIterator = graph_snapshot_api.SnapshotOutEdgeIterator;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {

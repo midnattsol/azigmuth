@@ -9,11 +9,6 @@ const page_ops = @import("../storage/page_ops.zig");
 const rcu = @import("../rcu.zig");
 const snapshot_view = @import("snapshot_view.zig");
 
-pub const SnapshotSide = snapshot_view.SnapshotSide;
-pub const SnapshotNeighborIterator = snapshot_view.SnapshotNeighborIterator;
-pub const SnapshotOutEdgeIterator = snapshot_view.SnapshotOutEdgeIterator;
-pub const CapturedGraphView = snapshot_view.CapturedGraphView;
-
 pub const NeighborsCursor = struct {
     core: *const graph_core.GraphCore,
     direction: adjacency.AdjSide,
@@ -115,7 +110,7 @@ pub const ReadSession = struct {
     /// view owns copied node snapshots (adjacency + exact degrees); the
     /// originating read session must stay alive while the view is used so
     /// retired blocks remain pinned.
-    pub fn takeSnapshot(self: *const ReadSession, allocator: std.mem.Allocator) !CapturedGraphView {
+    pub fn takeSnapshot(self: *const ReadSession, allocator: std.mem.Allocator) !snapshot_view.CapturedGraphView {
         return snapshot_view.captureGraphView(self.core, allocator);
     }
 
