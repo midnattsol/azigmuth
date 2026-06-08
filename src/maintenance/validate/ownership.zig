@@ -7,6 +7,13 @@ const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../rcu.zig");
 const adjacency_mod = @import("../../adjacency.zig");
 const node_validity = @import("../../core/node_validity.zig");
+
+fn validateDebtQueue(queue: []const u32, node_count: u32) !void {
+    for (queue) |node_index| {
+        if (node_index >= node_count) return error.CorruptGraph;
+    }
+}
+
 pub fn validateOwnedBlockFast(
     graph: *const graph_core.GraphCore,
     owned_blocks: []u64,
@@ -50,15 +57,14 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
         if (!adjacency.flags.removed) return error.CorruptGraph;
     }
 
-    var group_index = common.firstGroup(adjacency, side);
     var visited_groups: u32 = 0;
     var counted_blocks: u16 = 0;
-    var previous_group_end: ?u32 = null;
-    var chain_is_contiguous = true;
+    const first_group_idx = common.firstGroup(adjacency, side);
+    const end_group = std.math.add(u32, first_group_idx, groups) catch return error.CorruptGraph;
+    if (end_group > graph.group_count) return error.CorruptGraph;
 
-    while (group_index != constants.END_OF_CHAIN) {
-        if (group_index >= graph.group_count) return error.CorruptGraph;
-        if (visited_groups >= graph.group_count or visited_groups >= groups) return error.CorruptGraph;
+    for (first_group_idx..end_group) |group_index_usize| {
+        const group_index: u32 = @intCast(group_index_usize);
         visited_groups += 1;
 
         const group = page_ops.groupAtConst(graph, group_index);
@@ -68,35 +74,15 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
         if (common.bitmapIsSet(free_groups, group_index)) return error.CorruptGraph;
         if (common.bitmapIsSet(retired_groups, group_index)) return error.CorruptGraph;
 
-        const is_last_group = group.next == constants.END_OF_CHAIN;
-        if (!is_last_group and group.count < 4 and !common.needsRepairFlag(adjacency, side)) {
-            if (!adjacency.flags.removed) return error.CorruptGraph;
-        }
-
-        if (previous_group_end) |expected_start| {
-            if (group.start != expected_start) chain_is_contiguous = false;
-        }
-        previous_group_end = group.start + group.count;
-
         for (group.start..group.start + group.count) |block_index| {
             try validateOwnedBlockFast(graph, owned_blocks, free_blocks, retired_blocks, @intCast(block_index), side);
         }
         counted_blocks += group.count;
-
-        group_index = group.next;
     }
 
-    if (visited_groups != groups) return error.CorruptGraph;
     if (counted_blocks != count) return error.CorruptGraph;
-    if (chain_is_contiguous and !common.needsRepairFlag(adjacency, side)) {
-        if (!adjacency.flags.removed) return error.CorruptGraph;
-    }
 }
 pub fn validateRepairDebtFast(graph: *const graph_core.GraphCore, node_count: u32) !void {
-    for (graph.repair_fwd.items) |node_index| {
-        if (node_index >= node_count) return error.CorruptGraph;
-    }
-    for (graph.repair_rev.items) |node_index| {
-        if (node_index >= node_count) return error.CorruptGraph;
-    }
+    try validateDebtQueue(graph.repair_fwd.items, node_count);
+    try validateDebtQueue(graph.repair_rev.items, node_count);
 }

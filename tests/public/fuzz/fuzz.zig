@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const snapshot_support = @import("snapshot_support");
 
 const testing = std.testing;
 
@@ -32,10 +33,10 @@ fn expectGraphMatchesModel(
             if (model[source_index][target_index]) expected_out_degree += 1;
             if (model[target_index][source_index]) expected_in_degree += 1;
         }
-        try testing.expectEqual(expected_out_degree, try graph.outDegree(.{ .index = @intCast(source_index) }));
-        try testing.expectEqual(expected_in_degree, try graph.inDegree(.{ .index = @intCast(source_index) }));
+        try testing.expectEqual(expected_out_degree, try snapshot_support.outDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
+        try testing.expectEqual(expected_in_degree, try snapshot_support.inDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
 
-        var iterator = try graph.neighbors(.{ .index = @intCast(source_index) });
+        var iterator = try snapshot_support.neighbors(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator);
         defer iterator.deinit();
         const neighbors = try iterator.materialize(testing.allocator);
         defer testing.allocator.free(neighbors);
@@ -91,7 +92,9 @@ test "fuzz: random single-block mutations match a reference matrix" {
     try expectGraphMatchesModel(graph, node_count, &model, expected_edge_count);
 
     // Full structural validation at the end.
-    const violations = try graph.debugValidate(testing.allocator);
+    var snapshot = try graph.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    const violations = try snapshot.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
@@ -144,7 +147,9 @@ test "fuzz: random hub mutations preserve model state across multi-block adjacen
     }
 
     // Full structural validation at the end.
-    const violations = try graph.debugValidate(testing.allocator);
+    var snapshot = try graph.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    const violations = try snapshot.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

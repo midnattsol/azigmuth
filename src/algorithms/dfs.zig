@@ -1,48 +1,157 @@
 const std = @import("std");
-const graph_core = @import("../core/graph_core.zig");
+const snapshot_view = @import("../query/snapshot_view.zig");
+const page_ops = @import("../storage/page_ops.zig");
 const types = @import("../core/types.zig");
-const common = @import("common.zig");
-const node_validity = @import("../core/node_validity.zig");
 
-/// Returns nodes in depth-first order starting from `start`.
-/// The caller owns the returned slice.
-///
-/// Concurrent-safe, but not a global snapshot: traversal observes a valid
-/// evolving view of the graph while mutations continue.
-pub fn dfs(graph: *const graph_core.GraphCore, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
-    const node_count = graph.publishedNodeCount();
-    try node_validity.ensureLiveNode(graph, start);
+const DfsFrame = struct {
+    node_idx: u32,
+    current_block_index: u32,
+    blocks_remaining: u16,
+    next_group_index: u32,
+    groups_remaining: u16,
+
+    current_mask: u64,
+    cached_fwd_block: ?*const types.EdgeBlockFwd = null,
+
+    check_removed_candidates: bool,
+
+    fn advanceToNextGroup(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) bool {
+        if (self.groups_remaining == 0) return false;
+        const group = page_ops.groupAtConst(view.core, self.next_group_index);
+        self.current_block_index = group.start;
+        self.blocks_remaining = group.count;
+        self.next_group_index += 1;
+        self.groups_remaining -= 1;
+        return true;
+    }
+
+    fn loadNextNonEmptyMask(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) bool {
+        while (true) {
+            while (self.blocks_remaining == 0) {
+                if (!self.advanceToNextGroup(view)) return false;
+            }
+
+            const block_idx = self.current_block_index;
+            self.current_block_index += 1;
+            self.blocks_remaining -= 1;
+
+            const block = page_ops.edgeBlockAtConst(view.core, block_idx, .fwd);
+            if (block.mask == 0) continue;
+            self.current_mask = block.mask;
+            self.cached_fwd_block = block;
+            return true;
+        }
+    }
+
+    fn next(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) ?types.NodeId {
+        while (true) {
+            while (self.current_mask == 0) {
+                if (!self.loadNextNonEmptyMask(view)) return null;
+            }
+
+            const bit_index: u6 = @intCast(@ctz(self.current_mask));
+            self.current_mask &= self.current_mask - 1;
+            const neighbor = types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination };
+            if (neighbor.index >= view.nodeCount()) continue;
+            if (self.check_removed_candidates and !view.isLiveIndex(neighbor.index)) continue;
+            return neighbor;
+        }
+    }
+};
+
+fn initFrame(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) types.GraphError!?DfsFrame {
+    if (node.index >= view.nodeCount()) return null;
+    if (!view.isLiveIndex(node.index)) return null;
+
+    const snapshot_side = view.fwd_side[node.index];
+    if (snapshot_side.block_count == 0) {
+        return .{
+            .node_idx = node.index,
+            .current_block_index = 0,
+            .blocks_remaining = 0,
+            .next_group_index = 0,
+            .groups_remaining = 0,
+            .current_mask = 0,
+            .check_removed_candidates = view.needsRepairFwd(node.index),
+        };
+    }
+
+    if (snapshot_side.group_count == 0) {
+        return .{
+            .node_idx = node.index,
+            .current_block_index = snapshot_side.first_block,
+            .blocks_remaining = snapshot_side.block_count,
+            .next_group_index = 0,
+            .groups_remaining = 0,
+            .current_mask = 0,
+            .check_removed_candidates = view.needsRepairFwd(node.index),
+        };
+    }
+
+    return .{
+        .node_idx = node.index,
+        .current_block_index = 0,
+        .blocks_remaining = 0,
+        .next_group_index = snapshot_side.first_group,
+        .groups_remaining = snapshot_side.group_count,
+        .current_mask = 0,
+        .check_removed_candidates = view.needsRepairFwd(node.index),
+    };
+}
+
+fn initFrameLive(view: *const snapshot_view.CapturedGraphView, node_idx: u32) DfsFrame {
+    const snapshot_side = view.fwd_side[node_idx];
+    if (snapshot_side.block_count == 0) {
+        return .{ .node_idx = node_idx, .current_block_index = 0, .blocks_remaining = 0, .next_group_index = 0, .groups_remaining = 0, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+    }
+    if (snapshot_side.group_count == 0) {
+        return .{ .node_idx = node_idx, .current_block_index = snapshot_side.first_block, .blocks_remaining = snapshot_side.block_count, .next_group_index = 0, .groups_remaining = 0, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+    }
+    return .{ .node_idx = node_idx, .current_block_index = 0, .blocks_remaining = 0, .next_group_index = snapshot_side.first_group, .groups_remaining = snapshot_side.group_count, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+}
+
+/// Returns nodes in depth-first order starting from `start` over a fixed
+/// captured graph view.
+pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
+    const node_count = view.nodeCount();
+    try view.ensureLiveStart(start);
 
     var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer visited.deinit(allocator);
 
-    var stack = try std.ArrayList(types.NodeId).initCapacity(allocator, node_count);
+    var stack = try std.ArrayList(DfsFrame).initCapacity(allocator, node_count);
     defer stack.deinit(allocator);
-    var order: std.ArrayList(types.NodeId) = .empty;
+    var order = try std.ArrayList(types.NodeId).initCapacity(allocator, node_count);
     errdefer order.deinit(allocator);
 
-    try common.ensureBitCapacity(&visited, allocator, start.index);
-    try stack.append(allocator, start);
+    visited.set(start.index);
+    order.appendAssumeCapacity(start);
+    if (view.degree_fwd[start.index] != 0) {
+        stack.appendAssumeCapacity(initFrameLive(view, start.index));
+    }
 
     while (stack.items.len > 0) {
-        const current = stack.pop().?;
-        try common.ensureBitCapacity(&visited, allocator, current.index);
-        if (visited.isSet(current.index)) continue;
+        const current = &stack.items[stack.items.len - 1];
 
-        visited.set(current.index);
-        try order.append(allocator, current);
+        var pushed = false;
+        while (current.next(view)) |neighbor| {
+            if (visited.isSet(neighbor.index)) continue;
 
-        const neighbors = try common.materializeNeighborsOrEmpty(graph, current, allocator);
-        defer allocator.free(neighbors);
-
-        var neighbor_idx = neighbors.len;
-        while (neighbor_idx > 0) {
-            neighbor_idx -= 1;
-            const neighbor = neighbors[neighbor_idx];
-            try common.ensureBitCapacity(&visited, allocator, neighbor.index);
-            if (!visited.isSet(neighbor.index)) {
-                try stack.append(allocator, neighbor);
+            visited.set(neighbor.index);
+            order.appendAssumeCapacity(neighbor);
+            if (view.degree_fwd[neighbor.index] != 0) {
+                if (view.degree_fwd[current.node_idx] == 1) {
+                    current.* = initFrameLive(view, neighbor.index);
+                } else {
+                    stack.appendAssumeCapacity(initFrameLive(view, neighbor.index));
+                }
             }
+            pushed = true;
+            break;
+        }
+
+        if (!pushed) {
+            _ = stack.pop();
         }
     }
 

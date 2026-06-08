@@ -13,7 +13,7 @@ const sums = @import("sums.zig");
 const stacks = @import("stacks.zig");
 const ownership = @import("ownership.zig");
 const consistency = @import("consistency.zig");
-const violations = @import("violations.zig");
+const logical = @import("logical.zig");
 
 pub fn validate(graph: *const graph_core.GraphCore) !void {
     const reader_token = try common.readerEnter(graph);
@@ -47,42 +47,29 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
 
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd);
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .rev);
-        total_visible_forward += sums.sumVisibleAdjacency(graph, adjacency, .fwd);
-        total_visible_reverse += sums.sumVisibleAdjacency(graph, adjacency, .rev);
+        const fwd_visible = sums.sumVisibleAdjacency(graph, adjacency, .fwd);
+        const rev_visible = sums.sumVisibleAdjacency(graph, adjacency, .rev);
+        total_visible_forward += fwd_visible;
+        total_visible_reverse += rev_visible;
         try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_forward_blocks[0..], free_forward_blocks[0..], retired_forward_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .fwd);
         try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .rev);
         try shape.validateOccupancyFast(graph, adjacency, .fwd);
         try shape.validateOccupancyFast(graph, adjacency, .rev);
+        try consistency.validateForwardEdgeIdsFast(graph, node_buffer, node_id, adjacency);
         try consistency.validateForwardConsistencyFast(graph, node_id, adjacency);
         try consistency.validateReverseConsistencyFast(graph, node_id, adjacency);
 
-        if (adjacency.flags.removed) {
-            const meta = node_buffer.loadPublishedMeta();
-            if (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or meta.degree_fwd != 0) {
-                return error.CorruptGraph;
-            }
-            if (meta.degree_rev != 0) {
-                return error.CorruptGraph;
-            }
-            if (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev) {
-                return error.CorruptGraph;
-            }
-        }
-
-        const fwd_visible = sums.sumVisibleAdjacency(graph, adjacency, .fwd);
-        const rev_visible = sums.sumVisibleAdjacency(graph, adjacency, .rev);
-        if (!adjacency.flags.removed) {
-            const meta = node_buffer.loadPublishedMeta();
-            if (@as(usize, meta.degree_fwd) != fwd_visible) {
-                return error.CorruptGraph;
-            }
-            if (@as(usize, meta.degree_rev) != rev_visible) {
-                return error.CorruptGraph;
-            }
-            if (!adjacency.flags.needs_repair_fwd and violations.forwardHasTombstone(graph, adjacency)) {
-                return error.CorruptGraph;
-            }
-        }
+        const meta = node_buffer.loadPublishedMeta();
+        try logical.validateLiveNodeState(
+            adjacency,
+            meta.degree_fwd,
+            meta.degree_rev,
+            fwd_visible,
+            rev_visible,
+            common.forwardHasTombstone(graph, adjacency),
+            common.reverseHasTombstone(graph, adjacency),
+            false,
+        );
     }
 
     try ownership.validateRepairDebtFast(graph, node_count);
@@ -121,6 +108,6 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         }
     }
 
-    if (total_visible_forward != total_visible_reverse) return error.CorruptGraph;
+    try logical.validateVisibleTotals(total_visible_forward, total_visible_reverse);
     if (total_visible_forward != graph.edge_count.load(.acquire)) return error.CorruptGraph;
 }

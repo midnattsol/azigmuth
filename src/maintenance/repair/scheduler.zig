@@ -8,9 +8,29 @@ const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency.zig");
 const rcu = @import("../../rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
+const side_adj = @import("../../side_adj.zig");
 const mutation_common = @import("../../mutation/common.zig");
 const debt_mod = @import("debt.zig");
 const rebuild_mod = @import("rebuild.zig");
+
+fn scanTombstoneRange(graph: *graph_core.GraphCore, start: u32, end: u32) ?u32 {
+    var node_idx = start;
+    while (node_idx < end) : (node_idx += 1) {
+        if (!node_validity.isNodeLiveIndex(graph, node_idx)) continue;
+        const adj = page_ops.nodeAtConst(graph, .{ .index = node_idx }).publishedAdj();
+        if (adj.block_count_fwd == 0) continue;
+        if (rebuild_mod.hasAnyTombstone(graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, .fwd)) {
+            return node_idx;
+        }
+    }
+    return null;
+}
+
+fn repairBothSides(graph: *graph_core.GraphCore, node: types.NodeId) !bool {
+    const compacted_fwd = try repairNodeSideLimited(graph, node, .fwd, std.math.maxInt(usize));
+    const compacted_rev = try repairNodeSideLimited(graph, node, .rev, std.math.maxInt(usize));
+    return compacted_fwd + compacted_rev > 0;
+}
 
 pub fn repairNodeSideLimited(
     graph: *graph_core.GraphCore,
@@ -29,26 +49,25 @@ pub fn repairNodeSideLimited(
     if (!node_validity.snapshotIsLive(published_adj)) return 0;
 
     if (side == .fwd) {
-        const compacted_tombstones = try rebuild_mod.repairForwardTombstonesWithReverseCleanup(graph, node, node_mut);
+        const compacted_tombstones = try rebuild_mod.compactForwardTombstones(graph, node, node_mut);
         if (compacted_tombstones > 0) return compacted_tombstones;
     }
 
     var writer_guard = rebuild_mod.beginWriter(graph);
     defer writer_guard.end();
 
-    const node_adj = published_adj;
-    const first_block: u32 = if (side == .fwd) node_adj.first_block_fwd else node_adj.first_block_rev;
-    const block_count: u16 = if (side == .fwd) node_adj.block_count_fwd else node_adj.block_count_rev;
-    const group_count: u16 = if (side == .fwd) node_adj.group_count_fwd else node_adj.group_count_rev;
-    const first_group: u32 = if (side == .fwd) node_adj.first_group_fwd else node_adj.first_group_rev;
+    const published_side = side_adj.sideAdjOfNode(published_adj, side);
 
-    if (block_count <= 1) {
-        if (block_count == 0) return 0;
+    if (published_side.block_count <= 1) {
+        if (published_side.block_count == 0) return 0;
         // Single block with repair debt: tombstones (detected by
         // computeNeedsRepair) or grouped layout awaiting canonicalization
         // (group_count > 0 — not detected by computeNeedsRepair for
         // single blocks but the flag is already set).
-        if (!debt_mod.computeNeedsRepair(graph, &node_adj, side) and group_count == 0) return 0;
+        if (!debt_mod.computeNeedsRepair(graph, &published_adj, side) and published_side.group_count == 0) {
+            debt_mod.updateRepairDebtSide(graph, node_mut, node.index, side);
+            return 0;
+        }
         // Fall through to rebuild.
     }
 
@@ -56,34 +75,14 @@ pub fn repairNodeSideLimited(
     // all blocks, merge by key, pack into new blocks.  O(E log B).
     var staging_adj = published_adj;
 
-    var total_live: usize = 0;
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            total_live += @popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask);
-        }
-    } else {
-        var group_idx = first_group;
-        var visit_count: u16 = 0;
-        while (group_idx != constants.END_OF_CHAIN) {
-            if (group_idx >= graph.group_count) return error.CorruptGraph;
-            if (visit_count >= group_count or visit_count >= graph.group_count) return error.CorruptGraph;
-            visit_count += 1;
-            const group = page_ops.groupAtConst(graph, group_idx);
-            for (group.start..group.start + group.count) |block_idx| {
-                total_live += @popCount(page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side).mask);
-            }
-            group_idx = group.next;
-        }
-    }
-
     if (!debt_mod.computeNeedsRepair(graph, &staging_adj, side)) {
-        debt_mod.updateRepairDebt(graph, &staging_adj, node.index, side);
+        debt_mod.updateRepairDebtSide(graph, node_mut, node.index, side);
         return 0;
     }
 
     var sorted = switch (side) {
-        .fwd => try rebuild_mod.sortedRebuildForward(graph, first_block, block_count, group_count, first_group, graph.allocator),
-        .rev => try rebuild_mod.sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, null, graph.allocator),
+        .fwd => try rebuild_mod.sortedRebuildForward(graph, published_side.first_block, published_side.block_count, published_side.group_count, published_side.first_group, graph.allocator),
+        .rev => try rebuild_mod.sortedRebuildReverse(graph, published_side.first_block, published_side.block_count, published_side.group_count, published_side.first_group, null, graph.allocator),
     };
     defer sorted.new_blocks.deinit(graph.allocator);
     const live_total: usize = sorted.live_after;
@@ -96,33 +95,24 @@ pub fn repairNodeSideLimited(
 
     {
         var tmp: types.SideAdj = undefined;
-        try mutation_common.buildSideFromBlocks(&tmp, graph, sorted.new_blocks.items, &scratch);
-        switch (side) {
-            .fwd => {
-                staging_adj.first_block_fwd = tmp.first_block;
-                staging_adj.block_count_fwd = tmp.block_count;
-                staging_adj.group_count_fwd = tmp.group_count;
-                staging_adj.first_group_fwd = tmp.first_group;
-            },
-            .rev => {
-                staging_adj.first_block_rev = tmp.first_block;
-                staging_adj.block_count_rev = tmp.block_count;
-                staging_adj.group_count_rev = tmp.group_count;
-                staging_adj.first_group_rev = tmp.first_group;
-            },
-        }
+        try side_adj.buildSideFromBlocks(&tmp, graph, sorted.new_blocks.items, &scratch);
+        side_adj.writeSide(&staging_adj, side, tmp);
     }
 
     debt_mod.updateRepairDebt(graph, &staging_adj, node.index, side);
     const meta = node_mut.loadPublishedMeta();
-    const new_live: u22 = @as(u22, @intCast(live_total));
+    const new_live: u22 = @intCast(live_total);
     scratch.disarm();
-    mutation_common.publishBothAdj(node_mut, staging_adj,
-        if (side == .fwd) new_live else meta.degree_fwd,
-        if (side == .rev) new_live else meta.degree_rev);
+    side_adj.publishBothAdj(node_mut, staging_adj, switch (side) {
+        .fwd => new_live,
+        .rev => meta.degree_fwd,
+    }, switch (side) {
+        .fwd => meta.degree_rev,
+        .rev => new_live,
+    });
 
     // Retire old side using the shared primitive.
-    try mutation_common.retireSide(graph, published_adj, side);
+    try side_adj.retireSide(graph, published_adj, side);
     return 1;
 }
 
@@ -139,23 +129,14 @@ pub fn repairNodeSide(graph: *graph_core.GraphCore, node: types.NodeId, comptime
 pub fn repairNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     if (!node_validity.isNodeLive(graph, node)) return error.InvalidNode;
 
-    const compacted_fwd = try repairNodeSide(graph, node, .fwd);
-    const compacted_rev = try repairNodeSide(graph, node, .rev);
-    if (compacted_fwd + compacted_rev > 0) {
+    if (try repairBothSides(graph, node)) {
         rcu.bumpEpoch(graph);
         rcu.reclaimRetired(graph);
     }
 }
 
-fn processedNodeContains(processed_nodes: []const u32, node_index: u32) bool {
-    for (processed_nodes) |processed| {
-        if (processed == node_index) return true;
-    }
-    return false;
-}
-
-fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes: []const u32, node_index: u32) bool {
-    if (processedNodeContains(processed_nodes, node_index)) return false;
+fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes: *const std.AutoHashMap(u32, void), node_index: u32) bool {
+    if (processed_nodes.contains(node_index)) return false;
     return node_validity.isNodeLiveIndex(graph, node_index);
 }
 
@@ -169,32 +150,23 @@ fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
     const cursor = &graph.repair_scan_cursor_tombstone;
     if (cursor.* >= node_count) cursor.* = 0;
 
-    var node_index = cursor.*;
-    while (node_index < node_count) : (node_index += 1) {
-        if (!node_validity.isNodeLiveIndex(graph, node_index)) continue;
-        const adj = page_ops.nodeAtConst(graph, .{ .index = node_index }).publishedAdj();
-        if (adj.block_count_fwd == 0) continue;
-        if (rebuild_mod.hasAnyTombstone(graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, .fwd)) {
-            cursor.* = node_index + 1;
-            return node_index;
-        }
+    if (scanTombstoneRange(graph, cursor.*, node_count)) |node_index| {
+        cursor.* = node_index + 1;
+        return node_index;
     }
-
-    node_index = 0;
-    while (node_index < cursor.*) : (node_index += 1) {
-        if (!node_validity.isNodeLiveIndex(graph, node_index)) continue;
-        const adj = page_ops.nodeAtConst(graph, .{ .index = node_index }).publishedAdj();
-        if (adj.block_count_fwd == 0) continue;
-        if (rebuild_mod.hasAnyTombstone(graph, adj.first_block_fwd, adj.block_count_fwd, adj.group_count_fwd, adj.first_group_fwd, .fwd)) {
-            cursor.* = node_index + 1;
-            return node_index;
-        }
+    if (scanTombstoneRange(graph, 0, cursor.*)) |node_index| {
+        cursor.* = node_index + 1;
+        return node_index;
     }
 
     return null;
 }
 
-fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: []const u32) ?u32 {
+fn nextRepairDebtNode(
+    graph: *graph_core.GraphCore,
+    processed_nodes: *const std.AutoHashMap(u32, void),
+    allow_tombstone_scan: bool,
+) ?u32 {
     if (debt_mod.popRepairDebtBestEffort(graph, .fwd)) |node_index| {
         if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
     }
@@ -207,10 +179,48 @@ fn nextRepairDebtNode(graph: *graph_core.GraphCore, processed_nodes: []const u32
     if (debt_mod.findRepairDebtByFlag(graph, .rev)) |node_index| {
         if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
     }
-    if (findTombstoneDebtByScan(graph)) |node_index| {
-        if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
+    if (allow_tombstone_scan) {
+        if (findTombstoneDebtByScan(graph)) |node_index| {
+            if (isEligibleRepairCandidate(graph, processed_nodes, node_index)) return node_index;
+        }
     }
     return null;
+}
+
+fn repairBudgetedWork(
+    graph: *graph_core.GraphCore,
+    max_nodes: usize,
+    processed_nodes: *std.AutoHashMap(u32, void),
+    allow_tombstone_scan: bool,
+) !usize {
+    var total_compacted: usize = 0;
+
+    while (total_compacted < max_nodes) {
+        const node_index = nextRepairDebtNode(graph, processed_nodes, allow_tombstone_scan) orelse break;
+        try processed_nodes.put(node_index, {});
+
+        if (try repairBothSides(graph, .{ .index = node_index })) total_compacted += 1;
+    }
+
+    return total_compacted;
+}
+
+fn flushTombstoneDebt(
+    graph: *graph_core.GraphCore,
+    max_nodes: usize,
+    processed_nodes: *std.AutoHashMap(u32, void),
+) !usize {
+    var total_compacted: usize = 0;
+
+    while (total_compacted < max_nodes) {
+        const node_index = findTombstoneDebtByScan(graph) orelse break;
+        if (!isEligibleRepairCandidate(graph, processed_nodes, node_index)) continue;
+        try processed_nodes.put(node_index, {});
+
+        if (try repairBothSides(graph, .{ .index = node_index })) total_compacted += 1;
+    }
+
+    return total_compacted;
 }
 
 /// Run up to `max_nodes` repair operations across the repair debt queue.
@@ -222,18 +232,10 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     }
     defer graph.active_repairers.store(0, .release);
 
-    var total_compacted: usize = 0;
-    var processed_nodes: std.ArrayList(u32) = .empty;
-    defer processed_nodes.deinit(graph.allocator);
+    var processed_nodes = std.AutoHashMap(u32, void).init(graph.allocator);
+    defer processed_nodes.deinit();
 
-    while (total_compacted < max_nodes) {
-        const node_index = nextRepairDebtNode(graph, processed_nodes.items) orelse break;
-        try processed_nodes.append(graph.allocator, node_index);
-
-        const compacted_fwd = try repairNodeSideLimited(graph, .{ .index = node_index }, .fwd, std.math.maxInt(usize));
-        const compacted_rev = try repairNodeSideLimited(graph, .{ .index = node_index }, .rev, std.math.maxInt(usize));
-        if (compacted_fwd + compacted_rev > 0) total_compacted += 1;
-    }
+    const total_compacted = try repairBudgetedWork(graph, max_nodes, &processed_nodes, false);
 
     if (total_compacted > 0) {
         rcu.bumpEpoch(graph);
@@ -241,4 +243,45 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     }
 
     return total_compacted;
+}
+
+pub fn flushRepairs(graph: *graph_core.GraphCore) !types.RepairFlushSummary {
+    if (graph.active_repairers.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) {
+        return error.ConcurrentMutation;
+    }
+    defer graph.active_repairers.store(0, .release);
+
+    const node_count = graph.publishedNodeCount();
+    if (node_count == 0) {
+        return .{
+            .repaired_nodes = 0,
+            .pass_count = 0,
+            .remaining_repair_fwd = 0,
+            .remaining_repair_rev = 0,
+            .remaining_structural_debt = false,
+        };
+    }
+
+    var processed_nodes = std.AutoHashMap(u32, void).init(graph.allocator);
+    defer processed_nodes.deinit();
+
+    const repaired_flagged = try repairBudgetedWork(graph, node_count, &processed_nodes, false);
+    const repaired_scanned = try flushTombstoneDebt(graph, node_count - repaired_flagged, &processed_nodes);
+    const repaired_nodes = repaired_flagged + repaired_scanned;
+
+    if (repaired_nodes > 0) {
+        rcu.bumpEpoch(graph);
+        rcu.reclaimRetired(graph);
+    }
+
+    const remaining_repair_fwd = debt_mod.countNodesWithRepairFlag(graph, .fwd);
+    const remaining_repair_rev = debt_mod.countNodesWithRepairFlag(graph, .rev);
+
+    return .{
+        .repaired_nodes = repaired_nodes,
+        .pass_count = if (repaired_scanned > 0) 2 else 1,
+        .remaining_repair_fwd = remaining_repair_fwd,
+        .remaining_repair_rev = remaining_repair_rev,
+        .remaining_structural_debt = remaining_repair_fwd > 0 or remaining_repair_rev > 0,
+    };
 }

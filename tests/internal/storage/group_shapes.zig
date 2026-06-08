@@ -9,6 +9,23 @@ const publish = @import("publish");
 
 const testing = std.testing;
 
+fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
+    for (0..count) |_| _ = try graph.addNode();
+}
+
+fn publishReverseSources(graph: *graph_mod.Graph, source_idx: u32, first_destination: u32, count: u32) !void {
+    for (0..count) |offset| {
+        const block = try graph.allocBlockRev();
+        page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source_idx;
+        page_ops.edgeBlockAt(&graph.graph, block, .rev).mask = constants.denseMask(1);
+        const buf = try graph.nodeAt(.{ .index = first_destination + @as(u32, @intCast(offset)) });
+        publish.clearPublishedSides(buf);
+        publish.publishedRevSide(buf).first_block = block;
+        publish.publishedRevSide(buf).block_count = 1;
+        publish.setPublishedRevDegree(buf, 1);
+    }
+}
+
 test "invalid shape: block_count == 1 with group_count > 1 fails validate" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -43,7 +60,7 @@ test "invalid shape: block_count == 1 with group_count > 1 fails validate" {
     _ = graph.validate() catch {};
 }
 
-test "invalid shape: grouped single-block adjacency is detected as repair debt" {
+test "shape: grouped single-block adjacency is accepted as valid layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -68,29 +85,31 @@ test "invalid shape: grouped single-block adjacency is detected as repair debt" 
 
     var found_canonicalization = false;
     for (violations) |v| {
-        if (v == .grouped_layout_needs_canonicalization) {
-            found_canonicalization = true;
-            try testing.expectEqual(node.index, v.grouped_layout_needs_canonicalization.node);
-        }
+        if (v == .grouped_layout_needs_canonicalization) found_canonicalization = true;
     }
-    try testing.expect(found_canonicalization);
-
-    _ = graph.validate() catch {};
+    try testing.expect(!found_canonicalization);
+    try graph.validate();
 }
 
-test "invalid shape: grouped contiguous chain must be marked needs_repair" {
+test "shape: grouped contiguous run layout is accepted without repair flag" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const node = try graph.addNode();
+    try addNodeCount(&graph, 98);
+    const node = graph_mod.NodeId{ .index = 0 };
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
     const b2 = try graph.allocBlockFwd();
     const g0 = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = 0;
-    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = 0;
-    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).mask = 0;
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, b0, .fwd).edges[i] = .{ .destination = @intCast(i + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(48);
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, b1, .fwd).edges[i] = .{ .destination = @intCast(i + 49), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(48);
+    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).edges[0] = .{ .destination = 97, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).mask = constants.denseMask(1);
+
+    try publishReverseSources(&graph, node.index, 1, 97);
 
     page_ops.groupAt(&graph.graph, g0).* = .{
         .start = b0, .count = 3, .next = constants.END_OF_CHAIN,
@@ -101,20 +120,18 @@ test "invalid shape: grouped contiguous chain must be marked needs_repair" {
     publish.publishedFwdSide(buf).block_count = 3;
     publish.publishedFwdSide(buf).group_count = 1;
     publish.publishedFwdSide(buf).first_group = g0;
-    publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 0, 0);
+    publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 97, 0);
+    graph.graph.edge_count.store(97, .release);
 
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
 
     var found = false;
     for (violations) |v| {
-        if (v == .grouped_layout_needs_canonicalization) {
-            found = true;
-        }
+        if (v == .grouped_layout_needs_canonicalization) found = true;
     }
-    try testing.expect(found);
-
-    _ = graph.validate() catch {};
+    try testing.expect(!found);
+    try graph.validate();
 }
 
 test "invalid shape: too many groups without needs_repair fails validate" {
@@ -153,18 +170,26 @@ test "invalid shape: too many groups without needs_repair fails validate" {
     _ = graph.validate() catch {};
 }
 
-test "invalid shape: short non-tail run without needs_repair emits fragmentation violation" {
+test "shape: short non-tail run without needs_repair is accepted as valid layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const node = try graph.addNode();
+    try addNodeCount(&graph, 99);
+    const node = graph_mod.NodeId{ .index = 0 };
     const head_block = try graph.allocBlockFwd();
+    const middle_block = try graph.allocBlockFwd();
     const tail_block = try graph.allocBlockFwd();
     const short_run_group = try graph.allocGroup();
     const tail_group = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).mask = 0;
-    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).mask = 0;
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).edges[i] = .{ .destination = @intCast(i + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).mask = constants.denseMask(48);
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, middle_block, .fwd).edges[i] = .{ .destination = @intCast(i + 49), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, middle_block, .fwd).mask = constants.denseMask(48);
+    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).edges[0] = .{ .destination = 97, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).mask = constants.denseMask(1);
+
+    try publishReverseSources(&graph, node.index, 1, 97);
 
     page_ops.groupAt(&graph.graph, short_run_group).* = .{
         .start = head_block, .count = 2, .next = tail_group,
@@ -178,19 +203,16 @@ test "invalid shape: short non-tail run without needs_repair emits fragmentation
     publish.publishedFwdSide(buf).block_count = 3;
     publish.publishedFwdSide(buf).group_count = 2;
     publish.publishedFwdSide(buf).first_group = short_run_group;
-    publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 0, 0);
+    publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 97, 0);
+    graph.graph.edge_count.store(97, .release);
 
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
 
     var found = false;
     for (violations) |v| {
-        if (v == .run_fragmentation_requires_repair) {
-            try testing.expectEqual(node.index, v.run_fragmentation_requires_repair.node);
-            try testing.expectEqual(short_run_group, v.run_fragmentation_requires_repair.group);
-            try testing.expect(v.run_fragmentation_requires_repair.count < 4);
-            found = true;
-        }
+        if (v == .run_fragmentation_requires_repair) found = true;
     }
-    try testing.expect(found);
+    try testing.expect(!found);
+    try graph.validate();
 }

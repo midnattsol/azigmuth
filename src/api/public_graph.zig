@@ -1,6 +1,7 @@
-//! Public `Graph` handle — heap-allocated opaque type that forms the single
-//! canonical entry point for all graph operations.  Callers never see the
-//! internal layout and must go through the methods defined here.
+//! Public `Graph` handle — heap-allocated opaque type that forms the canonical
+//! entry point for core storage, mutation, validation, and maintenance
+//! operations. Callers never see the internal layout and must go through the
+//! methods defined here.
 //!
 //! Lifetime:
 //!   - `init(allocator)` allocates and returns a `*Graph`.  The caller owns the
@@ -12,20 +13,37 @@
 //!   - While `deinitChecked()` has atomically closed the graph to new work,
 //!     fallible APIs MAY return `error.GraphBusy`; non-fallible accessors
 //!     (`hasNode`, `nodeCount`, `edgeCount`) return safe defaults.
-//!   - All query methods (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`,
-//!     `bfs`, `dfs`, `hasCycle`, `validate`, `debugValidate`) are lock-free
-//!     readers and never block writers.
+//!   - `snapshot(allocator)`, `validate`, and `debugValidate` are read-side
+//!     operations and never block writers.
 
 const std = @import("std");
 const internal = @import("../graph.zig");
+const public_snapshot = @import("public_snapshot.zig");
 
 pub const Graph = opaque {
+    fn inner(self: *Graph) *internal.Graph {
+        return @ptrCast(@alignCast(self));
+    }
+
+    fn innerConst(self: *const Graph) *const internal.Graph {
+        return @ptrCast(@alignCast(self));
+    }
+
     /// Allocates and returns a heap-allocated `*Graph`.  The caller owns the
     /// returned pointer and must call `deinit()` or `deinitChecked()` when done.
     pub fn init(allocator: std.mem.Allocator) internal.GraphError!*Graph {
         const g = try allocator.create(internal.Graph);
         errdefer allocator.destroy(g);
         g.* = try internal.Graph.init(allocator);
+        return @ptrCast(g);
+    }
+
+    /// Allocates and returns a heap-allocated `*Graph` with the given options.
+    /// Caller owns the pointer; must call `deinit()` or `deinitChecked()`.
+    pub fn initWithOptions(allocator: std.mem.Allocator, options: internal.GraphOptions) internal.GraphError!*Graph {
+        const g = try allocator.create(internal.Graph);
+        errdefer allocator.destroy(g);
+        g.* = try internal.Graph.initWithOptions(allocator, options);
         return @ptrCast(g);
     }
 
@@ -38,7 +56,7 @@ pub const Graph = opaque {
     /// diagnostic that includes the active call, writer, repairer, and reader
     /// overflow counts.
     pub fn deinit(self: *Graph) void {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
+        const g = self.inner();
         const alloc = g.graph.allocator;
         g.deinit();
         alloc.destroy(g);
@@ -53,117 +71,75 @@ pub const Graph = opaque {
     /// contract if an impossible post-close active-user state were ever to be
     /// observed.
     pub fn deinitChecked(self: *Graph) internal.DeinitError!void {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
+        const g = self.inner();
         const alloc = g.graph.allocator;
         g.deinitChecked() catch |err| return err;
         alloc.destroy(g);
     }
 
     pub fn addNode(self: *Graph) internal.GraphError!internal.NodeId {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.addNode();
+        return self.inner().addNode();
     }
 
     pub fn nodeCount(self: *const Graph) usize {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.nodeCount();
+        return self.innerConst().nodeCount();
     }
 
     pub fn edgeCount(self: *const Graph) u64 {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.edgeCount();
+        return self.innerConst().edgeCount();
     }
 
     pub fn hasNode(self: *const Graph, id: internal.NodeId) bool {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.hasNode(id);
+        return self.innerConst().hasNode(id);
     }
 
     pub fn validate(self: *const Graph) internal.GraphError!void {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.validate();
+        return self.innerConst().validate();
     }
 
     pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError![]internal.Violation {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.debugValidate(allocator);
+        return self.innerConst().debugValidate(allocator);
     }
 
-    pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.NeighborIterator {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.neighbors(node);
-    }
-
-    pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.NeighborIterator {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.inNeighbors(node);
-    }
-
-    /// Convenience: materializes all outgoing neighbors into a slice.
-    /// The caller owns the returned slice.
-    pub fn neighborsMaterialized(self: *const Graph, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        var it = try self.neighbors(node);
-        defer it.deinit();
-        return it.materialize(allocator);
-    }
-
-    /// Convenience: materializes all incoming neighbors into a slice.
-    /// The caller owns the returned slice.
-    pub fn inNeighborsMaterialized(self: *const Graph, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        var it = try self.inNeighbors(node);
-        defer it.deinit();
-        return it.materialize(allocator);
-    }
-
-    pub fn outDegree(self: *const Graph, node: internal.NodeId) internal.GraphError!usize {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.outDegree(node);
-    }
-
-    pub fn inDegree(self: *const Graph, node: internal.NodeId) internal.GraphError!usize {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.inDegree(node);
+    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!*public_snapshot.ReadSnapshot {
+        const snapshot_handle = try allocator.create(internal.ReadSnapshot);
+        errdefer allocator.destroy(snapshot_handle);
+        snapshot_handle.* = try self.innerConst().snapshot(allocator);
+        return @ptrCast(snapshot_handle);
     }
 
     pub fn repairNode(self: *Graph, node: internal.NodeId) internal.GraphError!void {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.repairNode(node);
+        return self.inner().repairNode(node);
     }
 
     pub fn repairBudgeted(self: *Graph, max_nodes: usize) internal.GraphError!usize {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.repairBudgeted(max_nodes);
+        return self.inner().repairBudgeted(max_nodes);
+    }
+
+    pub fn reclaimRetired(self: *Graph) void {
+        return self.inner().reclaimRetired();
     }
 
     pub fn addEdge(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!void {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.addEdge(source, destination, relation, @bitCast(flags));
+        return self.inner().addEdge(source, destination, relation, @bitCast(flags));
     }
 
+    /// Returns the assigned EdgeId in multigraph mode.
+    pub fn addEdgeWithId(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!internal.EdgeId {
+        return self.inner().addEdgeWithId(source, destination, relation, @bitCast(flags));
+    }
+
+    /// Removes one edge in simple mode, or all duplicates for the pair in multigraph mode.
     pub fn removeEdge(self: *Graph, source: internal.NodeId, destination: internal.NodeId) internal.GraphError!bool {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.removeEdge(source, destination);
+        return self.inner().removeEdge(source, destination);
     }
 
-    pub fn removeNode(self: *Graph, node: internal.NodeId) internal.GraphError!void {
-        const g: *internal.Graph = @ptrCast(@alignCast(self));
-        return g.removeNode(node);
+    /// Removes exactly the identified edge in multigraph mode.
+    pub fn removeEdgeWithId(self: *Graph, source: internal.NodeId, destination: internal.NodeId, edge_id: internal.EdgeId) internal.GraphError!bool {
+        return self.inner().removeEdgeWithId(source, destination, edge_id);
     }
 
-    // ── Algorithms (concurrent-safe, evolving valid view) ──────────────
-
-    pub fn bfs(self: *const Graph, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.bfs(start, allocator);
-    }
-
-    pub fn dfs(self: *const Graph, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.dfs(start, allocator);
-    }
-
-    pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!bool {
-        const g: *const internal.Graph = @ptrCast(@alignCast(self));
-        return g.hasCycle(allocator);
+    pub fn removeNode(self: *Graph, node: internal.NodeId) internal.GraphError!internal.NodeRemovalSummary {
+        return self.inner().removeNode(node);
     }
 };

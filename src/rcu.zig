@@ -179,6 +179,11 @@ pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
     page_ops.retireGroup(graph, group_idx, current_epoch);
 }
 
+pub fn retireGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
+    const current_epoch = graph.epoch.load(.acquire);
+    page_ops.retireGroupSpan(graph, first_group_idx, group_count, current_epoch);
+}
+
 pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
     _ = graph.epoch.fetchAdd(1, .release);
 }

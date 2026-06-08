@@ -76,7 +76,9 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
 
         // Full debugValidate periodically.
         if (step % 50 == 49) {
-            const violations = try graph.debugValidate(testing.allocator);
+            var snapshot = try graph.snapshot(testing.allocator);
+            defer snapshot.deinit();
+            const violations = try snapshot.debugValidate(testing.allocator);
             defer testing.allocator.free(violations);
             try expectNoStructuralViolations(violations);
         }
@@ -109,7 +111,9 @@ test "fuzz: sequential hot-node add/remove with periodic validate" {
         _ = graph.validate() catch {};
 
         if (step % 40 == 39) {
-            const violations = try graph.debugValidate(testing.allocator);
+            var snapshot = try graph.snapshot(testing.allocator);
+            defer snapshot.deinit();
+            const violations = try snapshot.debugValidate(testing.allocator);
             defer testing.allocator.free(violations);
             try expectNoStructuralViolations(violations);
         }
@@ -161,7 +165,9 @@ test "fuzz: stress addEdge on same pair 100 times with interleaved repair" {
         _ = graph.validate() catch {};
     }
 
-    const violations = try graph.debugValidate(testing.allocator);
+    var snapshot = try graph.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    const violations = try snapshot.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

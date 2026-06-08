@@ -32,11 +32,22 @@ pub fn main() !void {
 
     try g.addEdge(a, b, 0, .{});
 
-    var it = try g.neighbors(a);
-    defer it.deinit();
+    var snapshot = try g.snapshot(std.heap.page_allocator);
+    defer snapshot.deinit();
+
+    var it = try snapshot.neighbors(a);
     while (it.next()) |neighbor| {
         std.debug.print("neighbor: {}\n", .{neighbor.index});
     }
+
+    const removal = try g.removeNode(b);
+    std.debug.print("removed visible edges: {}\n", .{removal.removed_visible_edges});
+
+    if (removal.left_repair_debt) {
+        _ = try g.repairBudgeted(removal.related_live_nodes_touched);
+    }
+
+    g.reclaimRetired();
 
     try g.validate();
 }
@@ -75,38 +86,93 @@ an implementation detail.
   also return `error.GraphBusy` instead of entering the graph.
 - Non-fallible accessors (`hasNode`, `nodeCount`, `edgeCount`) return safe
   defaults during that brief closing window.
+- Heavy maintenance is explicit. Use `repairNode()`, `repairBudgeted()`, and
+  `reclaimRetired()` when you want to pay maintenance costs deliberately before
+  `deinitChecked()`.
 
-## Materialize
+## RemoveNode And Repair
 
-`NeighborIterator` is returned by value, allocates nothing on creation, and is
-the canonical iterator type used directly by the public API. `materialize()`
-drains the iterator without consuming it, so `deinit()` is still required.
+`removeNode()` is logically complete when it returns, but it may leave
+structural repair debt behind for live predecessors and live destinations.
+The return value
+`NodeRemovalSummary` reports that aftermath so embeddings can decide whether to
+repair now or later.
+
+Live destinations may keep reverse structural tombstones until explicit
+maintenance, so `needs_repair_rev` is part of the normal post-`removeNode()`
+surface, not a hidden inconsistency.
 
 ```zig
-var it = try g.neighbors(node);
-defer it.deinit();
+const summary = try g.removeNode(node);
+if (summary.left_repair_debt) {
+    _ = try g.repairBudgeted(summary.related_live_nodes_touched);
+}
+```
+
+When you want to return memory from retired blocks/groups to the reusable pools,
+call `reclaimRetired()` explicitly:
+
+```zig
+g.reclaimRetired();
+```
+
+## Snapshot Read Path
+
+`ReadSnapshot` is the public read/query surface. Snapshot iterators are returned
+by value, allocate nothing on creation, and expose `materialize()` when you want
+an owned slice. Public adjacency queries, degree queries, and algorithms all go
+through `ReadSnapshot`, not `Graph`.
+
+```zig
+var snapshot = try g.snapshot(allocator);
+defer snapshot.deinit();
+var it = try snapshot.neighbors(node);
 const all = try it.materialize(allocator);
 defer allocator.free(all);
 // it.next() returns null after materialize()
+
+try snapshot.validate();
+const violations = try snapshot.debugValidate(allocator);
+defer allocator.free(violations);
 ```
 
 ## Algorithms
 
 ```zig
-const order = try g.bfs(start, allocator);
-defer allocator.free(order);  // may be empty (len == 0)
+var snapshot = try g.snapshot(allocator);
+defer snapshot.deinit();
 
-const order = try g.dfs(start, allocator);
-defer allocator.free(order);  // may be empty (len == 0)
+try std.testing.expectEqual(@as(usize, 2), try snapshot.outDegree(start));
 
-const has_cycle = try g.hasCycle(allocator);
+var neighbors = try snapshot.neighbors(start);
+const all = try neighbors.materialize(allocator);
+defer allocator.free(all);
+
+const snap_has_cycle = try snapshot.hasCycle(allocator);
+_ = snap_has_cycle;
+
+const snap_bfs = try snapshot.bfs(start, allocator);
+defer allocator.free(snap_bfs);
+
+const snap_dfs = try snapshot.dfs(start, allocator);
+defer allocator.free(snap_dfs);
 ```
+
+`ReadSnapshot` is a reusable sealed in-memory graph view. Its algorithms run
+against that fixed captured view and do not perform repair or other hidden
+maintenance.
+
+`Graph.validate()` remains the live fast-path structural check over the mutable
+engine state. `snapshot.validate()` is the fast logical/structural check over a
+sealed captured view, and `snapshot.debugValidate(allocator)` is the exhaustive
+allocating validator over that same captured view.
 
 ## Commands
 
 ```sh
 zig build check     # compile the library
 zig build test      # run non-stress tests
+zig build bench -Doptimize=ReleaseFast
 zig build stress    # run long-running RCU stress tests
 ```
 

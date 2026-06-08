@@ -141,7 +141,7 @@ test "stress rcu: multiple readers and writers run concurrently without corrupti
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
-test "stress rcu: repairBudgeted tombstone scan runs safely under concurrent churn" {
+test "stress rcu: flushRepairs tombstone scan runs safely under concurrent churn" {
     const allocator = std.heap.page_allocator;
     var graph = try graph_mod.Graph.init(allocator);
     defer graph.deinit();
@@ -150,7 +150,7 @@ test "stress rcu: repairBudgeted tombstone scan runs safely under concurrent chu
     const source = try graph.addNode();
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try testing.expect((try graph.nodeAtConst(source)).publishedAdj().flags.needs_repair_fwd);
 
     // Churn node: continuously add/remove edges + reclaim, creating
@@ -173,8 +173,8 @@ test "stress rcu: repairBudgeted tombstone scan runs safely under concurrent chu
     const churn_thread = try std.Thread.spawn(.{}, churnLoop, .{&churn});
 
     // Main thread: repeatedly clear the needs_repair_fwd flag and
-    // queues so the tombstone fallback scan (findTombstoneDebtByScan)
-    // is forced every call.
+    // queues so only the explicit flushRepairs tombstone scan can
+    // discover the debt.
     {
         var buf = try graph.nodeAt(source);
         var meta = buf.loadPublishedMeta();
@@ -188,15 +188,15 @@ test "stress rcu: repairBudgeted tombstone scan runs safely under concurrent chu
     graph.graph.repair_scan_cursor_rev = 0;
     graph.graph.repair_scan_cursor_tombstone = 0;
 
-    // Let the churn thread build up traffic, then run repairBudgeted
+    // Let the churn thread build up traffic, then run flushRepairs
     // while blocks are being retired and reclaimed concurrently.
     var spin_warmup: usize = 0;
     while (spin_warmup < 5_000_000) : (spin_warmup += 1) {
         std.atomic.spinLoopHint();
     }
 
-    const compacted = try graph.repairBudgeted(1);
-    try testing.expect(compacted > 0);
+    const flush = try graph.flushRepairs();
+    try testing.expect(flush.repaired_nodes > 0);
 
     stop.store(true, .release);
     churn_thread.join();

@@ -10,18 +10,15 @@
 //!   const m = try g.addNode();
 //!   try g.addEdge(n, m, 0, .{});
 //!
-//!   var it = try g.neighbors(n);
-//!   defer it.deinit();
-//!   while (it.next()) |neighbor| { ... }
-//!
-//!   // materialize drains without consuming the iterator — deinit() still required:
-//!   var it2 = try g.neighbors(n);
-//!   defer it2.deinit();
-//!   const all = try it2.materialize(allocator);
+//!   var snapshot = try g.snapshot(allocator);
+//!   defer snapshot.deinit();
+//!   var neighbors = try snapshot.neighbors(n);
+//!   const all = try neighbors.materialize(allocator);
 //!   defer allocator.free(all);
-//!
-//!   const order = try g.bfs(n, allocator);
+//!   const order = try snapshot.bfs(n, allocator);
 //!   defer allocator.free(order);
+//!   const has_cycle = try snapshot.hasCycle(allocator);
+//!   _ = has_cycle;
 //!
 //! Usage with GraphBuilder:
 //!   var builder = try graphz.GraphBuilder.init(allocator);
@@ -33,8 +30,8 @@
 //!   defer g2.deinit();              // graph lifetime independent of builder
 
 const graph = @import("graph.zig");
-const public_iterator = @import("neighbor_iterator.zig");
 const public_graph = @import("api/public_graph.zig");
+const public_snapshot = @import("api/public_snapshot.zig");
 const public_builder = @import("api/public_builder.zig");
 
 // ── Core types ────────────────────────────────────────────────────────
@@ -43,10 +40,18 @@ pub const Edge = graph.Edge;
 pub const EdgeFlags = graph.EdgeFlags;
 pub const NodeFlags = graph.NodeFlags;
 
+// ── Multigraph types ──────────────────────────────────────────────────
+pub const EdgeId = graph.EdgeId;
+pub const EdgeRef = graph.EdgeRef;
+pub const GraphOptions = graph.GraphOptions;
+pub const NodeRemovalSummary = graph.NodeRemovalSummary;
+
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;
+pub const ReadSnapshot = public_snapshot.ReadSnapshot;
 pub const GraphBuilder = public_builder.GraphBuilder;
-pub const NeighborIterator = public_iterator.NeighborIterator;
+pub const SnapshotNeighborIterator = graph.SnapshotNeighborIterator;
+pub const SnapshotOutEdgeIterator = graph.SnapshotOutEdgeIterator;
 pub const GraphError = graph.GraphError;
 pub const DeinitError = graph.DeinitError;
 pub const Violation = graph.Violation;

@@ -9,9 +9,19 @@ const types = @import("types.zig");
 pub const GraphCore = struct {
     allocator: std.mem.Allocator,
 
+    /// Enables multigraph mode: multiple edges between the same (source,destination)
+    /// pair are allowed, and `EdgeId` disambiguates them.
+    multigraph_enabled: bool = false,
+
     /// Atomically-published node pages for lock-free node lookup during
     /// concurrent reads and `addNode` growth.
     node_pages_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
+
+    /// Per-node repair queue membership bitmaps to avoid duplicate queue entries.
+    repair_queued_fwd_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
+    repair_queued_rev_pages: [constants.MAX_NODE_PAGES]std.atomic.Value(usize) =
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_NODE_PAGES,
 
     /// Atomically-published page directories for lock-free block/group lookup.
@@ -22,6 +32,11 @@ pub const GraphCore = struct {
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_BLOCK_PAGES,
     edge_block_group_pages: [constants.MAX_EDGE_GROUP_PAGES]std.atomic.Value(usize) =
         [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_GROUP_PAGES,
+
+    /// Per-forward-block edge ID sidecar pages. Same block_idx and lifecycle
+    /// as edge_blocks_fwd_pages.
+    edge_blocks_fwd_id_pages: [constants.MAX_EDGE_BLOCK_PAGES]std.atomic.Value(usize) =
+        [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** constants.MAX_EDGE_BLOCK_PAGES,
 
     /// Per-group metadata pages for lock-free retired/free stacks.
     edge_block_group_meta_pages: [constants.MAX_EDGE_GROUP_PAGES]std.atomic.Value(usize) =
@@ -39,9 +54,13 @@ pub const GraphCore = struct {
     retired_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
 
-    /// Tagged stack heads for group retirement/reuse.
-    free_groups_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
-    retired_groups_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    /// Tagged stack heads for grouped-run retirement/reuse, indexed by
+    /// (span_len - 1). Published grouped sides own a contiguous span of up to
+    /// MAX_GROUPS_PER_NODE run descriptors.
+    free_group_spans_head: [constants.MAX_GROUPS_PER_NODE]std.atomic.Value(u64) =
+        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_GROUPS_PER_NODE,
+    retired_group_spans_head: [constants.MAX_GROUPS_PER_NODE]std.atomic.Value(u64) =
+        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_GROUPS_PER_NODE,
 
     /// Repair debt queues — node indices below occupancy threshold.
     /// These are best-effort single-writer queues.  Concurrent writers
@@ -49,6 +68,7 @@ pub const GraphCore = struct {
     /// flags so the queue is not on the concurrent-writer correctness path.
     repair_fwd: std.ArrayList(u32),
     repair_rev: std.ArrayList(u32),
+    repair_queue_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
     /// Total number of nodes that have been published.
     /// Readers load this atomically before dereferencing a node page.

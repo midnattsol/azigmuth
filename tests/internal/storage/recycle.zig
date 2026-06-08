@@ -16,7 +16,7 @@ test "group lifecycle: alloc, retire, reclaim puts group back on free list" {
     page_ops.retireGroup(&graph.graph, group, epoch);
 
     // Verify the retired head changed (group was pushed).
-    const retired_head = graph.graph.retired_groups_head.load(.acquire);
+    const retired_head = graph.graph.retired_group_spans_head[0].load(.acquire);
     try testing.expect(retired_head != constants.END_OF_CHAIN);
 
     // Bump epoch past the retired epoch and reclaim.
@@ -25,7 +25,7 @@ test "group lifecycle: alloc, retire, reclaim puts group back on free list" {
     graph.reclaimRetired();
 
     // Verify group was reclaimed (moved from retired to free).
-    const free_head = graph.graph.free_groups_head.load(.acquire);
+    const free_head = graph.graph.free_group_spans_head[0].load(.acquire);
     try testing.expect(free_head != constants.END_OF_CHAIN);
 }
 
@@ -36,6 +36,6 @@ test "group lifecycle: alloc followed by free puts group on free list immediatel
     const group = try graph.allocGroup();
     graph.freeGroup(group);
 
-    const free_head = graph.graph.free_groups_head.load(.acquire);
+    const free_head = graph.graph.free_group_spans_head[0].load(.acquire);
     try testing.expect(free_head != constants.END_OF_CHAIN);
 }

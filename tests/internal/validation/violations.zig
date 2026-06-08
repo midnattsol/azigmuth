@@ -31,7 +31,7 @@ fn publishForwardSingleGroup(
     node_buffer.storePublishedMeta(.{ .needs_repair_fwd = true });
 }
 
-test "validation: debugValidate emits run_fragmentation_requires_repair for short non-tail runs" {
+test "validation: debugValidate accepts short non-tail runs as valid layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -66,21 +66,10 @@ test "validation: debugValidate emits run_fragmentation_requires_repair for shor
 
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
-    try testing.expect(hasViolationTag(violations, .run_fragmentation_requires_repair));
-
-    var found = false;
-    for (violations) |v| {
-        if (v == .run_fragmentation_requires_repair) {
-            try testing.expectEqual(node.index, v.run_fragmentation_requires_repair.node);
-            try testing.expectEqual(short_run_group, v.run_fragmentation_requires_repair.group);
-            try testing.expect(v.run_fragmentation_requires_repair.count < 4);
-            found = true;
-        }
-    }
-    try testing.expect(found);
+    try testing.expect(!hasViolationTag(violations, .run_fragmentation_requires_repair));
 }
 
-test "validation: debugValidate emits grouped_layout_needs_canonicalization for contiguous single group" {
+test "validation: debugValidate accepts grouped contiguous single run layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -111,14 +100,7 @@ test "validation: debugValidate emits grouped_layout_needs_canonicalization for 
 
     const violations = try graph.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
-    try testing.expect(hasViolationTag(violations, .grouped_layout_needs_canonicalization));
-
-    for (violations) |v| {
-        if (v == .grouped_layout_needs_canonicalization) {
-            try testing.expectEqual(node.index, v.grouped_layout_needs_canonicalization.node);
-            try testing.expectEqual(group, v.grouped_layout_needs_canonicalization.first_group);
-        }
-    }
+    try testing.expect(!hasViolationTag(violations, .grouped_layout_needs_canonicalization));
 }
 
 test "validation: debugValidate emits degree_mismatch when cached degree diverges from live edges" {
@@ -200,7 +182,7 @@ test "validation: debugValidate emits forward_tombstone_missing_repair_flag when
     const b = try graph.addNode();
     try graph.addEdge(a, b, 0, 0);
 
-    try graph.removeNode(b);
+    _ = try graph.removeNode(b);
     try graph.validate();
 
     const a_node = try graph.nodeAt(a);

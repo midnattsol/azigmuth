@@ -8,23 +8,34 @@ const page_ops = @import("storage/page_ops.zig");
 const adjacency = @import("adjacency.zig");
 const rcu = @import("rcu.zig");
 const mutation = @import("mutation.zig");
-const query = @import("query.zig");
+const graph_live_query = @import("graph_live_query.zig");
 const repair = @import("maintenance/repair.zig");
+const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
+const graph_snapshot_api = @import("graph_snapshot_api.zig");
+const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
-const bfs_mod = @import("algorithms/bfs.zig");
-const dfs_mod = @import("algorithms/dfs.zig");
-const cycle_mod = @import("algorithms/cycle.zig");
 
 // ── Internal API used by public wrappers ─────────────────────────────────
 pub const NodeId = types.NodeId;
 pub const GraphError = types.GraphError;
-pub const DeinitError = error{ GraphBusy };
+pub const DeinitError = error{GraphBusy};
 pub const NodeFlags = types.NodeFlags;
 pub const EdgeFlags = types.EdgeFlags;
 pub const Edge = types.Edge;
 pub const Violation = types.Violation;
-pub const NeighborIterator = query.NeighborIterator;
+pub const NeighborIterator = graph_live_query.NeighborIterator;
+pub const OutEdgeIterator = graph_live_query.OutEdgeIterator;
+pub const EdgeId = types.EdgeId;
+pub const EdgeRef = types.EdgeRef;
+pub const GraphOptions = types.GraphOptions;
+pub const NodeRemovalSummary = types.NodeRemovalSummary;
+pub const RepairFlushSummary = types.RepairFlushSummary;
+pub const DebtStats = types.DebtStats;
+pub const ReadSession = graph_snapshot_api.ReadSession;
+pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
+pub const SnapshotNeighborIterator = graph_snapshot_api.SnapshotNeighborIterator;
+pub const SnapshotOutEdgeIterator = graph_snapshot_api.SnapshotOutEdgeIterator;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {
@@ -51,17 +62,7 @@ pub const Graph = struct {
         return false;
     }
 
-    fn beginCall(core: *graph_core.GraphCore) GraphError!void {
-        while (true) {
-            const state = core.callState();
-            if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return error.GraphBusy;
-            if ((state & graph_core.GraphCore.CALL_ACTIVE_MASK) == graph_core.GraphCore.CALL_ACTIVE_MASK) return error.GraphBusy;
-            const desired = state + 1;
-            if (core.call_state.cmpxchgWeak(state, desired, .acq_rel, .acquire) == null) return;
-        }
-    }
-
-    fn beginCallNoError(core: *graph_core.GraphCore) bool {
+    fn tryBeginCall(core: *graph_core.GraphCore) bool {
         while (true) {
             const state = core.callState();
             if ((state & graph_core.GraphCore.CALL_CLOSING_BIT) != 0) return false;
@@ -71,8 +72,29 @@ pub const Graph = struct {
         }
     }
 
+    fn beginCall(core: *graph_core.GraphCore) GraphError!void {
+        if (!tryBeginCall(core)) return error.GraphBusy;
+    }
+
     fn endCall(core: *graph_core.GraphCore) void {
         _ = core.call_state.fetchSub(1, .acq_rel);
+    }
+
+    fn beginConstCall(self: *const Graph) GraphError!*graph_core.GraphCore {
+        const core = @constCast(&self.graph);
+        try beginCall(core);
+        return core;
+    }
+
+    fn beginMutCall(self: *Graph) GraphError!*graph_core.GraphCore {
+        try beginCall(&self.graph);
+        return &self.graph;
+    }
+
+    fn tryBeginConstCall(self: *const Graph) ?*graph_core.GraphCore {
+        const core = @constCast(&self.graph);
+        if (!tryBeginCall(core)) return null;
+        return core;
     }
 
     fn tryClose(core: *graph_core.GraphCore) DeinitError!void {
@@ -88,13 +110,17 @@ pub const Graph = struct {
         _ = core.call_state.fetchAnd(graph_core.GraphCore.CALL_ACTIVE_MASK, .acq_rel);
     }
 
-    pub fn init(allocator: std.mem.Allocator) !Graph {
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        options: types.GraphOptions,
+    ) !Graph {
         const first_page = try allocator.alloc(types.NodeBuffer, constants.NODES_PER_PAGE);
         errdefer allocator.free(first_page);
         @memset(first_page, std.mem.zeroes(types.NodeBuffer));
 
         var state_value = graph_core.GraphCore{
             .allocator = allocator,
+            .multigraph_enabled = options.multigraph,
             .repair_fwd = .empty,
             .repair_rev = .empty,
         };
@@ -102,6 +128,10 @@ pub const Graph = struct {
         state_value.node_pages_pages[0].store(@intFromPtr(first_page.ptr), .release);
 
         return .{ .graph = state_value };
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !Graph {
+        return initWithOptions(allocator, .{});
     }
 
     pub fn deinit(self: *Graph) void {
@@ -119,9 +149,12 @@ pub const Graph = struct {
 
         const alloc = self.graph.allocator;
         freeAtomicPages(types.NodeBuffer, alloc, self.graph.node_pages_pages[0..], constants.NODES_PER_PAGE);
+        freeAtomicPages(std.atomic.Value(u64), alloc, self.graph.repair_queued_fwd_pages[0..], node_bitmap.WORDS_PER_PAGE);
+        freeAtomicPages(std.atomic.Value(u64), alloc, self.graph.repair_queued_rev_pages[0..], node_bitmap.WORDS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockFwd, alloc, self.graph.edge_blocks_fwd_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockRev, alloc, self.graph.edge_blocks_rev_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockGroup, alloc, self.graph.edge_block_group_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
+        if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, self.graph.edge_blocks_fwd_id_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_fwd_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_rev_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_block_group_meta_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
@@ -143,36 +176,37 @@ pub const Graph = struct {
     // ── Node API ──────────────────────────────────────────────────────
 
     pub fn addNode(self: *Graph) !types.NodeId {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
+        const core = try self.beginMutCall();
+        defer endCall(core);
 
         while (true) {
-            const index = self.graph.publishedNodeCount();
+            const index = core.publishedNodeCount();
             const page = page_ops.pageOf(index, constants.NODES_PER_PAGE);
-            _ = try page_ops.ensureNodePage(&self.graph, page);
+            _ = try page_ops.ensureNodePage(core, page);
+            page_ops.nodeAt(core, .{ .index = index }).next_local_edge_id.store(1, .monotonic);
 
-            if (self.graph.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
+            if (core.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
                 return types.NodeId{ .index = index };
             }
         }
     }
 
     pub fn nodeCount(self: *const Graph) usize {
-        if (!beginCallNoError(@constCast(&self.graph))) return 0;
-        defer endCall(@constCast(&self.graph));
-        return self.graph.publishedNodeCount();
+        const core = self.tryBeginConstCall() orelse return 0;
+        defer endCall(core);
+        return core.publishedNodeCount();
     }
 
     pub fn edgeCount(self: *const Graph) u64 {
-        if (!beginCallNoError(@constCast(&self.graph))) return 0;
-        defer endCall(@constCast(&self.graph));
-        return self.graph.edge_count.load(.acquire);
+        const core = self.tryBeginConstCall() orelse return 0;
+        defer endCall(core);
+        return core.edge_count.load(.acquire);
     }
 
     pub fn hasNode(self: *const Graph, id: types.NodeId) bool {
-        if (!beginCallNoError(@constCast(&self.graph))) return false;
-        defer endCall(@constCast(&self.graph));
-        return node_validity.isNodeLive(&self.graph, id);
+        const core = self.tryBeginConstCall() orelse return false;
+        defer endCall(core);
+        return node_validity.isNodeLive(core, id);
     }
 
     // ── Internal helpers (test/debug access, not public API) ───────────
@@ -205,8 +239,16 @@ pub const Graph = struct {
         return page_ops.allocGroup(&self.graph);
     }
 
+    pub fn allocGroupSpan(self: *Graph, count: u16) !u32 {
+        return page_ops.allocGroupSpan(&self.graph, count);
+    }
+
     pub fn freeGroup(self: *Graph, idx: u32) void {
         page_ops.freeGroup(&self.graph, idx);
+    }
+
+    pub fn freeGroupSpan(self: *Graph, first_idx: u32, count: u16) void {
+        page_ops.freeGroupSpan(&self.graph, first_idx, count);
     }
 
     pub fn hasEdgeInAdj(self: *const Graph, adj: types.NodeAdj, target: u32) bool {
@@ -214,9 +256,9 @@ pub const Graph = struct {
     }
 
     pub fn publishedNodeAdj(self: *const Graph, node: types.NodeId) !types.NodeAdj {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return adjacency.publishedNodeAdj(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return adjacency.publishedNodeAdj(core, node);
     }
 
     pub const ReaderToken = rcu.ReaderToken;
@@ -248,93 +290,119 @@ pub const Graph = struct {
     // ── Validation ────────────────────────────────────────────────────
 
     pub fn validate(self: *const Graph) GraphError!void {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return validate_mod.validate(&self.graph);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return validate_mod.validate(core);
     }
 
     pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) GraphError![]types.Violation {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return validate_mod.debugValidate(&self.graph, allocator);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return validate_mod.debugValidate(core, allocator);
     }
 
     // ── Query API ─────────────────────────────────────────────────────
 
-    pub fn neighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.neighbors(&self.graph, node);
+    pub fn neighbors(self: *const Graph, node: types.NodeId) GraphError!NeighborIterator {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return graph_live_query.neighbors(core, node);
     }
 
-    pub fn inNeighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.inNeighbors(&self.graph, node);
+    pub fn inNeighbors(self: *const Graph, node: types.NodeId) GraphError!NeighborIterator {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return graph_live_query.inNeighbors(core, node);
     }
 
     pub fn outDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.outDegree(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return graph_live_query.outDegree(core, node);
     }
 
     pub fn inDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return query.inDegree(&self.graph, node);
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return graph_live_query.inDegree(core, node);
     }
 
-    pub fn bfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return bfs_mod.bfs(&self.graph, start, allocator);
+    pub fn outEdges(self: *const Graph, node: types.NodeId) GraphError!OutEdgeIterator {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return graph_live_query.outEdges(core, node);
     }
 
-    pub fn dfs(self: *const Graph, start: types.NodeId, allocator: std.mem.Allocator) GraphError![]types.NodeId {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return dfs_mod.dfs(&self.graph, start, allocator);
+    pub fn beginReadSession(self: *const Graph) GraphError!ReadSession {
+        const core = try self.beginConstCall();
+        errdefer endCall(core);
+        return graph_snapshot_api.beginReadSession(core);
     }
 
-    pub fn hasCycle(self: *const Graph, allocator: std.mem.Allocator) GraphError!bool {
-        try beginCall(@constCast(&self.graph));
-        defer endCall(@constCast(&self.graph));
-        return cycle_mod.hasCycle(&self.graph, allocator);
+    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) GraphError!ReadSnapshot {
+        const core = try self.beginConstCall();
+        errdefer endCall(core);
+        return graph_snapshot_api.snapshot(core, allocator);
     }
 
     // ── Repair API ────────────────────────────────────────────────────
 
     pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return repair.repairNode(&self.graph, node);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return repair.repairNode(core, node);
     }
 
     pub fn repairBudgeted(self: *Graph, max_nodes: usize) GraphError!usize {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return repair.repairBudgeted(&self.graph, max_nodes);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return repair.repairBudgeted(core, max_nodes);
+    }
+
+    pub fn flushRepairs(self: *Graph) GraphError!types.RepairFlushSummary {
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return repair.flushRepairs(core);
+    }
+
+    pub fn debtStats(self: *const Graph) GraphError!types.DebtStats {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return stats_mod.debtStats(core);
     }
 
     // ── Mutation ──────────────────────────────────────────────────────
 
     pub fn addEdge(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return mutation.addEdge(&self.graph, source, destination, relation, flags);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.addEdge(core, source, destination, relation, flags);
+    }
+
+    pub fn addEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!types.EdgeId {
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        if (!core.multigraph_enabled) return error.UnsupportedOperation;
+        return mutation.addEdgeWithId(core, source, destination, relation, flags);
     }
 
     pub fn removeEdge(self: *Graph, source: types.NodeId, destination: types.NodeId) GraphError!bool {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return mutation.removeEdge(&self.graph, source, destination);
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.removeEdge(core, source, destination);
     }
 
-    pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!void {
-        try beginCall(&self.graph);
-        defer endCall(&self.graph);
-        return mutation.removeNode(&self.graph, node);
+    pub fn removeEdgeWithId(self: *Graph, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) GraphError!bool {
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        if (!core.multigraph_enabled) return error.UnsupportedOperation;
+        return mutation.removeEdgeWithId(core, source, destination, edge_id);
+    }
+
+    pub fn removeNode(self: *Graph, node: types.NodeId) GraphError!types.NodeRemovalSummary {
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.removeNode(core, node);
     }
 };
 

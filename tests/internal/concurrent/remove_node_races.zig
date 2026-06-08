@@ -29,7 +29,7 @@ fn removeNodeLoop(ctx: *RemoveNodeCtx) void {
 
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
-        if (ctx.graph.removeNode(ctx.target)) {
+        if (ctx.graph.removeNode(ctx.target)) |_| {
             _ = ctx.successes.fetchAdd(1, .monotonic);
             return;
         } else |_| {}
@@ -262,7 +262,7 @@ test "concurrent: removeNode predecessor degree update does not require forward 
 
     // removeNode must succeed even though predecessor's fwd_claim is held
     // by an unrelated writer.
-    try graph.removeNode(target);
+    _ = try graph.removeNode(target);
     try testing.expect(!graph.hasNode(target));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 

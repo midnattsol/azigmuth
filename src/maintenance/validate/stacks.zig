@@ -51,10 +51,11 @@ pub fn populateStackBitmapFast(
     }
 }
 
-pub fn groupStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime kind: common.StackKindFast) u32 {
+pub fn groupSpanStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime kind: common.StackKindFast, span_count: u16) u32 {
+    const span_idx: usize = @intCast(span_count - 1);
     const head = switch (kind) {
-        .free => graph.free_groups_head.load(.acquire),
-        .retired => graph.retired_groups_head.load(.acquire),
+        .free => graph.free_group_spans_head[span_idx].load(.acquire),
+        .retired => graph.retired_group_spans_head[span_idx].load(.acquire),
     };
     return @truncate(head);
 }
@@ -75,12 +76,18 @@ pub fn populateGroupStackBitmapFast(
     comptime kind: common.StackKindFast,
 ) !void {
     const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
-    var current = groupStackHeadIndexFast(graph, kind);
-    var visited: u32 = 0;
-    while (current != constants.END_OF_CHAIN) {
-        if (visited >= limit) return error.CorruptGraph;
-        visited += 1;
-        if (!common.bitmapSet(bitmap, current)) return error.CorruptGraph;
-        current = try groupMetaNextFast(graph, current);
+    var span_count: u16 = 1;
+    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
+        var current = groupSpanStackHeadIndexFast(graph, kind, span_count);
+        var visited: u32 = 0;
+        while (current != constants.END_OF_CHAIN) {
+            if (visited >= limit) return error.CorruptGraph;
+            visited += 1;
+            for (current..current + span_count) |group_index_usize| {
+                const group_index: u32 = @intCast(group_index_usize);
+                if (!common.bitmapSet(bitmap, group_index)) return error.CorruptGraph;
+            }
+            current = try groupMetaNextFast(graph, current);
+        }
     }
 }

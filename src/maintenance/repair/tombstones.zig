@@ -6,8 +6,47 @@ const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency.zig");
 const rcu = @import("../../rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
-const mutation_common = @import("../../mutation/common.zig");
+const side_adj = @import("../../side_adj.zig");
 const debt_mod = @import("debt.zig");
+
+const TombstoneProbe = struct {
+    found: bool = false,
+};
+
+fn stopOnTombstone(
+    graph: *const graph_core.GraphCore,
+    probe: *TombstoneProbe,
+    block_idx: u32,
+    slot: u7,
+    comptime side: adjacency.AdjSide,
+) !void {
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
+    if (!edgePointsToRemoved(graph, block, slot, side)) return;
+    probe.found = true;
+    return error.TombstoneFound;
+}
+
+fn appendUniqueDestination(
+    allocator: std.mem.Allocator,
+    destinations: *std.ArrayList(u32),
+    destination: u32,
+) !void {
+    for (destinations.items) |existing| {
+        if (existing == destination) return;
+    }
+    try destinations.append(allocator, destination);
+}
+
+fn collectForwardTombstoneDestination(
+    graph: *const graph_core.GraphCore,
+    destinations: *std.ArrayList(u32),
+    block_idx: u32,
+    slot: u7,
+) !void {
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+    if (!edgePointsToRemoved(graph, block, slot, .fwd)) return;
+    try appendUniqueDestination(graph.allocator, destinations, block.edges[slot].destination);
+}
 pub fn edgePointsToRemoved(
     graph: *const graph_core.GraphCore,
     block: anytype,
@@ -19,7 +58,7 @@ pub fn edgePointsToRemoved(
         .rev => block.sources[slot],
     };
     if (node_id >= graph.publishedNodeCount()) return false;
-    return page_ops.nodeAtConst(graph, .{ .index = node_id }).publishedAdj().flags.removed;
+    return node_validity.isNodeRemovedIndex(graph, node_id);
 }
 
 pub fn hasAnyTombstone(
@@ -30,85 +69,45 @@ pub fn hasAnyTombstone(
     first_group: u32,
     comptime side: adjacency.AdjSide,
 ) bool {
-    if (group_count == 0) {
-        for (first_block..first_block + block_count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (edgePointsToRemoved(graph, block, @intCast(slot), side)) return true;
+    var probe = TombstoneProbe{};
+    side_adj.forEachSlotInSide(
+        graph,
+        .{
+            .first_block = first_block,
+            .block_count = block_count,
+            .group_count = group_count,
+            .first_group = first_group,
+        },
+        side,
+        &probe,
+        struct {
+            fn callback(
+                inner_graph: *const graph_core.GraphCore,
+                inner_probe: *TombstoneProbe,
+                block_idx: u32,
+                slot: u7,
+            ) !void {
+                try stopOnTombstone(inner_graph, inner_probe, block_idx, slot, side);
             }
-        }
-    } else {
-        var group_idx = first_group;
-        var visited: u16 = 0;
-        while (group_idx != constants.END_OF_CHAIN) {
-            if (group_idx >= graph.group_count) return false;
-            if (visited >= group_count or visited >= graph.group_count) return false;
-            visited += 1;
-            const group = page_ops.groupAtConst(graph, group_idx);
-            for (group.start..group.start + group.count) |block_idx| {
-                const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), side);
-                const live = @popCount(block.mask);
-                for (0..live) |slot| {
-                    if (edgePointsToRemoved(graph, block, @intCast(slot), side)) return true;
-                }
-            }
-            group_idx = group.next;
-        }
-    }
-    return false;
+        }.callback,
+    ) catch |err| {
+        if (err == error.TombstoneFound) return true;
+        return true;
+    };
+
+    return probe.found;
 }
-pub fn collectForwardTombstoneDestinations(
+
+pub fn collectForwardTombstones(
     graph: *const graph_core.GraphCore,
     published_adj: types.NodeAdj,
     destinations: *std.ArrayList(u32),
 ) !void {
-    if (published_adj.block_count_fwd == 0) return;
-
-    if (published_adj.group_count_fwd == 0) {
-        for (published_adj.first_block_fwd..published_adj.first_block_fwd + published_adj.block_count_fwd) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (!edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) continue;
-                const destination = block.edges[slot].destination;
-                var seen = false;
-                for (destinations.items) |existing| {
-                    if (existing == destination) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen) try destinations.append(graph.allocator, destination);
-            }
-        }
-        return;
-    }
-
-    var group_idx = published_adj.first_group_fwd;
-    var visited_dests: u16 = 0;
-    while (group_idx != constants.END_OF_CHAIN) {
-        if (group_idx >= graph.group_count) return error.CorruptGraph;
-        if (visited_dests >= published_adj.group_count_fwd or visited_dests >= graph.group_count) return error.CorruptGraph;
-        visited_dests += 1;
-        const group = page_ops.groupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
-            const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            const live = @popCount(block.mask);
-            for (0..live) |slot| {
-                if (!edgePointsToRemoved(graph, block, @intCast(slot), .fwd)) continue;
-                const destination = block.edges[slot].destination;
-                var seen = false;
-                for (destinations.items) |existing| {
-                    if (existing == destination) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen) try destinations.append(graph.allocator, destination);
-            }
-        }
-        group_idx = group.next;
-    }
+    try side_adj.forEachSlotInSide(
+        graph,
+        side_adj.sideAdjOfNode(published_adj, .fwd),
+        .fwd,
+        destinations,
+        collectForwardTombstoneDestination,
+    );
 }
-

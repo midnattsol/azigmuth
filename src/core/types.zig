@@ -6,9 +6,59 @@ const std = @import("std");
 /// (page = index >> 8, slot = index & 255).
 pub const NodeId = struct { index: u32 };
 
+/// Opaque edge identifier, local to the source node (not global).
+/// 0 is reserved for "empty/unset".
+pub const EdgeId = struct { local: u32 };
+
+/// A public edge reference returned by edge-aware iterators.
+pub const EdgeRef = struct {
+    id: EdgeId,
+    destination: u32,
+    relation: u16,
+    flags: EdgeFlags,
+};
+
+/// Options passed at graph creation time.
+pub const GraphOptions = struct {
+    /// When true, multiple edges between the same (source,destination) pair
+    /// are allowed and `EdgeId` disambiguates them.
+    multigraph: bool = false,
+};
+
+pub const NodeRemovalSummary = struct {
+    removed_visible_edges: u64,
+    related_live_nodes_touched: u32,
+    left_repair_debt: bool,
+};
+
+pub const RepairFlushSummary = struct {
+    repaired_nodes: usize,
+    pass_count: usize,
+    remaining_repair_fwd: usize,
+    remaining_repair_rev: usize,
+    remaining_structural_debt: bool,
+};
+
+pub const DebtStats = struct {
+    live_nodes: usize,
+    removed_nodes: usize,
+
+    nodes_with_repair_fwd: usize,
+    nodes_with_repair_rev: usize,
+
+    queued_repair_fwd: usize,
+    queued_repair_rev: usize,
+
+    grouped_fwd_nodes: usize,
+    grouped_rev_nodes: usize,
+
+    estimated_tombstone_fwd_nodes: usize,
+};
+
 pub const GraphError = error{
     OutOfMemory,
     DegreeLimitReached,
+    EdgeIdExhausted,
     BlockLimitReached,
     InvalidNode,
     EdgeAlreadyExists,
@@ -126,9 +176,27 @@ pub const NodeBuffer = extern struct {
     fwd_buffers: [2]SideAdj,
     rev_buffers: [2]SideAdj,
 
-    /// Reserved for future per-node versioning or writer-local scratch.
-    /// Exact logical degrees are authoritative in PublishedMeta, not here.
-    _reserved_local: u32 = 0,
+    /// Monotonic edge-id counter local to this node, used in multigraph mode.
+    /// 0 is reserved for "empty" slot; valid IDs start at 1.  Atomic so that
+    /// lock-free readers (validate, debugValidate) can observe a coherent value
+    /// while writers increment via nextEdgeId().
+    next_local_edge_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+
+    /// Allocates and returns the next edge ID local to this node.
+    ///
+    /// `0` is reserved as invalid/unset, so the counter never wraps through 0.
+    /// Once it reaches `maxInt(u32)`, the next allocation fails cleanly.
+    pub fn nextEdgeId(self: *NodeBuffer) GraphError!EdgeId {
+        var expected = self.next_local_edge_id.load(.acquire);
+        while (true) {
+            if (expected == std.math.maxInt(u32)) return error.EdgeIdExhausted;
+            const desired = expected + 1;
+            if (self.next_local_edge_id.cmpxchgWeak(expected, desired, .acq_rel, .acquire) == null) {
+                return .{ .local = expected };
+            }
+            expected = self.next_local_edge_id.load(.acquire);
+        }
+    }
 
     pub fn loadPublishedMeta(self: *const NodeBuffer) PublishedMeta {
         return @bitCast(self.published_meta.load(.acquire));
@@ -215,6 +283,23 @@ pub const NodeBuffer = extern struct {
         return desired;
     }
 
+    pub fn desiredMetaForUpdateRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) PublishedMeta {
+        var desired = meta.bumpedVersion();
+        desired.needs_repair_rev = needs_repair_rev;
+        desired.degree_rev = new_degree_rev;
+        return desired;
+    }
+
+    pub fn desiredMetaForUpdateBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u22, rev_degree: u22) PublishedMeta {
+        var desired = meta.bumpedVersion();
+        desired.needs_repair_fwd = flags.needs_repair_fwd;
+        desired.needs_repair_rev = flags.needs_repair_rev;
+        desired.removed = flags.removed;
+        desired.degree_fwd = fwd_degree;
+        desired.degree_rev = rev_degree;
+        return desired;
+    }
+
     /// Composes a full NodeAdj snapshot from the current published sides.
     /// Callers MUST NOT alias the returned value across RCU flips.
     pub fn publishedAdj(self: *const NodeBuffer) NodeAdj {
@@ -262,11 +347,20 @@ pub const EdgeBlockRev = struct {
     sources: [64]u32,
 };
 
+// ── Forward edge ID sidecar ──────────────────────────────────────────
+
+/// Per-forward-block edge ID storage. Shares block_idx and lifecycle with
+/// the corresponding EdgeBlockFwd. 256 bytes.
+pub const EdgeBlockFwdIds = struct {
+    ids: [64]u32,
+};
+
 // ── Contiguous edge block group ──────────────────────────────────────
 
-/// A chainable span of physically contiguous edge blocks. 0xFFFF_FFFF = end.
-/// 12 bytes aligned: avoids cache-line splits during chain traversal.
-/// Nodes with contiguous blocks use `group_count_* = 0` (fast path).
+/// One physically contiguous run of edge blocks within a grouped side.
+/// Grouped sides publish `group_count` consecutive descriptors starting at
+/// `first_group`; `next` is no longer structural and remains reserved so the
+/// layout stays 12 bytes.
 pub const EdgeBlockGroup = struct {
     start: u32,
     next: u32,
@@ -294,8 +388,12 @@ pub const Violation = union(enum) {
     occupancy_below_threshold: struct { node: u32, block: u32, occupancy: u32 },
     mask_bit_out_of_range: struct { node: u32, block: u32 },
     invalid_dst: struct { node: u32, block: u32, slot: u32, dst: u32 },
+    invalid_edge_id: struct { node: u32, block: u32, slot: u32, edge_id: u32 },
     forward_reverse_mismatch: struct { node: u32, dst: u32 },
+    forward_reverse_multiplicity_mismatch: struct { node: u32, dst: u32, forward_count: u32, reverse_count: u32 },
     unsorted_block: struct { node: u32, block: u32, slot: u32 },
+    duplicate_edge_id: struct { node: u32, edge_id: u32 },
+    edge_id_counter_regressed: struct { node: u32, next_id: u32, max_seen: u32 },
     blockgroup_chain_cycle: struct { node: u32, group: u32 },
     blockgroup_overlap: struct { node: u32, group_a: u32, group_b: u32 },
     run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u16 },
@@ -307,6 +405,7 @@ pub const Violation = union(enum) {
     removed_node_has_reverse_residual: struct { node: u32, degree_rev: u22 },
     removed_node_marked_for_repair: struct { node: u32 },
     forward_tombstone_missing_repair_flag: struct { node: u32 },
+    reverse_tombstone_missing_repair_flag: struct { node: u32 },
     edge_count_mismatch: struct { expected: u64, actual: u64 },
     retired_block_reachable: struct { block: u32, node: u32 },
     forward_reverse_count_mismatch: struct { forward_total: u64, reverse_total: u64 },
