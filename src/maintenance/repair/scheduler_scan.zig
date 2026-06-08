@@ -21,11 +21,13 @@ fn scanTombstoneRange(graph: *graph_core.GraphCore, start: u32, end: u32) ?u32 {
     return null;
 }
 
+/// Returns whether one node is live and has not already been processed in this pass.
 pub fn isEligibleRepairCandidate(graph: *const graph_core.GraphCore, processed_nodes: *const std.AutoHashMap(u32, void), node_idx: u32) bool {
     if (processed_nodes.contains(node_idx)) return false;
     return node_validity.isNodeLiveIndex(graph, node_idx);
 }
 
+/// Scans for one live node whose forward side still contains tombstones.
 pub fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
     const reader_token = rcu.readerEnter(graph) catch return null;
     defer rcu.readerExit(graph, reader_token);
@@ -48,6 +50,7 @@ pub fn findTombstoneDebtByScan(graph: *graph_core.GraphCore) ?u32 {
     return null;
 }
 
+/// Picks the next repair candidate from queues, flags, or optional tombstone scan.
 pub fn nextRepairDebtNode(
     graph: *graph_core.GraphCore,
     processed_nodes: *const std.AutoHashMap(u32, void),

@@ -23,6 +23,7 @@ const RepairRebuild = struct {
     live_total: usize,
 };
 
+/// Repairs both published sides of one node and reports whether anything changed.
 pub fn repairBothSides(graph: *graph_core.GraphCore, node: types.NodeId) !bool {
     const compacted_fwd = try repairNodeSideLimited(graph, node, .fwd, std.math.maxInt(usize));
     const compacted_rev = try repairNodeSideLimited(graph, node, .rev, std.math.maxInt(usize));
@@ -142,6 +143,8 @@ fn publishRepairedSide(
     return 1;
 }
 
+/// Repairs one published side of one node, honoring the caller's compaction budget.
+/// Returns the number of repair actions performed for that side.
 pub fn repairNodeSideLimited(
     graph: *graph_core.GraphCore,
     node: types.NodeId,
@@ -170,10 +173,12 @@ pub fn repairNodeSideLimited(
     return publishRepairedSide(graph, node_mut, published_adj, &rebuild.staging_adj, node.index, rebuild.live_total, side);
 }
 
+/// Repairs one side of one node without an explicit compaction limit.
 pub fn repairNodeSide(graph: *graph_core.GraphCore, node: types.NodeId, comptime side: adjacency.AdjSide) !usize {
     return repairNodeSideLimited(graph, node, side, std.math.maxInt(usize));
 }
 
+/// Repairs both sides of one live node and bumps the epoch on success.
 pub fn repairNode(graph: *graph_core.GraphCore, node: types.NodeId) !void {
     if (!node_validity.isNodeLive(graph, node)) return error.InvalidNode;
 

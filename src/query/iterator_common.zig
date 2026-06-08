@@ -13,6 +13,7 @@ pub const TraversalState = struct {
     current_group_index: u32,
 };
 
+/// Builds the initial traversal state for contiguous or grouped side storage.
 pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
     if (side_adj.block_count == 0) {
         return .{
@@ -40,6 +41,7 @@ pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
     };
 }
 
+/// Performs a cheap bounds/layout check before iterating a published side.
 pub fn validateReadSideQuick(
     graph: *const graph_core.GraphCore,
     side_adj: types.SideAdj,
@@ -65,6 +67,7 @@ pub fn validateReadSideQuick(
     if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
 }
 
+/// Initializes a grouped traversal so the first block range is ready to consume.
 pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (iterator.contiguous_mode) return;
     if (iterator.current_group_index == constants.END_OF_CHAIN) return;
@@ -78,6 +81,8 @@ pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCo
     iterator.blocks_remaining = first_group.count;
 }
 
+/// Advances a grouped traversal to the next run of blocks.
+/// Returns false when no further run is available.
 pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     if (iterator.contiguous_mode) return false;
     if (iterator.current_group_index == constants.END_OF_CHAIN) return false;
@@ -100,6 +105,7 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
     return true;
 }
 
+/// Returns whether a candidate node should be treated as removed during iteration.
 pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_index: u32) bool {
     if (candidate_index >= graph.publishedNodeCount()) return true;
     const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
@@ -112,6 +118,7 @@ pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, c
     return iterator.cached_node_page.?[slot_index].loadPublishedMeta().removed;
 }
 
+/// Releases the reader token held by one live iterator, if still active.
 pub fn deinitReader(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (!iterator.reader_active) return;
 

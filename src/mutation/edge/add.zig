@@ -182,10 +182,13 @@ fn addEdgeImpl(
     return edge_id;
 }
 
+/// Adds one edge between two live nodes, rejecting duplicates in simple-graph mode.
 pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !void {
     _ = try addEdgeImpl(graph, source, destination, relation, flags);
 }
 
+/// Adds one edge and returns its source-local edge id.
+/// Requires multigraph mode.
 pub fn addEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !types.EdgeId {
     if (!graph.multigraph_enabled) return error.UnsupportedOperation;
     return addEdgeImpl(graph, source, destination, relation, flags);

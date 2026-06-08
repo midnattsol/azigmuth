@@ -3,6 +3,7 @@ const types = @import("../../core/types.zig");
 const common = @import("../common.zig");
 const remove_types = @import("remove_types.zig");
 
+/// Builds a removed-node adjacency by clearing both published sides and flags.
 pub fn buildRemovedAdjEmpty(source_adj: types.NodeAdj) types.NodeAdj {
     var removed_adj = source_adj;
     removed_adj.first_block_fwd = 0;
@@ -19,6 +20,8 @@ pub fn buildRemovedAdjEmpty(source_adj: types.NodeAdj) types.NodeAdj {
     return removed_adj;
 }
 
+/// Publishes degree and repair-flag deltas to related live nodes.
+/// Returns counts of predecessor and destination nodes that were updated.
 pub fn publishRelatedNodeUpdates(related_nodes: []const remove_types.RelatedNode) remove_types.RemoveCounts {
     var counts = remove_types.RemoveCounts{};
     for (related_nodes) |related| {
@@ -47,6 +50,7 @@ pub fn publishRelatedNodeUpdates(related_nodes: []const remove_types.RelatedNode
     return counts;
 }
 
+/// Retires both forward and reverse storage that previously belonged to a removed node.
 pub fn retireRemovedNodeStorage(graph: *graph_core.GraphCore, source_adj: types.NodeAdj) !void {
     try common.retireSide(graph, source_adj, .fwd);
     try common.retireSide(graph, source_adj, .rev);

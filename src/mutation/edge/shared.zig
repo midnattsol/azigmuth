@@ -24,6 +24,7 @@ pub const OldGroupChain = struct {
     first_group: ?u32 = null,
     group_count: u16 = 0,
 
+    /// Captures the current grouped run metadata so it can be retired after publish.
     pub fn captureSide(side_adj: *const types.SideAdj) OldGroupChain {
         return .{
             .first_group = if (side_adj.group_count > 0) side_adj.first_group else null,
@@ -31,6 +32,7 @@ pub const OldGroupChain = struct {
         };
     }
 
+    /// Retires the previously captured grouped run metadata, if any.
     pub fn retire(self: OldGroupChain, graph: *graph_core.GraphCore) void {
         if (self.first_group) |first_group| {
             common.retireGroupChain(graph, first_group, self.group_count);
@@ -48,6 +50,8 @@ pub const EndpointState = struct {
     destination_flags: types.NodeFlags,
 };
 
+/// Claims both endpoint adjacencies for an edge mutation and snapshots their meta.
+/// Fails with error.InvalidNode when either endpoint is absent or already removed.
 pub fn claimEndpoints(
     graph: *graph_core.GraphCore,
     source: types.NodeId,
@@ -77,6 +81,7 @@ pub fn claimEndpoints(
     };
 }
 
+/// Publishes staging data for a newly added edge on both endpoints.
 pub fn publishAdded(
     endpoints: *const EndpointState,
     source: types.NodeId,
@@ -97,6 +102,7 @@ pub fn publishAdded(
     _ = common.publishStagedFwd(endpoints.source_node, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, 1);
 }
 
+/// Retires superseded blocks, runs, and group chains after addEdge publication.
 pub fn retireAdded(
     graph: *graph_core.GraphCore,
     forward_prepared: PreparedAppendBlock,

@@ -13,6 +13,8 @@ const remove_plan = @import("remove_plan.zig");
 const remove_publish = @import("remove_publish.zig");
 const node_validity = @import("../../core/node_validity.zig");
 
+/// Removes one live node and retires both of its published adjacencies.
+/// Returns a summary of visible edge removals and related-node updates.
 pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeRemovalSummary {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 

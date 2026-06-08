@@ -10,11 +10,13 @@ pub const ReadSnapshot = snapshot_mod.ReadSnapshot;
 pub const SnapshotNeighborIterator = snapshot_view.SnapshotNeighborIterator;
 pub const SnapshotOutEdgeIterator = snapshot_view.SnapshotOutEdgeIterator;
 
+/// Enters the read side of the graph and returns a reusable read session.
 pub fn beginReadSession(core: *graph_core.GraphCore) !ReadSession {
     const reader_token = try rcu.readerEnter(core);
     return ReadSession.init(core, reader_token);
 }
 
+/// Captures a caller-owned snapshot backed by one read session.
 pub fn snapshot(core: *graph_core.GraphCore, allocator: std.mem.Allocator) !ReadSnapshot {
     var read = try beginReadSession(core);
     errdefer read.deinit();

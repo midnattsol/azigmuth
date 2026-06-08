@@ -21,18 +21,21 @@ pub inline fn makeIndex(page_index: u32, slot_index: u32, comptime entries_per_p
     return page_index * entries_per_page + slot_index;
 }
 
+/// Returns mutable access to one node buffer by flat node id.
 pub fn nodeAt(graph: *graph_core.GraphCore, id: types.NodeId) *types.NodeBuffer {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
     const page = loadPageMut(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
     return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
+/// Returns read-only access to one node buffer by flat node id.
 pub fn nodeAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const types.NodeBuffer {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
     const page = loadPage(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
     return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
+/// Returns one published node page as a read-only slice.
 pub fn nodePageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []const types.NodeBuffer {
     return loadPage(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
 }
@@ -92,6 +95,7 @@ fn ensurePage(
     return new_page;
 }
 
+/// Ensures that one node page exists and returns mutable access to it.
 pub fn ensureNodePage(graph: *graph_core.GraphCore, page_index: u32) ![]types.NodeBuffer {
     return ensurePage(graph, types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
 }
@@ -265,30 +269,37 @@ fn pageEntryAtConst(
     return &page[slotOf(index, entries_per_page)];
 }
 
+/// Returns mutable access to one forward edge block.
 pub fn edgeBlockFwdAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwd {
     return pageEntryAt(types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
+/// Returns read-only access to one forward edge block.
 pub fn edgeBlockFwdAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwd {
     return pageEntryAtConst(types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
+/// Returns mutable access to one forward edge-id block.
 pub fn edgeBlockFwdIdsAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwdIds {
     return pageEntryAt(types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
+/// Returns read-only access to one forward edge-id block.
 pub fn edgeBlockFwdIdsAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwdIds {
     return pageEntryAtConst(types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
+/// Returns mutable access to one reverse edge block.
 pub fn edgeBlockRevAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockRev {
     return pageEntryAt(types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
+/// Returns read-only access to one reverse edge block.
 pub fn edgeBlockRevAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockRev {
     return pageEntryAtConst(types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
+/// Returns mutable access to one edge block on the requested side.
 pub fn edgeBlockAt(graph: *graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide) switch (side) {
     .fwd => *types.EdgeBlockFwd,
     .rev => *types.EdgeBlockRev,
@@ -299,6 +310,7 @@ pub fn edgeBlockAt(graph: *graph_core.GraphCore, block_index: u32, comptime side
     };
 }
 
+/// Returns read-only access to one edge block on the requested side.
 pub fn edgeBlockAtConst(graph: *const graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide) switch (side) {
     .fwd => *const types.EdgeBlockFwd,
     .rev => *const types.EdgeBlockRev,
@@ -309,10 +321,12 @@ pub fn edgeBlockAtConst(graph: *const graph_core.GraphCore, block_index: u32, co
     };
 }
 
+/// Returns mutable access to one grouped-run descriptor.
 pub fn groupAt(graph: *graph_core.GraphCore, group_index: u32) *types.EdgeBlockGroup {
     return pageEntryAt(types.EdgeBlockGroup, graph.edge_block_group_pages[0..], group_index, constants.EDGE_GROUPS_PER_PAGE);
 }
 
+/// Returns read-only access to one grouped-run descriptor.
 pub fn groupAtConst(graph: *const graph_core.GraphCore, group_index: u32) *const types.EdgeBlockGroup {
     return pageEntryAtConst(types.EdgeBlockGroup, graph.edge_block_group_pages[0..], group_index, constants.EDGE_GROUPS_PER_PAGE);
 }
@@ -436,6 +450,7 @@ fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSid
     }
 }
 
+/// Reserves a fresh contiguous span of blocks and zero-initializes it.
 pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, comptime side: adjacency.AdjSide) !u32 {
     std.debug.assert(span_count > 0);
 
@@ -446,6 +461,7 @@ pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, compti
     }
 }
 
+/// Ensures backing pages exist for blocks up to `required_block_count` on one side.
 pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u32, comptime side: adjacency.AdjSide) !void {
     if (required_block_count == 0) return;
 
@@ -458,6 +474,7 @@ pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u
     }
 }
 
+/// Allocates one zeroed block, reusing the free stack when available.
 pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
     if (popStack(graph, .free, side)) |block_index| {
         zeroBlock(graph, block_index, side);
@@ -467,16 +484,19 @@ pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide
     return try allocFreshBlock(graph, side);
 }
 
+/// Returns one block to the per-side free stack.
 pub fn freeBlock(graph: *graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide) void {
     pushStack(graph, block_index, .free, side);
 }
 
+/// Moves one block to the retired stack with its retirement epoch recorded.
 pub fn retireBlock(graph: *graph_core.GraphCore, block_index: u32, epoch: u64, comptime side: adjacency.AdjSide) void {
     const meta = metaAt(graph, block_index, side);
     meta.epoch.store(epoch, .release);
     pushStack(graph, block_index, .retired, side);
 }
 
+/// Reclaims retired blocks whose epoch is now safe for reuse.
 pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
     var block_index = detachStack(graph, .retired, side);
     while (block_index != EMPTY_INDEX) {
@@ -495,6 +515,7 @@ fn allocFreshGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
     }
 }
 
+/// Allocates one zeroed grouped-run span, reusing a free span when possible.
 pub fn allocGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
     std.debug.assert(span_count > 0 and span_count <= constants.MAX_GROUPS_PER_NODE);
     if (popGroupSpanStack(graph, .free, span_count)) |first_group_idx| {
@@ -506,28 +527,34 @@ pub fn allocGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {
     return try allocFreshGroupSpan(graph, span_count);
 }
 
+/// Allocates one grouped-run descriptor.
 pub fn allocGroup(graph: *graph_core.GraphCore) !u32 {
     return allocGroupSpan(graph, 1);
 }
 
+/// Returns one grouped-run span to the free stack for that span size.
 pub fn freeGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, span_count: u16) void {
     pushGroupSpanStack(graph, first_group_idx, span_count, .free);
 }
 
+/// Returns one grouped-run descriptor to the free stack.
 pub fn freeGroup(graph: *graph_core.GraphCore, group_index: u32) void {
     freeGroupSpan(graph, group_index, 1);
 }
 
+/// Moves one grouped-run span to the retired stack with its retirement epoch.
 pub fn retireGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, span_count: u16, epoch: u64) void {
     const meta = groupMetaAt(graph, first_group_idx);
     meta.epoch.store(epoch, .release);
     pushGroupSpanStack(graph, first_group_idx, span_count, .retired);
 }
 
+/// Retires one grouped-run descriptor.
 pub fn retireGroup(graph: *graph_core.GraphCore, group_index: u32, epoch: u64) void {
     retireGroupSpan(graph, group_index, 1, epoch);
 }
 
+/// Reclaims grouped-run spans whose retirement epoch is safe for reuse.
 pub fn reclaimRetiredGroups(graph: *graph_core.GraphCore, safe_epoch: u64) void {
     var span_count: u16 = 1;
     while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {

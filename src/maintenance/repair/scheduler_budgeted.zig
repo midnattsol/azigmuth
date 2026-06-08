@@ -44,6 +44,7 @@ fn flushTombstoneDebt(
     return total_compacted;
 }
 
+/// Repairs up to `max_nodes` distinct nodes from the queued repair debt sources.
 pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     if (graph.active_repairers.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) {
         return error.ConcurrentMutation;
@@ -61,6 +62,7 @@ pub fn repairBudgeted(graph: *graph_core.GraphCore, max_nodes: usize) !usize {
     return total_compacted;
 }
 
+/// Runs a full repair pass and returns a summary of work and remaining debt.
 pub fn flushRepairs(graph: *graph_core.GraphCore) !types.RepairFlushSummary {
     if (graph.active_repairers.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) {
         return error.ConcurrentMutation;

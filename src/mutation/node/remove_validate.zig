@@ -129,6 +129,8 @@ fn validateReverseView(
     if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
 }
 
+/// Validates the scanned node-removal neighborhood against the current graph state.
+/// Returns error.CorruptGraph when the published views no longer match the scan.
 pub fn validateNodeRemovalNeighborhood(
     graph: *graph_core.GraphCore,
     node: types.NodeId,

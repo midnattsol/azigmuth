@@ -679,6 +679,8 @@ fn rebuildBulkRemovalSides(
     };
 }
 
+/// Removes one edge from `source` to `destination`.
+/// Returns false when no matching edge exists.
 pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId) !bool {
     var endpoints = try shared.claimEndpoints(graph, source, destination);
     defer endpoints.claims.release();
@@ -708,6 +710,8 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     return removed;
 }
 
+/// Removes one multigraph edge identified by `(destination, edge_id)`.
+/// Returns false when no matching edge exists.
 pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, edge_id: types.EdgeId) !bool {
     if (!graph.multigraph_enabled) return error.UnsupportedOperation;
     var endpoints = try shared.claimEndpoints(graph, source, destination);

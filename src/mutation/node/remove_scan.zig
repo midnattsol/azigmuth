@@ -95,6 +95,8 @@ fn collectReverseSources(
     );
 }
 
+/// Scans the forward and reverse neighborhood that will be affected by removeNode.
+/// Returns caller-owned scan buffers that must later be deinitialized.
 pub fn scanNodeRemovalNeighborhood(
     graph: *const graph_core.GraphCore,
     node: types.NodeId,

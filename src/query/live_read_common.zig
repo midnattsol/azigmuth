@@ -12,6 +12,7 @@ pub const LiveReadSnapshot = struct {
     node_adj_snapshot: types.NodeAdj,
 };
 
+/// Extracts one side view from a full published node adjacency snapshot.
 pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.SideAdj {
     return switch (direction) {
         .fwd => .{ .first_block = node_adj.first_block_fwd, .block_count = node_adj.block_count_fwd, .group_count = node_adj.group_count_fwd, .first_group = node_adj.first_group_fwd },
@@ -19,6 +20,7 @@ pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.Side
     };
 }
 
+/// Captures a reader-guarded published node snapshot for live iteration.
 pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!LiveReadSnapshot {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 
@@ -33,10 +35,12 @@ pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeI
     return .{ .reader_token = reader_token, .meta = meta, .node_adj_snapshot = node_adj_snapshot };
 }
 
+/// Validates the basic layout of one forward side snapshot before iteration.
 pub fn validateForwardSideQuick(graph: *const graph_core.GraphCore, side_snapshot: types.SideAdj) types.GraphError!void {
     try iterator_common.validateReadSideQuick(graph, side_snapshot, .fwd);
 }
 
+/// Validates the basic layout of one reverse side snapshot before iteration.
 pub fn validateReverseSideQuick(graph: *const graph_core.GraphCore, side_snapshot: types.SideAdj) types.GraphError!void {
     try iterator_common.validateReadSideQuick(graph, side_snapshot, .rev);
 }

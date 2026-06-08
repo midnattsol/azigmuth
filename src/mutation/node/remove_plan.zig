@@ -39,6 +39,8 @@ fn markRelatedNode(
     try related_node_index.put(node_index, related_nodes.items.len - 1);
 }
 
+/// Collects live neighbor nodes that need degree or repair-flag updates.
+/// Returns claimed node-side state for the later publish phase.
 pub fn collectRelatedNodeUpdates(
     graph: *graph_core.GraphCore,
     node: types.NodeId,
