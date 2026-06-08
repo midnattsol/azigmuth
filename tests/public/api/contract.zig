@@ -1,21 +1,21 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const snapshot_api = @import("snapshot_api.zig");
 
 const testing = std.testing;
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-test "contract: deinitChecked fails with active iterator and handle stays usable" {
+test "contract: deinitChecked fails with active snapshot and handle stays usable" {
     var graph = try graphz.Graph.init(testing.allocator);
     const source = try graph.addNode();
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    var iter = try graph.neighbors(source);
-    defer iter.deinit();
+    var snapshot = try graph.snapshot(testing.allocator);
 
     try testing.expectError(error.GraphBusy, graph.deinitChecked());
-    iter.deinit();
+    snapshot.deinit();
     graph.deinit();
 }
 
@@ -36,7 +36,7 @@ test "contract: materialize with defer deinit is safe" {
         try graph.addEdge(source, destination, 0, .{});
     }
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     defer iter.deinit();
     const neighbors = try iter.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
@@ -51,7 +51,7 @@ test "contract: materialize then deinit does not double-free" {
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     const neighbors = try iter.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
     iter.deinit();
@@ -65,7 +65,7 @@ test "contract: next after materialize returns null" {
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     const neighbors = try iter.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
     try testing.expectEqual(@as(usize, 1), neighbors.len);
@@ -81,7 +81,7 @@ test "contract: neighbors returns by value (no alloc on creation)" {
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     defer iter.deinit();
     const neighbor = iter.next().?;
     try testing.expectEqual(destination.index, neighbor.index);
@@ -93,7 +93,7 @@ test "contract: empty iterator materialize returns empty slice" {
 
     const node = try graph.addNode();
 
-    var iter = try graph.neighbors(node);
+    var iter = try snapshot_api.neighbors(graph, node, testing.allocator);
     const neighbors = try iter.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
     try testing.expectEqual(@as(usize, 0), neighbors.len);
@@ -108,7 +108,7 @@ test "contract: double deinit on iterator is harmless" {
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     iter.deinit();
     iter.deinit();
 }
@@ -123,7 +123,7 @@ test "contract: iterator remains usable until owner deinit" {
     try graph.addEdge(source, first_destination, 0, .{});
     try graph.addEdge(source, second_destination, 0, .{});
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     defer iter.deinit();
 
     try testing.expect(iter.next() != null);
@@ -143,7 +143,7 @@ test "contract: addEdge with non-zero relation and flags" {
     try graph.addEdge(source, destination, 42, .{});
     try graph.validate();
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     defer iter.deinit();
     try testing.expectEqual(destination.index, iter.next().?.index);
 }
@@ -157,10 +157,10 @@ test "contract: addEdge self-edge" {
     try graph.validate();
 
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(node));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(node));
+    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, node, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, node, testing.allocator));
 
-    var iter = try graph.neighbors(node);
+    var iter = try snapshot_api.neighbors(graph, node, testing.allocator);
     defer iter.deinit();
     try testing.expectEqual(node.index, iter.next().?.index);
 }
@@ -185,7 +185,7 @@ test "contract: removeEdge returns true when edge exists" {
 
     try testing.expectEqual(true, try graph.removeEdge(source, destination));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, source, testing.allocator));
     try graph.validate();
 }
 
@@ -211,7 +211,7 @@ test "contract: removeEdge self-edge" {
 
     try testing.expectEqual(true, try graph.removeEdge(node, node));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(node));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, node, testing.allocator));
     try graph.validate();
 }
 
@@ -294,7 +294,7 @@ test "contract: removeNode clears outgoing edges" {
     _ = try graph.removeNode(source);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    var iter = try graph.neighbors(destination);
+    var iter = try snapshot_api.neighbors(graph, destination, testing.allocator);
     defer iter.deinit();
     try testing.expect(iter.next() == null);
 }
@@ -312,11 +312,11 @@ test "contract: removeNode with incoming edges" {
     _ = try graph.removeNode(target);
     try graph.validate();
 
-    var iter_one = try graph.neighbors(predecessor_one);
+    var iter_one = try snapshot_api.neighbors(graph, predecessor_one, testing.allocator);
     defer iter_one.deinit();
     try testing.expect(iter_one.next() == null);
 
-    var iter_two = try graph.neighbors(predecessor_two);
+    var iter_two = try snapshot_api.neighbors(graph, predecessor_two, testing.allocator);
     defer iter_two.deinit();
     try testing.expect(iter_two.next() == null);
 }
@@ -329,17 +329,17 @@ test "contract: outDegree and inDegree are consistent with neighbors materialize
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    const out_deg = try graph.outDegree(source);
-    const in_deg = try graph.inDegree(source);
+    const out_deg = try snapshot_api.outDegree(graph, source, testing.allocator);
+    const in_deg = try snapshot_api.inDegree(graph, source, testing.allocator);
     try testing.expectEqual(@as(usize, 1), out_deg);
     try testing.expectEqual(@as(usize, 0), in_deg);
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     defer iter.deinit();
     const neighbors = try iter.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
 
-    const expected_deg = try graph.outDegree(source);
+    const expected_deg = try snapshot_api.outDegree(graph, source, testing.allocator);
     try testing.expectEqual(expected_deg, neighbors.len);
 }
 
@@ -353,10 +353,10 @@ test "contract: neighborsMaterialized convenience matches neighbors + materializ
     try graph.addEdge(source, first_dst, 0, .{});
     try graph.addEdge(source, second_dst, 0, .{});
 
-    const direct = try graph.neighborsMaterialized(source, testing.allocator);
+    const direct = try snapshot_api.neighborsMaterialized(graph, source, testing.allocator);
     defer testing.allocator.free(direct);
 
-    var iter = try graph.neighbors(source);
+    var iter = try snapshot_api.neighbors(graph, source, testing.allocator);
     defer iter.deinit();
     const via_iter = try iter.materialize(testing.allocator);
     defer testing.allocator.free(via_iter);
@@ -377,10 +377,10 @@ test "contract: inNeighborsMaterialized convenience matches inNeighbors + materi
     try graph.addEdge(predecessor_one, target, 0, .{});
     try graph.addEdge(predecessor_two, target, 1, .{});
 
-    const direct = try graph.inNeighborsMaterialized(target, testing.allocator);
+    const direct = try snapshot_api.inNeighborsMaterialized(graph, target, testing.allocator);
     defer testing.allocator.free(direct);
 
-    var iter = try graph.inNeighbors(target);
+    var iter = try snapshot_api.inNeighbors(graph, target, testing.allocator);
     defer iter.deinit();
     const via_iter = try iter.materialize(testing.allocator);
     defer testing.allocator.free(via_iter);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const snapshot_api = @import("snapshot_api.zig");
 
 const testing = std.testing;
 const SpinBudget: usize = 200_000_000;
@@ -21,7 +22,7 @@ const ReaderCtx = struct {
 fn readerLoop(ctx: *ReaderCtx) void {
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
-        var iter = ctx.graph.neighbors(ctx.node) catch continue;
+        var iter = snapshot_api.neighbors(ctx.graph, ctx.node, std.heap.page_allocator) catch continue;
         defer iter.deinit();
         const materialized = iter.materialize(std.heap.page_allocator) catch continue;
         defer std.heap.page_allocator.free(materialized);
@@ -118,7 +119,9 @@ test "contract: removeNode tolerates unrelated predecessor forward mutation" {
     try testing.expectEqual(@as(u64, 1), rm_ctx.successes.load(.acquire));
     try testing.expect(mut_ctx.mutations.load(.acquire) > 0);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    var snapshot = try graph.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    const violations = try snapshot.debugValidate(testing.allocator);
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

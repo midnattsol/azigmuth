@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const snapshot_api = @import("snapshot_api.zig");
 
 fn hasCycleOnGraph(graph: *graphz.Graph, allocator: std.mem.Allocator) !bool {
     var snapshot = try graph.snapshot(allocator);
@@ -234,7 +235,7 @@ test "cycle detection with dense hub and many tombstoned sources is correct" {
     try graph.validate();
     try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 
-    const visible = try graph.inDegree(hub);
+    const visible = try snapshot_api.inDegree(graph, hub, std.testing.allocator);
     try std.testing.expect(visible > 0);
     try std.testing.expect(visible < sender_count);
 }

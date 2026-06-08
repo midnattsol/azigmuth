@@ -32,8 +32,10 @@ pub fn main() !void {
 
     try g.addEdge(a, b, 0, .{});
 
-    var it = try g.neighbors(a);
-    defer it.deinit();
+    var snapshot = try g.snapshot(std.heap.page_allocator);
+    defer snapshot.deinit();
+
+    var it = try snapshot.neighbors(a);
     while (it.next()) |neighbor| {
         std.debug.print("neighbor: {}\n", .{neighbor.index});
     }
@@ -114,18 +116,23 @@ call `reclaimRetired()` explicitly:
 g.reclaimRetired();
 ```
 
-## Materialize
+## Snapshot Read Path
 
-`NeighborIterator` is returned by value, allocates nothing on creation, and is
-the canonical iterator type used directly by the public API. `materialize()`
-drains the iterator without consuming it, so `deinit()` is still required.
+`ReadSnapshot` is the public read/query surface. Snapshot iterators are returned
+by value, allocate nothing on creation, and expose `materialize()` when you want
+an owned slice.
 
 ```zig
-var it = try g.neighbors(node);
-defer it.deinit();
+var snapshot = try g.snapshot(allocator);
+defer snapshot.deinit();
+var it = try snapshot.neighbors(node);
 const all = try it.materialize(allocator);
 defer allocator.free(all);
 // it.next() returns null after materialize()
+
+try snapshot.validate();
+const violations = try snapshot.debugValidate(allocator);
+defer allocator.free(violations);
 ```
 
 ## Algorithms
@@ -153,6 +160,11 @@ defer allocator.free(snap_dfs);
 `ReadSnapshot` is a reusable sealed in-memory graph view. Its algorithms run
 against that fixed captured view and do not perform repair or other hidden
 maintenance.
+
+`Graph.validate()` remains the live fast-path structural check over the mutable
+engine state. `snapshot.validate()` is the fast logical/structural check over a
+sealed captured view, and `snapshot.debugValidate(allocator)` is the exhaustive
+allocating validator over that same captured view.
 
 ## Commands
 

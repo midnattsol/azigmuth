@@ -37,6 +37,7 @@ pub const DebtStats = types.DebtStats;
 pub const ReadSession = read_session_mod.ReadSession;
 pub const ReadSnapshot = snapshot_mod.ReadSnapshot;
 pub const SnapshotNeighborIterator = read_session_mod.SnapshotNeighborIterator;
+pub const SnapshotOutEdgeIterator = read_session_mod.SnapshotOutEdgeIterator;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
     for (directory) |*entry| {

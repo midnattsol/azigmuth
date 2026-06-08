@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const snapshot_api = @import("snapshot_api.zig");
 const testing = std.testing;
 
 fn shrinkAndReplay(
@@ -206,8 +207,8 @@ test "property_fuzz: dense random graph with removals maintains consistency" {
     var total_rev: u64 = 0;
     for (nodes) |node| {
         if (graph.hasNode(node)) {
-            total_fwd += try graph.outDegree(node);
-            total_rev += try graph.inDegree(node);
+            total_fwd += try snapshot_api.outDegree(graph, node, testing.allocator);
+            total_rev += try snapshot_api.inDegree(graph, node, testing.allocator);
         }
     }
 
@@ -248,8 +249,8 @@ test "property_fuzz: removing all edges leaves clean graph" {
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     for (nodes) |node| {
-        try testing.expectEqual(@as(usize, 0), try graph.outDegree(node));
-        try testing.expectEqual(@as(usize, 0), try graph.inDegree(node));
+        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, node, testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, node, testing.allocator));
     }
 }
 
@@ -282,7 +283,7 @@ test "property_fuzz: alternate add and remove on same pair converges" {
     const final = graph.removeEdge(source, destination) catch false;
     try testing.expectEqual(model_expected, final);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, source, testing.allocator));
     try graph.validate();
 }
 
@@ -310,8 +311,8 @@ test "property_fuzz: property that outDegree equals neighbors count" {
     for (nodes) |node| {
         if (!graph.hasNode(node)) continue;
 
-        const degree = try graph.outDegree(node);
-        var it = try graph.neighbors(node);
+        const degree = try snapshot_api.outDegree(graph, node, testing.allocator);
+        var it = try snapshot_api.neighbors(graph, node, testing.allocator);
         var count: usize = 0;
         while (it.next()) |_| count += 1;
         it.deinit();
@@ -343,8 +344,8 @@ test "property_fuzz: property that inDegree equals inNeighbors count" {
     for (nodes) |node| {
         if (!graph.hasNode(node)) continue;
 
-        const degree = try graph.inDegree(node);
-        var it = try graph.inNeighbors(node);
+        const degree = try snapshot_api.inDegree(graph, node, testing.allocator);
+        var it = try snapshot_api.inNeighbors(graph, node, testing.allocator);
         var count: usize = 0;
         while (it.next()) |_| count += 1;
         it.deinit();
@@ -362,12 +363,12 @@ test "property_fuzz: addEdge removes self-edge correctness" {
         _ = graph.addEdge(node, node, 0, .{}) catch {};
     }
     try graph.validate();
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(node));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(node));
+    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, node, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, node, testing.allocator));
 
     _ = graph.removeEdge(node, node) catch {};
     try graph.validate();
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(node));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, node, testing.allocator));
 }
 
 test "property_fuzz: random sequence with repair maintains validity" {
@@ -442,10 +443,10 @@ test "property_fuzz: large sequential add then random remove maintains consisten
     }
 
     try source.validate();
-    const degree = try source.outDegree(source_node);
+    const degree = try snapshot_api.outDegree(source, source_node, testing.allocator);
     try testing.expect(degree >= 50 and degree <= 100);
 
-    var it = try source.neighbors(source_node);
+    var it = try snapshot_api.neighbors(source, source_node, testing.allocator);
     var count: usize = 0;
     while (it.next()) |_| count += 1;
     it.deinit();

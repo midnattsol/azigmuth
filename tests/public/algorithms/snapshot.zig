@@ -29,6 +29,7 @@ test "read snapshot algorithms operate on a sealed captured view" {
 
     var latest = try graph.snapshot(std.testing.allocator);
     defer latest.deinit();
+    try latest.validate();
     try std.testing.expectEqual(true, try latest.hasCycle(std.testing.allocator));
 }
 
@@ -61,4 +62,6 @@ test "read snapshot exposes neighbors and degrees from the sealed view" {
     defer std.testing.allocator.free(in_neighbors);
     try std.testing.expectEqual(@as(usize, 1), in_neighbors.len);
     try std.testing.expectEqual(c.index, in_neighbors[0].index);
+
+    try snapshot.validate();
 }

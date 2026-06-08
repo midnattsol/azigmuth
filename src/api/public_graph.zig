@@ -13,9 +13,8 @@
 //!   - While `deinitChecked()` has atomically closed the graph to new work,
 //!     fallible APIs MAY return `error.GraphBusy`; non-fallible accessors
 //!     (`hasNode`, `nodeCount`, `edgeCount`) return safe defaults.
-//!   - All query methods (`neighbors`, `inNeighbors`, `outDegree`, `inDegree`,
-//!     `validate`, `debugValidate`) are lock-free readers and never block
-//!     writers.
+//!   - `snapshot(allocator)`, `validate`, and `debugValidate` are read-side
+//!     operations and never block writers.
 
 const std = @import("std");
 const internal = @import("../graph.zig");
@@ -100,43 +99,6 @@ pub const Graph = opaque {
 
     pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError![]internal.Violation {
         return self.innerConst().debugValidate(allocator);
-    }
-
-    pub fn neighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.NeighborIterator {
-        return self.innerConst().neighbors(node);
-    }
-
-    pub fn inNeighbors(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.NeighborIterator {
-        return self.innerConst().inNeighbors(node);
-    }
-
-    /// Convenience: materializes all outgoing neighbors into a slice.
-    /// The caller owns the returned slice.
-    pub fn neighborsMaterialized(self: *const Graph, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        var it = try self.neighbors(node);
-        defer it.deinit();
-        return it.materialize(allocator);
-    }
-
-    /// Convenience: materializes all incoming neighbors into a slice.
-    /// The caller owns the returned slice.
-    pub fn inNeighborsMaterialized(self: *const Graph, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        var it = try self.inNeighbors(node);
-        defer it.deinit();
-        return it.materialize(allocator);
-    }
-
-    pub fn outDegree(self: *const Graph, node: internal.NodeId) internal.GraphError!usize {
-        return self.innerConst().outDegree(node);
-    }
-
-    pub fn inDegree(self: *const Graph, node: internal.NodeId) internal.GraphError!usize {
-        return self.innerConst().inDegree(node);
-    }
-
-    /// Returns edge-aware outgoing iterator. Multigraph mode only.
-    pub fn outEdges(self: *const Graph, node: internal.NodeId) internal.GraphError!internal.OutEdgeIterator {
-        return self.innerConst().outEdges(node);
     }
 
     pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!*public_snapshot.ReadSnapshot {

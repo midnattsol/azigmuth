@@ -1,5 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
+const snapshot_api = @import("snapshot_api.zig");
 const testing = std.testing;
 
 test "remove_node_stress: remove hub with 200 incoming edges correctness" {
@@ -20,8 +21,8 @@ test "remove_node_stress: remove hub with 200 incoming edges correctness" {
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     for (0..sender_count) |i| {
-        try testing.expectEqual(@as(usize, 0), try graph.outDegree(senders[i]));
-        var it = try graph.neighbors(senders[i]);
+        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, senders[i], testing.allocator));
+        var it = try snapshot_api.neighbors(graph, senders[i], testing.allocator);
         defer it.deinit();
         const neighbors = try it.materialize(testing.allocator);
         defer testing.allocator.free(neighbors);
@@ -44,7 +45,7 @@ test "remove_node_stress: remove node with outgoing to many destinations" {
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
     for (0..target_count) |i| {
-        try testing.expectEqual(@as(usize, 0), try graph.inDegree(targets[i]));
+        try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, targets[i], testing.allocator));
     }
 }
 
@@ -65,10 +66,10 @@ test "remove_node_stress: bidirectional edges removed correctly" {
     try graph.validate();
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(b));
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(c));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(c));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, c, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, c, testing.allocator));
 }
 
 test "remove_node_stress: remove middle node in chain" {
@@ -86,15 +87,15 @@ test "remove_node_stress: remove middle node in chain" {
     try graph.validate();
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(a));
-    var it_a = try graph.neighbors(a);
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, a, testing.allocator));
+    var it_a = try snapshot_api.neighbors(graph, a, testing.allocator);
     defer it_a.deinit();
     const a_neighbors = try it_a.materialize(testing.allocator);
     defer testing.allocator.free(a_neighbors);
     try testing.expectEqual(@as(usize, 0), a_neighbors.len);
 
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(c));
-    var it_c = try graph.inNeighbors(c);
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, c, testing.allocator));
+    var it_c = try snapshot_api.inNeighbors(graph, c, testing.allocator);
     defer it_c.deinit();
     const c_incoming = try it_c.materialize(testing.allocator);
     defer testing.allocator.free(c_incoming);
@@ -118,8 +119,8 @@ test "remove_node_stress: remove node with self-edge and many others" {
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
     for (0..50) |i| {
-        try testing.expectEqual(@as(usize, 0), try graph.outDegree(others[i]));
-        try testing.expectEqual(@as(usize, 0), try graph.inDegree(others[i]));
+        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, others[i], testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, others[i], testing.allocator));
     }
 }
 
@@ -188,7 +189,7 @@ test "remove_node_stress: remove node leaves others intact" {
     try graph.validate();
 
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
-    try testing.expectError(error.InvalidNode, graph.neighbors(b));
+    try testing.expectError(error.InvalidNode, snapshot_api.neighbors(graph, b, testing.allocator));
 }
 
 test "remove_node_stress: removeNode with no edges works" {
@@ -267,7 +268,7 @@ test "remove_node_stress: graph with many nodes some removed" {
     }
 
     try graph.validate();
-    var it = try graph.neighbors(nodes[1]);
+    var it = try snapshot_api.neighbors(graph, nodes[1], testing.allocator);
     defer it.deinit();
     const neighbors = try it.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);

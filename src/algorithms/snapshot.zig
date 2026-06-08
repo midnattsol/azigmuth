@@ -2,6 +2,7 @@ const std = @import("std");
 const bfs_mod = @import("bfs.zig");
 const cycle_mod = @import("cycle.zig");
 const dfs_mod = @import("dfs.zig");
+const validate_mod = @import("../maintenance/validate.zig");
 const read_session = @import("../query/read_session.zig");
 const types = @import("../core/types.zig");
 
@@ -55,6 +56,18 @@ pub const ReadSnapshot = struct {
 
     pub fn inDegree(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!usize {
         return self.view.inDegree(node);
+    }
+
+    pub fn outEdges(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!read_session.SnapshotOutEdgeIterator {
+        return (try self.view.outEdges(node)) orelse error.InvalidNode;
+    }
+
+    pub fn validate(self: *const ReadSnapshot) types.GraphError!void {
+        return validate_mod.validateSnapshot(self.read.core, &self.view);
+    }
+
+    pub fn debugValidate(self: *const ReadSnapshot, allocator: std.mem.Allocator) types.GraphError![]types.Violation {
+        return validate_mod.debugValidateSnapshot(self.read.core, &self.view, allocator);
     }
 
     pub fn bfs(self: *const ReadSnapshot, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {

@@ -10,20 +10,11 @@
 //!   const m = try g.addNode();
 //!   try g.addEdge(n, m, 0, .{});
 //!
-//!   var it = try g.neighbors(n);
-//!   defer it.deinit();
-//!   while (it.next()) |neighbor| { ... }
-//!   // Iterators are single-owner values; copying and using multiple copies
-//!   // is unsupported.
-//!
-//!   // materialize drains without consuming the iterator — deinit() still required:
-//!   var it2 = try g.neighbors(n);
-//!   defer it2.deinit();
-//!   const all = try it2.materialize(allocator);
-//!   defer allocator.free(all);
-//!
 //!   var snapshot = try g.snapshot(allocator);
 //!   defer snapshot.deinit();
+//!   var neighbors = try snapshot.neighbors(n);
+//!   const all = try neighbors.materialize(allocator);
+//!   defer allocator.free(all);
 //!   const order = try snapshot.bfs(n, allocator);
 //!   defer allocator.free(order);
 //!   const has_cycle = try snapshot.hasCycle(allocator);
@@ -39,7 +30,6 @@
 //!   defer g2.deinit();              // graph lifetime independent of builder
 
 const graph = @import("graph.zig");
-const public_iterator = @import("neighbor_iterator.zig");
 const public_graph = @import("api/public_graph.zig");
 const public_snapshot = @import("api/public_snapshot.zig");
 const public_builder = @import("api/public_builder.zig");
@@ -60,9 +50,8 @@ pub const NodeRemovalSummary = graph.NodeRemovalSummary;
 pub const Graph = public_graph.Graph;
 pub const ReadSnapshot = public_snapshot.ReadSnapshot;
 pub const GraphBuilder = public_builder.GraphBuilder;
-pub const NeighborIterator = public_iterator.NeighborIterator;
 pub const SnapshotNeighborIterator = graph.SnapshotNeighborIterator;
-pub const OutEdgeIterator = graph.OutEdgeIterator;
+pub const SnapshotOutEdgeIterator = graph.SnapshotOutEdgeIterator;
 pub const GraphError = graph.GraphError;
 pub const DeinitError = graph.DeinitError;
 pub const Violation = graph.Violation;

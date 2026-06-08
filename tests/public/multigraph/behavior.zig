@@ -1,5 +1,6 @@
 const std = @import("std");
 const gz = @import("graphz");
+const snapshot_api = @import("snapshot_api.zig");
 const testing = std.testing;
 
 test "multigraph: init with multigraph option creates graph" {
@@ -46,7 +47,9 @@ test "multigraph: EdgeId APIs are unsupported in simple mode" {
 
     try testing.expectError(error.UnsupportedOperation, g.addEdgeWithId(a, b, 0, .{}));
     try testing.expectError(error.UnsupportedOperation, g.removeEdgeWithId(a, b, .{ .local = 1 }));
-    try testing.expectError(error.UnsupportedOperation, g.outEdges(a));
+    var snapshot = try g.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    try testing.expectError(error.UnsupportedOperation, snapshot.outEdges(a));
 }
 
 test "multigraph: neighbors returns duplicate destinations" {
@@ -57,7 +60,7 @@ test "multigraph: neighbors returns duplicate destinations" {
     try g.addEdge(a, b, 0, .{});
     try g.addEdge(a, b, 1, .{});
 
-    var it = try g.neighbors(a);
+    var it = try snapshot_api.neighbors(g, a, testing.allocator);
     defer it.deinit();
     var count: usize = 0;
     while (it.next()) |n| {
@@ -74,8 +77,8 @@ test "multigraph: outDegree reflects duplicate edges" {
     const b = try g.addNode();
     try g.addEdge(a, b, 0, .{});
     try g.addEdge(a, b, 1, .{});
-    try testing.expectEqual(@as(usize, 2), try g.outDegree(a));
-    try testing.expectEqual(@as(usize, 2), try g.inDegree(b));
+    try testing.expectEqual(@as(usize, 2), try snapshot_api.outDegree(g, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 2), try snapshot_api.inDegree(g, b, testing.allocator));
 }
 
 test "multigraph: removeEdgeWithId removes specific edge" {
@@ -87,10 +90,10 @@ test "multigraph: removeEdgeWithId removes specific edge" {
     _ = try g.addEdgeWithId(a, b, 1, .{});
 
     try testing.expect(try g.removeEdgeWithId(a, b, id1));
-    try testing.expectEqual(@as(usize, 1), try g.outDegree(a));
-    try testing.expectEqual(@as(usize, 1), try g.inDegree(b));
+    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(g, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(g, b, testing.allocator));
 
-    var it = try g.neighbors(a);
+    var it = try snapshot_api.neighbors(g, a, testing.allocator);
     defer it.deinit();
     try testing.expect(it.next() != null);
     try testing.expect(it.next() == null);
@@ -105,8 +108,8 @@ test "multigraph: removeEdge removes all duplicates" {
     try g.addEdge(a, b, 1, .{});
 
     try testing.expect(try g.removeEdge(a, b));
-    try testing.expectEqual(@as(usize, 0), try g.outDegree(a));
-    try testing.expectEqual(@as(usize, 0), try g.inDegree(b));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(g, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(g, b, testing.allocator));
 }
 
 test "multigraph: validate passes after mutations" {
@@ -136,7 +139,7 @@ test "multigraph: removeNode cleans up duplicate reverse entries" {
 
     _ = try g.removeNode(a);
     try testing.expect(!g.hasNode(a));
-    try testing.expectEqual(@as(usize, 0), try g.inDegree(b));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(g, b, testing.allocator));
     try g.validate();
 }
 
@@ -151,7 +154,7 @@ test "multigraph: removeNode decrements predecessor degree by duplicate count" {
     try testing.expectEqual(@as(u64, 2), g.edgeCount());
     _ = try g.removeNode(b);
 
-    try testing.expectEqual(@as(usize, 0), try g.outDegree(a));
+    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(g, a, testing.allocator));
     try testing.expectEqual(@as(u64, 0), g.edgeCount());
     try g.validate();
 }
@@ -164,7 +167,7 @@ test "multigraph: outEdges exposes EdgeRef with IDs" {
     const id1 = try g.addEdgeWithId(a, b, 10, .{});
     const id2 = try g.addEdgeWithId(a, b, 20, .{});
 
-    var it = try g.outEdges(a);
+    var it = try snapshot_api.outEdges(g, a, testing.allocator);
     defer it.deinit();
     const ref1 = it.next().?;
     const ref2 = it.next().?;
@@ -188,7 +191,7 @@ test "multigraph: outEdges orders duplicate destinations by EdgeId and preserves
     const id_1 = try g.addEdgeWithId(source, destination, 7, flags_1);
     const id_2 = try g.addEdgeWithId(source, destination, 9, flags_2);
 
-    var it = try g.outEdges(source);
+    var it = try snapshot_api.outEdges(g, source, testing.allocator);
     defer it.deinit();
 
     const first = it.next().?;
@@ -216,7 +219,7 @@ test "multigraph: builder accepts duplicates in multigraph mode" {
 
     var g = try builder.freeze();
     defer g.deinit();
-    try testing.expectEqual(@as(usize, 2), try g.outDegree(a));
+    try testing.expectEqual(@as(usize, 2), try snapshot_api.outDegree(g, a, testing.allocator));
     try g.validate();
 }
 
@@ -278,12 +281,12 @@ test "multigraph: removeEdge preserves grouped reverse entries after duplicates"
         try g.addEdge(other, destination, 0, .{});
     }
 
-    try testing.expectEqual(@as(usize, 82), try g.inDegree(destination));
+    try testing.expectEqual(@as(usize, 82), try snapshot_api.inDegree(g, destination, testing.allocator));
     try testing.expectError(error.RepairRequired, g.removeEdge(others[0], destination));
-    try testing.expectEqual(@as(usize, 82), try g.inDegree(destination));
+    try testing.expectEqual(@as(usize, 82), try snapshot_api.inDegree(g, destination, testing.allocator));
 
     try testing.expect(try g.removeEdge(source, destination));
-    try testing.expectEqual(@as(usize, 80), try g.inDegree(destination));
+    try testing.expectEqual(@as(usize, 80), try snapshot_api.inDegree(g, destination, testing.allocator));
     try g.validate();
 }
 
@@ -323,8 +326,8 @@ test "multigraph: repair preserves multiblock duplicate EdgeIds" {
     try g.validate();
 
     try testing.expectError(error.RepairRequired, g.removeEdgeWithId(source, destination, ids[65]));
-    try testing.expectEqual(@as(usize, 70), try g.outDegree(source));
-    try testing.expectEqual(@as(usize, 70), try g.inDegree(destination));
+    try testing.expectEqual(@as(usize, 70), try snapshot_api.outDegree(g, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 70), try snapshot_api.inDegree(g, destination, testing.allocator));
     try g.validate();
 }
 
@@ -345,7 +348,7 @@ test "multigraph: repair keeps duplicate outEdges ordered by EdgeId across block
     _ = try g.removeNode(tombstone_target);
     try g.repairNode(source);
 
-    var it = try g.outEdges(source);
+    var it = try snapshot_api.outEdges(g, source, testing.allocator);
     defer it.deinit();
 
     var expected_idx: usize = 0;
@@ -364,8 +367,8 @@ test "multigraph: removeNode with self-edge duplicates" {
     const a = try g.addNode();
     try g.addEdge(a, a, 0, .{});
     try g.addEdge(a, a, 1, .{});
-    try testing.expectEqual(@as(usize, 2), try g.outDegree(a));
-    try testing.expectEqual(@as(usize, 2), try g.inDegree(a));
+    try testing.expectEqual(@as(usize, 2), try snapshot_api.outDegree(g, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 2), try snapshot_api.inDegree(g, a, testing.allocator));
 
     _ = try g.removeNode(a);
     try testing.expect(!g.hasNode(a));

@@ -49,6 +49,18 @@ pub const ReadSnapshot = opaque {
         return self.innerConst().inDegree(node);
     }
 
+    pub fn outEdges(self: *const ReadSnapshot, node: internal.NodeId) internal.GraphError!internal.SnapshotOutEdgeIterator {
+        return self.innerConst().outEdges(node);
+    }
+
+    pub fn validate(self: *const ReadSnapshot) internal.GraphError!void {
+        return self.innerConst().validate();
+    }
+
+    pub fn debugValidate(self: *const ReadSnapshot, allocator: std.mem.Allocator) internal.GraphError![]internal.Violation {
+        return self.innerConst().debugValidate(allocator);
+    }
+
     pub fn bfs(self: *const ReadSnapshot, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
         return self.innerConst().bfs(start, allocator);
     }

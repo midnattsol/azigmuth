@@ -198,6 +198,75 @@ pub const SnapshotNeighborIterator = struct {
     }
 };
 
+pub const SnapshotOutEdgeIterator = struct {
+    view: *const CapturedGraphView,
+
+    contiguous_mode: bool,
+    current_block_index: u32,
+    blocks_remaining: u32,
+    current_group_index: u32,
+
+    current_mask: u64,
+    cached_fwd_block: ?*const types.EdgeBlockFwd = null,
+    cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+
+    check_removed_destinations: bool,
+    groups_visited: u16 = 0,
+    group_count_bound: u16 = 0,
+
+    fn advanceToNextGroup(self: *SnapshotOutEdgeIterator) bool {
+        return iterator_common.advanceToNextGroup(self, self.view.core);
+    }
+
+    fn loadNextNonEmptyMask(self: *SnapshotOutEdgeIterator) bool {
+        while (true) {
+            while (self.blocks_remaining == 0) {
+                if (!self.advanceToNextGroup()) return false;
+            }
+
+            const block_idx = self.current_block_index;
+            self.current_block_index += 1;
+            self.blocks_remaining -= 1;
+
+            const block = page_ops.edgeBlockAtConst(self.view.core, block_idx, .fwd);
+            if (block.mask == 0) continue;
+            self.current_mask = block.mask;
+            self.cached_fwd_block = block;
+            self.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(self.view.core, block_idx);
+            return true;
+        }
+    }
+
+    fn destinationExcluded(self: *const SnapshotOutEdgeIterator, destination_idx: u32) bool {
+        if (destination_idx >= self.view.node_state.len) return true;
+        if (!self.check_removed_destinations) return false;
+        return !self.view.isLiveIndex(destination_idx);
+    }
+
+    pub fn next(self: *SnapshotOutEdgeIterator) ?types.EdgeRef {
+        while (true) {
+            while (self.current_mask == 0) {
+                if (!self.loadNextNonEmptyMask()) return null;
+            }
+
+            const bit_index: u6 = @intCast(@ctz(self.current_mask));
+            self.current_mask &= self.current_mask - 1;
+
+            const fwd_block = self.cached_fwd_block.?;
+            const fwd_ids = self.cached_fwd_ids.?;
+            const edge = fwd_block.edges[bit_index];
+            if (self.destinationExcluded(edge.destination)) continue;
+
+            return .{
+                .id = .{ .local = fwd_ids.ids[bit_index] },
+                .destination = edge.destination,
+                .relation = edge.relation,
+                .flags = @bitCast(edge.flags),
+            };
+        }
+    }
+};
+
 pub const CapturedGraphView = struct {
     core: *const graph_core.GraphCore,
     node_state: []u32,
@@ -227,7 +296,28 @@ pub const CapturedGraphView = struct {
         return (self.node_state[node_idx] & state_live_bit) != 0;
     }
 
-    fn needsRepairFwd(self: *const CapturedGraphView, node_idx: u32) bool {
+    pub fn adjacency(self: *const CapturedGraphView, node_idx: u32) types.NodeAdj {
+        const node_state = self.node_state[node_idx];
+        const fwd_side = self.fwd_side[node_idx];
+        const rev_side = self.rev_side[node_idx];
+        return .{
+            .first_block_fwd = fwd_side.first_block,
+            .block_count_fwd = fwd_side.block_count,
+            .group_count_fwd = fwd_side.group_count,
+            .first_group_fwd = fwd_side.first_group,
+            .first_block_rev = rev_side.first_block,
+            .block_count_rev = rev_side.block_count,
+            .group_count_rev = rev_side.group_count,
+            .first_group_rev = rev_side.first_group,
+            .flags = .{
+                .needs_repair_fwd = (node_state & state_needs_repair_fwd_bit) != 0,
+                .needs_repair_rev = (node_state & state_needs_repair_rev_bit) != 0,
+                .removed = (node_state & state_live_bit) == 0,
+            },
+        };
+    }
+
+    pub fn needsRepairFwd(self: *const CapturedGraphView, node_idx: u32) bool {
         return (self.node_state[node_idx] & state_needs_repair_fwd_bit) != 0;
     }
 
@@ -286,6 +376,28 @@ pub const CapturedGraphView = struct {
         return cursor;
     }
 
+    pub fn outEdges(self: *const CapturedGraphView, node: types.NodeId) !?SnapshotOutEdgeIterator {
+        if (!self.core.multigraph_enabled) return error.UnsupportedOperation;
+        if (node.index >= self.node_state.len) return null;
+        if (!self.isLiveIndex(node.index)) return null;
+
+        const side_snapshot = sideAdjOfSnapshot(self.fwd_side[node.index]);
+        const initial = iterator_common.buildTraversalState(side_snapshot);
+
+        var iterator = SnapshotOutEdgeIterator{
+            .view = self,
+            .contiguous_mode = initial.contiguous_mode,
+            .current_block_index = initial.current_block_index,
+            .blocks_remaining = initial.blocks_remaining,
+            .current_group_index = initial.current_group_index,
+            .current_mask = 0,
+            .check_removed_destinations = self.needsRepairFwd(node.index),
+            .group_count_bound = side_snapshot.group_count,
+        };
+        iterator_common.primeGroupedTraversal(&iterator, self.core);
+        return iterator;
+    }
+
     pub fn outDegree(self: *const CapturedGraphView, node: types.NodeId) types.GraphError!usize {
         try self.ensureLiveStart(node);
         return self.degree_fwd[node.index];
@@ -306,23 +418,18 @@ const CapturedNodeData = struct {
 };
 
 fn captureNode(graph: *const graph_core.GraphCore, node_buffer: *const types.NodeBuffer) !CapturedNodeData {
+    _ = graph;
     while (true) {
         const before = node_buffer.loadPublishedMeta();
-        const adj = node_buffer.publishedAdjFromMeta(before);
+        const fwd_side = node_buffer.publishedFwdFromMeta(before);
+        const rev_side = node_buffer.publishedRevFromMeta(before);
         const after = node_buffer.loadPublishedMeta();
         if (@as(u64, @bitCast(before)) != @as(u64, @bitCast(after))) continue;
 
-        const fwd_side = adjacency.sideAdjOfNode(adj, .fwd);
-        const rev_side = adjacency.sideAdjOfNode(adj, .rev);
-        if (node_validity.snapshotIsLive(adj)) {
-            try iterator_common.validateReadSideQuick(graph, fwd_side, .fwd);
-            try iterator_common.validateReadSideQuick(graph, rev_side, .rev);
-        }
-
         var state: u32 = 0;
-        if (!adj.flags.removed) state |= state_live_bit;
-        if (adj.flags.needs_repair_fwd) state |= state_needs_repair_fwd_bit;
-        if (adj.flags.needs_repair_rev) state |= state_needs_repair_rev_bit;
+        if (!before.removed) state |= state_live_bit;
+        if (before.needs_repair_fwd) state |= state_needs_repair_fwd_bit;
+        if (before.needs_repair_rev) state |= state_needs_repair_rev_bit;
 
         return .{
             .state = state,

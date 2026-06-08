@@ -15,12 +15,14 @@ fn benchNeighborsScanClean(allocator: std.mem.Allocator) !harness.Result {
         try graph.addEdge(source, destination, 0, .{});
     }
 
+    var snapshot = try graph.snapshot(allocator);
+    defer snapshot.deinit();
+
     var seen: usize = 0;
     const start_ns = harness.nowNs();
     for (0..scan_iterations) |_| {
-        var it = try graph.neighbors(source);
+        var it = try snapshot.neighbors(source);
         while (it.next() != null) seen += 1;
-        it.deinit();
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
@@ -44,12 +46,14 @@ fn benchNeighborsScanTombstones(allocator: std.mem.Allocator) !harness.Result {
         if (destination_idx % 4 == 0) _ = try graph.removeNode(destination);
     }
 
+    var snapshot = try graph.snapshot(allocator);
+    defer snapshot.deinit();
+
     var visible_seen: usize = 0;
     const start_ns = harness.nowNs();
     for (0..scan_iterations) |_| {
-        var it = try graph.neighbors(source);
+        var it = try snapshot.neighbors(source);
         while (it.next() != null) visible_seen += 1;
-        it.deinit();
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
