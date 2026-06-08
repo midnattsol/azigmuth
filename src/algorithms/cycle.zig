@@ -1,10 +1,10 @@
 const std = @import("std");
+const snapshot_view = @import("../query/snapshot_view.zig");
 const types = @import("../core/types.zig");
-const common = @import("common.zig");
 
 /// Returns true if the fixed captured graph view contains at least one
 /// directed cycle.
-pub fn hasCycleCaptured(view: *const common.CapturedGraphView, allocator: std.mem.Allocator) types.GraphError!bool {
+pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, allocator: std.mem.Allocator) types.GraphError!bool {
     const node_count = view.nodeCount();
     if (node_count == 0) return false;
 

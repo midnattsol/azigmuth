@@ -120,7 +120,8 @@ g.reclaimRetired();
 
 `ReadSnapshot` is the public read/query surface. Snapshot iterators are returned
 by value, allocate nothing on creation, and expose `materialize()` when you want
-an owned slice.
+an owned slice. Public adjacency queries, degree queries, and algorithms all go
+through `ReadSnapshot`, not `Graph`.
 
 ```zig
 var snapshot = try g.snapshot(allocator);

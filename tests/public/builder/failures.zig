@@ -1,6 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
+const snapshot_support = @import("snapshot_support.zig");
 const testing = std.testing;
 
 test "graph_builder: freeze twice returns UnsupportedOperation" {
@@ -82,7 +82,7 @@ test "graph_builder: graph from freeze has correct adjacency" {
     var g = try b.freeze();
     defer g.deinit();
 
-    var it = try snapshot_api.neighbors(g, a, testing.allocator);
+    var it = try snapshot_support.neighbors(g, a, testing.allocator);
     defer it.deinit();
     const neighbors = try it.materialize(testing.allocator);
     defer testing.allocator.free(neighbors);
@@ -116,7 +116,7 @@ test "graph_builder: edge ordering sorted after freeze" {
     var g = try b.freeze();
     defer g.deinit();
 
-    var it = try snapshot_api.neighbors(g, source, testing.allocator);
+    var it = try snapshot_support.neighbors(g, source, testing.allocator);
     defer it.deinit();
     var prev_idx: u32 = 0;
     var first = true;
@@ -145,7 +145,7 @@ test "graph_builder: reverse adjacency sorted after freeze" {
     var g = try b.freeze();
     defer g.deinit();
 
-    var it = try snapshot_api.inNeighbors(g, target, testing.allocator);
+    var it = try snapshot_support.inNeighbors(g, target, testing.allocator);
     defer it.deinit();
     var prev_idx: u32 = 0;
     var first = true;

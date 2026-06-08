@@ -1,6 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
+const snapshot_support = @import("snapshot_support.zig");
 
 const testing = std.testing;
 const SpinBudget: usize = 200_000_000;
@@ -22,7 +22,7 @@ const ReaderCtx = struct {
 fn readerLoop(ctx: *ReaderCtx) void {
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
-        var iter = snapshot_api.neighbors(ctx.graph, ctx.node, std.heap.page_allocator) catch continue;
+        var iter = snapshot_support.neighbors(ctx.graph, ctx.node, std.heap.page_allocator) catch continue;
         defer iter.deinit();
         const materialized = iter.materialize(std.heap.page_allocator) catch continue;
         defer std.heap.page_allocator.free(materialized);

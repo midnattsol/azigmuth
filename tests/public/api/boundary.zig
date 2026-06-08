@@ -1,6 +1,5 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
 
 const testing = std.testing;
 
@@ -46,7 +45,9 @@ test "addEdge with NodeId from a different graph succeeds when index happens to 
 
     // Verify the edge was added using the index, not the original node identity.
     try testing.expectEqual(@as(u64, 1), graph_b.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph_b, node2_in_b, testing.allocator));
+    var snapshot = try graph_b.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    try testing.expectEqual(@as(usize, 1), try snapshot.outDegree(node2_in_b));
 }
 
 test "addEdge with NodeId beyond node count returns InvalidNode even if graph has nodes" {
@@ -66,8 +67,10 @@ test "NodeId with zero index is valid after addNode called at least once" {
     defer graph.deinit();
 
     _ = try graph.addNode();
-    var neighbors = try snapshot_api.neighbors(graph, .{ .index = 0 }, testing.allocator);
-    neighbors.deinit();
+    var snapshot = try graph.snapshot(testing.allocator);
+    defer snapshot.deinit();
+    var neighbors = try snapshot.neighbors(.{ .index = 0 });
+    try testing.expect(neighbors.next() == null);
     // Node 0 is valid - no error.
     try testing.expect(graph.hasNode(.{ .index = 0 }));
 }

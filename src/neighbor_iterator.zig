@@ -7,6 +7,7 @@ const std = @import("std");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const iterator_common = @import("iterator_common.zig");
+const live_read_common = @import("live_read_common.zig");
 const types = @import("core/types.zig");
 const page_ops = @import("storage/page_ops.zig");
 const rcu = @import("rcu.zig");
@@ -159,38 +160,13 @@ pub fn materializeExactConsuming(iterator: *NeighborIterator, allocator: std.mem
     return out.toOwnedSlice(allocator);
 }
 
-fn sideAdj(direction: Direction, node_adj: types.NodeAdj) types.SideAdj {
-    return switch (direction) {
-        .fwd => .{
-            .first_block = node_adj.first_block_fwd,
-            .block_count = node_adj.block_count_fwd,
-            .group_count = node_adj.group_count_fwd,
-            .first_group = node_adj.first_group_fwd,
-        },
-        .rev => .{
-            .first_block = node_adj.first_block_rev,
-            .block_count = node_adj.block_count_rev,
-            .group_count = node_adj.group_count_rev,
-            .first_group = node_adj.first_group_rev,
-        },
-    };
-}
-
 fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, direction: Direction) types.GraphError!NeighborIterator {
-    if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-
-    const reader_token = try rcu.readerEnter(@constCast(graph));
-    errdefer rcu.readerExit(@constCast(graph), reader_token);
-
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    const meta = node_buffer.loadPublishedMeta();
-    const node_adj_snapshot = node_buffer.publishedAdjFromMeta(meta);
-    try node_validity.ensureLiveSnapshot(node_adj_snapshot);
-    const side_snapshot = sideAdj(direction, node_adj_snapshot);
-    if (direction == .fwd) {
-        try iterator_common.validateReadSideQuick(graph, side_snapshot, .fwd);
-    } else {
-        try iterator_common.validateReadSideQuick(graph, side_snapshot, .rev);
+    const capture = try live_read_common.captureNodeSnapshot(graph, node);
+    errdefer rcu.readerExit(@constCast(graph), capture.reader_token);
+    const side_snapshot = live_read_common.sideAdj(switch (direction) { .fwd => .fwd, .rev => .rev }, capture.node_adj_snapshot);
+    switch (direction) {
+        .fwd => try live_read_common.validateForwardSideQuick(graph, side_snapshot),
+        .rev => try live_read_common.validateReverseSideQuick(graph, side_snapshot),
     }
 
     const initial = iterator_common.buildTraversalState(side_snapshot);
@@ -198,26 +174,26 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
     var iterator = NeighborIterator{
         .core = graph,
         .direction = direction,
-        .node_adj_snapshot = node_adj_snapshot,
+        .node_adj_snapshot = capture.node_adj_snapshot,
         .contiguous_mode = initial.contiguous_mode,
         .current_block_index = initial.current_block_index,
         .blocks_remaining = initial.blocks_remaining,
         .current_group_index = initial.current_group_index,
         .current_mask = 0,
         .degree_snapshot = switch (direction) {
-            .fwd => meta.degree_fwd,
-            .rev => meta.degree_rev,
+            .fwd => capture.meta.degree_fwd,
+            .rev => capture.meta.degree_rev,
         },
         .check_removed_candidates = switch (direction) {
-            .fwd => node_adj_snapshot.flags.needs_repair_fwd,
-            .rev => node_adj_snapshot.flags.needs_repair_rev,
+            .fwd => capture.node_adj_snapshot.flags.needs_repair_fwd,
+            .rev => capture.node_adj_snapshot.flags.needs_repair_rev,
         },
         .reader_active = true,
-        .reader_token = reader_token,
+        .reader_token = capture.reader_token,
         .groups_visited = 0,
         .group_count_bound = switch (direction) {
-            .fwd => node_adj_snapshot.group_count_fwd,
-            .rev => node_adj_snapshot.group_count_rev,
+            .fwd => capture.node_adj_snapshot.group_count_fwd,
+            .rev => capture.node_adj_snapshot.group_count_rev,
         },
     };
 

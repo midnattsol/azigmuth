@@ -1,10 +1,10 @@
 const std = @import("std");
+const snapshot_view = @import("../query/snapshot_view.zig");
 const types = @import("../core/types.zig");
-const common = @import("common.zig");
 
 /// Returns nodes in breadth-first order starting from `start` over a fixed
 /// captured graph view.
-pub fn bfsCaptured(view: *const common.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
+pub fn bfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
     const node_count = view.nodeCount();
     try view.ensureLiveStart(start);
 

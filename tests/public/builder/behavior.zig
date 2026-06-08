@@ -1,6 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
+const snapshot_support = @import("snapshot_support.zig");
 
 const testing = std.testing;
 
@@ -32,8 +32,8 @@ test "GraphBuilder: build graph with nodes and edges" {
 
     try testing.expectEqual(@as(usize, 3), graph.nodeCount());
     try testing.expectEqual(@as(u64, 2), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, source, testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, target, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, target, testing.allocator));
     try graph.validate();
 }
 
@@ -107,8 +107,8 @@ test "GraphBuilder: addEdge with self-loop works correctly" {
 
     try graph.validate();
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, node, testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, node, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, node, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, node, testing.allocator));
 }
 
 test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
@@ -125,8 +125,8 @@ test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
     defer graph.deinit();
     try graph.validate();
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, a, testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, b, testing.allocator));
 }
 
 test "graph_builder: freeze produces valid graph (validate passthrough)" {
@@ -149,19 +149,19 @@ test "graph_builder: freeze produces valid graph (validate passthrough)" {
     try graph.validate();
     try testing.expectEqual(@as(u64, 6), graph.edgeCount());
 
-    try testing.expectEqual(@as(usize, 2), try snapshot_api.outDegree(graph, nodes[0], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, nodes[1], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, nodes[2], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, nodes[3], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, nodes[4], testing.allocator));
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, nodes[5], testing.allocator));
+    try testing.expectEqual(@as(usize, 2), try snapshot_support.outDegree(graph, nodes[0], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, nodes[1], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, nodes[2], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, nodes[3], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, nodes[4], testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, nodes[5], testing.allocator));
 
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, nodes[0], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, nodes[1], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, nodes[2], testing.allocator));
-    try testing.expectEqual(@as(usize, 2), try snapshot_api.inDegree(graph, nodes[3], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, nodes[4], testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, nodes[5], testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, nodes[0], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, nodes[1], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, nodes[2], testing.allocator));
+    try testing.expectEqual(@as(usize, 2), try snapshot_support.inDegree(graph, nodes[3], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, nodes[4], testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, nodes[5], testing.allocator));
 }
 
 test "graph_builder: degree cache is correct after freeze" {
@@ -178,7 +178,7 @@ test "graph_builder: degree cache is correct after freeze" {
     defer graph.deinit();
 
     try graph.validate();
-    try testing.expectEqual(@as(usize, 65), try snapshot_api.outDegree(graph, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 65), try snapshot_support.outDegree(graph, source, testing.allocator));
     try testing.expectEqual(@as(u64, 65), graph.edgeCount());
 }
 
@@ -204,10 +204,10 @@ test "graph_builder: single edge bidirectional check" {
     defer graph.deinit();
     try graph.validate();
 
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.outDegree(graph, a, testing.allocator));
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, a, testing.allocator));
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, b, testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, a, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, b, testing.allocator));
 }
 
 test "graph_builder: degree cache matches edge count for large graph" {
@@ -224,11 +224,11 @@ test "graph_builder: degree cache matches edge count for large graph" {
     defer graph.deinit();
     try graph.validate();
 
-    try testing.expectEqual(@as(usize, 200), try snapshot_api.outDegree(graph, n, testing.allocator));
+    try testing.expectEqual(@as(usize, 200), try snapshot_support.outDegree(graph, n, testing.allocator));
     try testing.expectEqual(@as(u64, 200), graph.edgeCount());
 
     for (1..201) |dst_index| {
-        try testing.expectEqual(@as(usize, 1), try snapshot_api.inDegree(graph, .{ .index = @intCast(dst_index) }, testing.allocator));
+        try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, .{ .index = @intCast(dst_index) }, testing.allocator));
     }
 }
 
@@ -276,11 +276,11 @@ test "graph_builder: frozen graph remains mutable after freeze" {
     try graph.validate();
     try testing.expectEqual(@as(u64, 2), graph.edgeCount());
 
-    var iter = try snapshot_api.neighbors(graph, destination, testing.allocator);
+    var iter = try snapshot_support.neighbors(graph, destination, testing.allocator);
     defer iter.deinit();
     try testing.expectEqual(extra.index, iter.next().?.index);
 
-    var source_iter = try snapshot_api.neighbors(graph, source, testing.allocator);
+    var source_iter = try snapshot_support.neighbors(graph, source, testing.allocator);
     defer source_iter.deinit();
     try testing.expectEqual(destination.index, source_iter.next().?.index);
 }

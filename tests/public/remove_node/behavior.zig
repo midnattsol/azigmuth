@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
+const snapshot_support = @import("snapshot_support.zig");
 
 const testing = std.testing;
 
@@ -21,10 +21,10 @@ test "tombstone regression: removeNode decrements destination inDegree without i
     _ = try graph.removeNode(hub);
 
     try testing.expect(!graph.hasNode(hub));
-    try testing.expectEqual(@as(usize, 0), snapshot_api.outDegree(graph, hub, testing.allocator) catch 0);
+    try testing.expectEqual(@as(usize, 0), snapshot_support.outDegree(graph, hub, testing.allocator) catch 0);
 
     for (destinations[0..]) |d| {
-        try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, d, testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, d, testing.allocator));
     }
     try graph.validate();
 }
@@ -47,7 +47,7 @@ test "tombstone regression: removeNode leaves invisible incoming tombstones" {
 
     // Live sources must have zero visible outgoing to target.
     for (sources[0..]) |s| {
-        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, s, testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, s, testing.allocator));
     }
     try graph.validate();
 }
@@ -66,11 +66,11 @@ test "tombstone regression: reverse residual on removed node is allowed before c
     _ = try graph.removeNode(target);
 
     try testing.expect(!graph.hasNode(target));
-    try testing.expectError(error.InvalidNode, snapshot_api.inDegree(graph, target, testing.allocator));
+    try testing.expectError(error.InvalidNode, snapshot_support.inDegree(graph, target, testing.allocator));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     for (sources) |source| {
-        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, source, testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, source, testing.allocator));
     }
 
     // Structural reverse residuals on the removed node are allowed until
@@ -103,8 +103,8 @@ test "tombstone regression: removeNode self-edge works correctly" {
 
     try testing.expect(!graph.hasNode(node));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, other, testing.allocator));
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, other, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, other, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, other, testing.allocator));
 
     try graph.validate();
 }
@@ -133,7 +133,7 @@ test "tombstone regression: removeNode with incoming from already-removed nodes"
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     // C should have zero visible outgoing edges.
-    try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, c, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, c, testing.allocator));
     try graph.validate();
 }
 
@@ -188,8 +188,8 @@ test "tombstone stress: removeNode on hub with many incoming and outgoing" {
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     for (peers[0..]) |p| {
-        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, p, testing.allocator));
-        try testing.expectEqual(@as(usize, 0), try snapshot_api.inDegree(graph, p, testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, p, testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, p, testing.allocator));
     }
     try graph.validate();
 

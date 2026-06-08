@@ -1,6 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
+const snapshot_support = @import("snapshot_support.zig");
 const testing = std.testing;
 
 test "repair_budgeted: processes single node with repair debt" {
@@ -230,7 +230,7 @@ test "repair_budgeted: repair after removeNode processes tombstoned edges" {
     try graph.validate();
 
     for (0..50) |i| {
-        try testing.expectEqual(@as(usize, 0), try snapshot_api.outDegree(graph, senders[i], testing.allocator));
+        try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, senders[i], testing.allocator));
     }
 }
 

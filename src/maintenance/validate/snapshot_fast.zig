@@ -2,14 +2,14 @@ const common = @import("common.zig");
 const run_search = @import("run_search.zig");
 const shape = @import("shape.zig");
 const graph_core = @import("../../core/graph_core.zig");
-const read_session = @import("../../query/read_session.zig");
+const snapshot_view = @import("../../query/snapshot_view.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const constants = @import("../../core/constants.zig");
+const logical = @import("logical.zig");
 
 fn countVisibleEntriesInBlockSnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
     block_idx: u32,
     comptime side: common.Side,
 ) u64 {
@@ -31,14 +31,14 @@ fn countVisibleEntriesInBlockSnapshot(
 
 fn sumVisibleAdjacencySnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
     adjacency: types.NodeAdj,
     comptime side: common.Side,
 ) u64 {
     if (adjacency.flags.removed) return 0;
 
     const SumContext = struct {
-        view: *const read_session.CapturedGraphView,
+        view: *const snapshot_view.CapturedGraphView,
         total: u64 = 0,
     };
 
@@ -61,13 +61,13 @@ fn sumVisibleAdjacencySnapshot(
 
 fn forwardHasTombstoneSnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
     adjacency: types.NodeAdj,
 ) bool {
     if (adjacency.flags.removed) return false;
 
     const TombstoneContext = struct {
-        view: *const read_session.CapturedGraphView,
+        view: *const snapshot_view.CapturedGraphView,
     };
 
     var context = TombstoneContext{ .view = view };
@@ -97,13 +97,13 @@ fn forwardHasTombstoneSnapshot(
 
 fn reverseHasTombstoneSnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
     adjacency: types.NodeAdj,
 ) bool {
     if (adjacency.flags.removed) return false;
 
     const TombstoneContext = struct {
-        view: *const read_session.CapturedGraphView,
+        view: *const snapshot_view.CapturedGraphView,
     };
 
     var context = TombstoneContext{ .view = view };
@@ -179,7 +179,7 @@ fn validateForwardEdgeIdsSnapshot(
 
 fn validateForwardConsistencySnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
     source_idx: u32,
     adjacency: types.NodeAdj,
 ) !void {
@@ -187,7 +187,7 @@ fn validateForwardConsistencySnapshot(
     if (common.blockCount(adjacency, .fwd) == 0) return;
 
     const ForwardContext = struct {
-        view: *const read_session.CapturedGraphView,
+        view: *const snapshot_view.CapturedGraphView,
         source_idx: u32,
         adjacency: types.NodeAdj,
     };
@@ -225,7 +225,7 @@ fn validateForwardConsistencySnapshot(
 
 fn validateReverseConsistencySnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
     destination_idx: u32,
     adjacency: types.NodeAdj,
 ) !void {
@@ -233,7 +233,7 @@ fn validateReverseConsistencySnapshot(
     if (common.blockCount(adjacency, .rev) == 0) return;
 
     const ReverseContext = struct {
-        view: *const read_session.CapturedGraphView,
+        view: *const snapshot_view.CapturedGraphView,
         destination_idx: u32,
     };
 
@@ -266,7 +266,7 @@ fn validateReverseConsistencySnapshot(
 
 pub fn validateSnapshot(
     graph: *const graph_core.GraphCore,
-    view: *const read_session.CapturedGraphView,
+    view: *const snapshot_view.CapturedGraphView,
 ) !void {
     const node_count = view.nodeCount();
     var total_visible_forward: u64 = 0;
@@ -278,31 +278,27 @@ pub fn validateSnapshot(
 
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd);
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .rev);
-        total_visible_forward += sumVisibleAdjacencySnapshot(graph, view, adjacency, .fwd);
-        total_visible_reverse += sumVisibleAdjacencySnapshot(graph, view, adjacency, .rev);
+        const fwd_visible = sumVisibleAdjacencySnapshot(graph, view, adjacency, .fwd);
+        const rev_visible = sumVisibleAdjacencySnapshot(graph, view, adjacency, .rev);
+        total_visible_forward += fwd_visible;
+        total_visible_reverse += rev_visible;
         try shape.validateOccupancyFast(graph, adjacency, .fwd);
         try shape.validateOccupancyFast(graph, adjacency, .rev);
         try validateForwardEdgeIdsSnapshot(graph, adjacency);
         try validateForwardConsistencySnapshot(graph, view, node_idx, adjacency);
         try validateReverseConsistencySnapshot(graph, view, node_idx, adjacency);
 
-        if (adjacency.flags.removed) {
-            if (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or view.degree_fwd[node_idx] != 0) return error.CorruptGraph;
-            if (view.degree_rev[node_idx] != 0) return error.CorruptGraph;
-            if (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev) return error.CorruptGraph;
-        }
-
-        const fwd_visible = sumVisibleAdjacencySnapshot(graph, view, adjacency, .fwd);
-        const rev_visible = sumVisibleAdjacencySnapshot(graph, view, adjacency, .rev);
-        if (!adjacency.flags.removed) {
-            if (view.degree_fwd[node_idx] != fwd_visible) return error.CorruptGraph;
-            if (view.degree_rev[node_idx] != rev_visible) return error.CorruptGraph;
-            if (!adjacency.flags.needs_repair_fwd and forwardHasTombstoneSnapshot(graph, view, adjacency)) return error.CorruptGraph;
-            if (!adjacency.flags.needs_repair_rev and reverseHasTombstoneSnapshot(graph, view, adjacency)) return error.CorruptGraph;
-            if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) return error.CorruptGraph;
-            if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) return error.CorruptGraph;
-        }
+        try logical.validateLiveNodeState(
+            adjacency,
+            view.degree_fwd[node_idx],
+            view.degree_rev[node_idx],
+            fwd_visible,
+            rev_visible,
+            forwardHasTombstoneSnapshot(graph, view, adjacency),
+            reverseHasTombstoneSnapshot(graph, view, adjacency),
+            true,
+        );
     }
 
-    if (total_visible_forward != total_visible_reverse) return error.CorruptGraph;
+    try logical.validateVisibleTotals(total_visible_forward, total_visible_reverse);
 }

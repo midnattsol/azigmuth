@@ -7,6 +7,7 @@ const std = @import("std");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
 const iterator_common = @import("iterator_common.zig");
+const live_read_common = @import("live_read_common.zig");
 const types = @import("core/types.zig");
 const page_ops = @import("storage/page_ops.zig");
 const rcu = @import("rcu.zig");
@@ -100,45 +101,29 @@ pub const OutEdgeIterator = struct {
     }
 };
 
-fn forwardSideAdj(node_adj: types.NodeAdj) types.SideAdj {
-    return .{
-        .first_block = node_adj.first_block_fwd,
-        .block_count = node_adj.block_count_fwd,
-        .group_count = node_adj.group_count_fwd,
-        .first_group = node_adj.first_group_fwd,
-    };
-}
-
 /// Creates an OutEdgeIterator for the given node. Returns by value.
 pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!OutEdgeIterator {
     if (!graph.multigraph_enabled) return error.UnsupportedOperation;
-    if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-
-    const reader_token = try rcu.readerEnter(@constCast(graph));
-    errdefer rcu.readerExit(@constCast(graph), reader_token);
-
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    const meta = node_buffer.loadPublishedMeta();
-    const node_adj_snapshot = node_buffer.publishedAdjFromMeta(meta);
-    try node_validity.ensureLiveSnapshot(node_adj_snapshot);
-    const side_snapshot = forwardSideAdj(node_adj_snapshot);
-    try iterator_common.validateReadSideQuick(graph, side_snapshot, .fwd);
+    const capture = try live_read_common.captureNodeSnapshot(graph, node);
+    errdefer rcu.readerExit(@constCast(graph), capture.reader_token);
+    const side_snapshot = live_read_common.sideAdj(.fwd, capture.node_adj_snapshot);
+    try live_read_common.validateForwardSideQuick(graph, side_snapshot);
 
     const initial = iterator_common.buildTraversalState(side_snapshot);
 
     var iterator = OutEdgeIterator{
         .core = graph,
-        .node_adj_snapshot = node_adj_snapshot,
+        .node_adj_snapshot = capture.node_adj_snapshot,
         .contiguous_mode = initial.contiguous_mode,
         .current_block_index = initial.current_block_index,
         .blocks_remaining = initial.blocks_remaining,
         .current_group_index = initial.current_group_index,
         .current_mask = 0,
-        .check_removed_destinations = node_adj_snapshot.flags.needs_repair_fwd,
+        .check_removed_destinations = capture.node_adj_snapshot.flags.needs_repair_fwd,
         .reader_active = true,
-        .reader_token = reader_token,
+        .reader_token = capture.reader_token,
         .groups_visited = 0,
-        .group_count_bound = node_adj_snapshot.group_count_fwd,
+        .group_count_bound = capture.node_adj_snapshot.group_count_fwd,
     };
 
     iterator_common.primeGroupedTraversal(&iterator, graph);

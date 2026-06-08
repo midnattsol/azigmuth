@@ -1,10 +1,10 @@
 const std = @import("std");
-const iterator_common = @import("../iterator_common.zig");
+const snapshot_view = @import("../query/snapshot_view.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const types = @import("../core/types.zig");
-const common = @import("common.zig");
 
 const DfsFrame = struct {
+    node_idx: u32,
     current_block_index: u32,
     blocks_remaining: u16,
     next_group_index: u32,
@@ -15,7 +15,7 @@ const DfsFrame = struct {
 
     check_removed_candidates: bool,
 
-    fn advanceToNextGroup(self: *DfsFrame, view: *const common.CapturedGraphView) bool {
+    fn advanceToNextGroup(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) bool {
         if (self.groups_remaining == 0) return false;
         const group = page_ops.groupAtConst(view.core, self.next_group_index);
         self.current_block_index = group.start;
@@ -25,7 +25,7 @@ const DfsFrame = struct {
         return true;
     }
 
-    fn loadNextNonEmptyMask(self: *DfsFrame, view: *const common.CapturedGraphView) bool {
+    fn loadNextNonEmptyMask(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) bool {
         while (true) {
             while (self.blocks_remaining == 0) {
                 if (!self.advanceToNextGroup(view)) return false;
@@ -43,7 +43,7 @@ const DfsFrame = struct {
         }
     }
 
-    fn next(self: *DfsFrame, view: *const common.CapturedGraphView) ?types.NodeId {
+    fn next(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) ?types.NodeId {
         while (true) {
             while (self.current_mask == 0) {
                 if (!self.loadNextNonEmptyMask(view)) return null;
@@ -59,13 +59,14 @@ const DfsFrame = struct {
     }
 };
 
-fn initFrame(view: *const common.CapturedGraphView, node: types.NodeId) types.GraphError!?DfsFrame {
+fn initFrame(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) types.GraphError!?DfsFrame {
     if (node.index >= view.nodeCount()) return null;
     if (!view.isLiveIndex(node.index)) return null;
 
     const snapshot_side = view.fwd_side[node.index];
     if (snapshot_side.block_count == 0) {
         return .{
+            .node_idx = node.index,
             .current_block_index = 0,
             .blocks_remaining = 0,
             .next_group_index = 0,
@@ -77,6 +78,7 @@ fn initFrame(view: *const common.CapturedGraphView, node: types.NodeId) types.Gr
 
     if (snapshot_side.group_count == 0) {
         return .{
+            .node_idx = node.index,
             .current_block_index = snapshot_side.first_block,
             .blocks_remaining = snapshot_side.block_count,
             .next_group_index = 0,
@@ -87,6 +89,7 @@ fn initFrame(view: *const common.CapturedGraphView, node: types.NodeId) types.Gr
     }
 
     return .{
+        .node_idx = node.index,
         .current_block_index = 0,
         .blocks_remaining = 0,
         .next_group_index = snapshot_side.first_group,
@@ -96,23 +99,36 @@ fn initFrame(view: *const common.CapturedGraphView, node: types.NodeId) types.Gr
     };
 }
 
+fn initFrameLive(view: *const snapshot_view.CapturedGraphView, node_idx: u32) DfsFrame {
+    const snapshot_side = view.fwd_side[node_idx];
+    if (snapshot_side.block_count == 0) {
+        return .{ .node_idx = node_idx, .current_block_index = 0, .blocks_remaining = 0, .next_group_index = 0, .groups_remaining = 0, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+    }
+    if (snapshot_side.group_count == 0) {
+        return .{ .node_idx = node_idx, .current_block_index = snapshot_side.first_block, .blocks_remaining = snapshot_side.block_count, .next_group_index = 0, .groups_remaining = 0, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+    }
+    return .{ .node_idx = node_idx, .current_block_index = 0, .blocks_remaining = 0, .next_group_index = snapshot_side.first_group, .groups_remaining = snapshot_side.group_count, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+}
+
 /// Returns nodes in depth-first order starting from `start` over a fixed
 /// captured graph view.
-pub fn dfsCaptured(view: *const common.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
+pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
     const node_count = view.nodeCount();
     try view.ensureLiveStart(start);
 
     var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
     defer visited.deinit(allocator);
 
-    var stack = try std.ArrayList(DfsFrame).initCapacity(allocator, @min(node_count, 64));
+    var stack = try std.ArrayList(DfsFrame).initCapacity(allocator, node_count);
     defer stack.deinit(allocator);
     var order = try std.ArrayList(types.NodeId).initCapacity(allocator, node_count);
     errdefer order.deinit(allocator);
 
     visited.set(start.index);
-    try order.append(allocator, start);
-    try stack.append(allocator, (try initFrame(view, start)) orelse return error.InvalidNode);
+    order.appendAssumeCapacity(start);
+    if (view.degree_fwd[start.index] != 0) {
+        stack.appendAssumeCapacity(initFrameLive(view, start.index));
+    }
 
     while (stack.items.len > 0) {
         const current = &stack.items[stack.items.len - 1];
@@ -121,13 +137,17 @@ pub fn dfsCaptured(view: *const common.CapturedGraphView, start: types.NodeId, a
         while (current.next(view)) |neighbor| {
             if (visited.isSet(neighbor.index)) continue;
 
-            if (try initFrame(view, neighbor)) |next_frame| {
-                visited.set(neighbor.index);
-                try order.append(allocator, neighbor);
-                try stack.append(allocator, next_frame);
-                pushed = true;
-                break;
+            visited.set(neighbor.index);
+            order.appendAssumeCapacity(neighbor);
+            if (view.degree_fwd[neighbor.index] != 0) {
+                if (view.degree_fwd[current.node_idx] == 1) {
+                    current.* = initFrameLive(view, neighbor.index);
+                } else {
+                    stack.appendAssumeCapacity(initFrameLive(view, neighbor.index));
+                }
             }
+            pushed = true;
+            break;
         }
 
         if (!pushed) {

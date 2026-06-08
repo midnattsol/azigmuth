@@ -4,12 +4,13 @@ const cycle_mod = @import("cycle.zig");
 const dfs_mod = @import("dfs.zig");
 const validate_mod = @import("../maintenance/validate.zig");
 const read_session = @import("../query/read_session.zig");
+const snapshot_view = @import("../query/snapshot_view.zig");
 const types = @import("../core/types.zig");
 
 pub const ReadSnapshot = struct {
     allocator: std.mem.Allocator,
     read: read_session.ReadSession,
-    view: read_session.CapturedGraphView,
+    view: snapshot_view.CapturedGraphView,
 
     pub fn init(read: read_session.ReadSession, allocator: std.mem.Allocator) !ReadSnapshot {
         var owned_read = read;
@@ -32,11 +33,11 @@ pub const ReadSnapshot = struct {
         return self.view.nodeCount();
     }
 
-    pub fn neighbors(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!read_session.SnapshotNeighborIterator {
+    pub fn neighbors(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!snapshot_view.SnapshotNeighborIterator {
         return (try self.view.neighborsCursor(node)) orelse error.InvalidNode;
     }
 
-    pub fn inNeighbors(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!read_session.SnapshotNeighborIterator {
+    pub fn inNeighbors(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!snapshot_view.SnapshotNeighborIterator {
         return (try self.view.inNeighborsCursor(node)) orelse error.InvalidNode;
     }
 
@@ -58,7 +59,7 @@ pub const ReadSnapshot = struct {
         return self.view.inDegree(node);
     }
 
-    pub fn outEdges(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!read_session.SnapshotOutEdgeIterator {
+    pub fn outEdges(self: *const ReadSnapshot, node: types.NodeId) types.GraphError!snapshot_view.SnapshotOutEdgeIterator {
         return (try self.view.outEdges(node)) orelse error.InvalidNode;
     }
 

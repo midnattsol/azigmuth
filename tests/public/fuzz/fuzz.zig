@@ -1,6 +1,6 @@
 const std = @import("std");
 const graphz = @import("graphz");
-const snapshot_api = @import("snapshot_api.zig");
+const snapshot_support = @import("snapshot_support.zig");
 
 const testing = std.testing;
 
@@ -33,10 +33,10 @@ fn expectGraphMatchesModel(
             if (model[source_index][target_index]) expected_out_degree += 1;
             if (model[target_index][source_index]) expected_in_degree += 1;
         }
-        try testing.expectEqual(expected_out_degree, try snapshot_api.outDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
-        try testing.expectEqual(expected_in_degree, try snapshot_api.inDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
+        try testing.expectEqual(expected_out_degree, try snapshot_support.outDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
+        try testing.expectEqual(expected_in_degree, try snapshot_support.inDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
 
-        var iterator = try snapshot_api.neighbors(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator);
+        var iterator = try snapshot_support.neighbors(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator);
         defer iterator.deinit();
         const neighbors = try iterator.materialize(testing.allocator);
         defer testing.allocator.free(neighbors);

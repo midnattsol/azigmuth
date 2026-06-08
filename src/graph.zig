@@ -8,15 +8,14 @@ const page_ops = @import("storage/page_ops.zig");
 const adjacency = @import("adjacency.zig");
 const rcu = @import("rcu.zig");
 const mutation = @import("mutation.zig");
-const query = @import("query.zig");
+const graph_live_query = @import("graph_live_query.zig");
 const repair = @import("maintenance/repair.zig");
 const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
+const graph_snapshot_api = @import("graph_snapshot_api.zig");
 const read_session_mod = @import("query/read_session.zig");
-const snapshot_mod = @import("algorithms/snapshot.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
-const out_edge_iter = @import("out_edge_iterator.zig");
 
 // ── Internal API used by public wrappers ─────────────────────────────────
 pub const NodeId = types.NodeId;
@@ -26,8 +25,8 @@ pub const NodeFlags = types.NodeFlags;
 pub const EdgeFlags = types.EdgeFlags;
 pub const Edge = types.Edge;
 pub const Violation = types.Violation;
-pub const NeighborIterator = query.NeighborIterator;
-pub const OutEdgeIterator = out_edge_iter.OutEdgeIterator;
+pub const NeighborIterator = graph_live_query.NeighborIterator;
+pub const OutEdgeIterator = graph_live_query.OutEdgeIterator;
 pub const EdgeId = types.EdgeId;
 pub const EdgeRef = types.EdgeRef;
 pub const GraphOptions = types.GraphOptions;
@@ -35,7 +34,7 @@ pub const NodeRemovalSummary = types.NodeRemovalSummary;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
 pub const ReadSession = read_session_mod.ReadSession;
-pub const ReadSnapshot = snapshot_mod.ReadSnapshot;
+pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
 pub const SnapshotNeighborIterator = read_session_mod.SnapshotNeighborIterator;
 pub const SnapshotOutEdgeIterator = read_session_mod.SnapshotOutEdgeIterator;
 
@@ -305,49 +304,46 @@ pub const Graph = struct {
 
     // ── Query API ─────────────────────────────────────────────────────
 
-    pub fn neighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
+    pub fn neighbors(self: *const Graph, node: types.NodeId) GraphError!NeighborIterator {
         const core = try self.beginConstCall();
         defer endCall(core);
-        return query.neighbors(core, node);
+        return graph_live_query.neighbors(core, node);
     }
 
-    pub fn inNeighbors(self: *const Graph, node: types.NodeId) GraphError!query.NeighborIterator {
+    pub fn inNeighbors(self: *const Graph, node: types.NodeId) GraphError!NeighborIterator {
         const core = try self.beginConstCall();
         defer endCall(core);
-        return query.inNeighbors(core, node);
+        return graph_live_query.inNeighbors(core, node);
     }
 
     pub fn outDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
         const core = try self.beginConstCall();
         defer endCall(core);
-        return query.outDegree(core, node);
+        return graph_live_query.outDegree(core, node);
     }
 
     pub fn inDegree(self: *const Graph, node: types.NodeId) GraphError!usize {
         const core = try self.beginConstCall();
         defer endCall(core);
-        return query.inDegree(core, node);
+        return graph_live_query.inDegree(core, node);
     }
 
-    pub fn outEdges(self: *const Graph, node: types.NodeId) GraphError!out_edge_iter.OutEdgeIterator {
+    pub fn outEdges(self: *const Graph, node: types.NodeId) GraphError!OutEdgeIterator {
         const core = try self.beginConstCall();
         defer endCall(core);
-        if (!core.multigraph_enabled) return error.UnsupportedOperation;
-        return out_edge_iter.outEdges(core, node);
+        return graph_live_query.outEdges(core, node);
     }
 
     pub fn beginReadSession(self: *const Graph) GraphError!ReadSession {
         const core = try self.beginConstCall();
         errdefer endCall(core);
-
-        const reader_token = try rcu.readerEnter(core);
-        return ReadSession.init(core, reader_token);
+        return graph_snapshot_api.beginReadSession(core);
     }
 
     pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) GraphError!ReadSnapshot {
-        var read = try self.beginReadSession();
-        errdefer read.deinit();
-        return snapshot_mod.ReadSnapshot.init(read, allocator);
+        const core = try self.beginConstCall();
+        errdefer endCall(core);
+        return graph_snapshot_api.snapshot(core, allocator);
     }
 
     // ── Repair API ────────────────────────────────────────────────────
