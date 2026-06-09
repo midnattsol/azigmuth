@@ -339,10 +339,10 @@ pub const Graph = struct {
         return graph_snapshot_api.beginReadSession(core);
     }
 
-    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) GraphError!ReadSnapshot {
+    pub fn snapshot(self: *const Graph, ctx: anytype) GraphError!ReadSnapshot {
         const core = try self.beginConstCall();
         errdefer endCall(core);
-        return graph_snapshot_api.snapshot(core, allocator);
+        return graph_snapshot_api.snapshot(core, ctx);
     }
 
     // ── Repair API ────────────────────────────────────────────────────

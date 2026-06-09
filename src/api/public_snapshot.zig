@@ -65,8 +65,8 @@ pub const ReadSnapshot = opaque {
         return self.innerConst().bfs(start, allocator);
     }
 
-    pub fn dfs(self: *const ReadSnapshot, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        return self.innerConst().dfs(start, allocator);
+    pub fn dfs(self: *const ReadSnapshot, start: internal.NodeId, ctx: anytype) internal.GraphError![]internal.NodeId {
+        return self.innerConst().dfs(start, ctx);
     }
 
     pub fn hasCycle(self: *const ReadSnapshot, allocator: std.mem.Allocator) internal.GraphError!bool {

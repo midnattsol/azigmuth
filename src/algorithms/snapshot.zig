@@ -75,8 +75,8 @@ pub const ReadSnapshot = struct {
         return bfs_mod.bfsCaptured(&self.view, start, allocator);
     }
 
-    pub fn dfs(self: *const ReadSnapshot, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
-        return dfs_mod.dfsCaptured(&self.view, start, allocator);
+    pub fn dfs(self: *const ReadSnapshot, start: types.NodeId, ctx: anytype) types.GraphError![]types.NodeId {
+        return dfs_mod.dfsCaptured(&self.view, start, ctx);
     }
 
     pub fn hasCycle(self: *const ReadSnapshot, allocator: std.mem.Allocator) types.GraphError!bool {

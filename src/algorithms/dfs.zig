@@ -112,17 +112,17 @@ fn initFrameLive(view: *const snapshot_view.CapturedGraphView, node_idx: u32) Df
 
 /// Returns nodes in depth-first order starting from `start` over a fixed
 /// captured graph view.
-pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
+pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, ctx: anytype) types.GraphError![]types.NodeId {
     const node_count = view.nodeCount();
     try view.ensureLiveStart(start);
 
-    var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-    defer visited.deinit(allocator);
+    var visited = try std.DynamicBitSetUnmanaged.initEmpty(ctx.allocator, node_count);
+    defer visited.deinit(ctx.allocator);
 
-    var stack = try std.ArrayList(DfsFrame).initCapacity(allocator, node_count);
-    defer stack.deinit(allocator);
-    var order = try std.ArrayList(types.NodeId).initCapacity(allocator, node_count);
-    errdefer order.deinit(allocator);
+    var stack = try std.ArrayList(DfsFrame).initCapacity(ctx.allocator, node_count);
+    defer stack.deinit(ctx.allocator);
+    var order = try std.ArrayList(types.NodeId).initCapacity(ctx.allocator, node_count);
+    errdefer order.deinit(ctx.allocator);
 
     visited.set(start.index);
     order.appendAssumeCapacity(start);
@@ -155,5 +155,5 @@ pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
         }
     }
 
-    return order.toOwnedSlice(allocator);
+    return order.toOwnedSlice(ctx.allocator);
 }

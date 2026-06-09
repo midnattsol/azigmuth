@@ -15,7 +15,7 @@ fn benchSnapshotNeighborsScanClean(allocator: std.mem.Allocator) !harness.Result
         try graph.addEdge(source, destination, 0, .{});
     }
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
 
     var seen: usize = 0;
@@ -46,7 +46,7 @@ fn benchSnapshotNeighborsScanTombstones(allocator: std.mem.Allocator) !harness.R
         if (destination_idx % 4 == 0) _ = try graph.removeNode(destination);
     }
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
 
     var visible_seen: usize = 0;
@@ -72,7 +72,7 @@ fn benchSnapshotOutDegree(allocator: std.mem.Allocator) !harness.Result {
         try graph.addEdge(source, destination, 0, .{});
     }
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
 
     var total: usize = 0;

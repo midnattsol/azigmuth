@@ -101,10 +101,10 @@ pub const Graph = opaque {
         return self.innerConst().debugValidate(allocator);
     }
 
-    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!*public_snapshot.ReadSnapshot {
-        const snapshot_handle = try allocator.create(internal.ReadSnapshot);
-        errdefer allocator.destroy(snapshot_handle);
-        snapshot_handle.* = try self.innerConst().snapshot(allocator);
+    pub fn snapshot(self: *const Graph, ctx: anytype) internal.GraphError!*public_snapshot.ReadSnapshot {
+        const snapshot_handle = try ctx.allocator.create(internal.ReadSnapshot);
+        errdefer ctx.allocator.destroy(snapshot_handle);
+        snapshot_handle.* = try self.innerConst().snapshot(ctx);
         return @ptrCast(snapshot_handle);
     }
 

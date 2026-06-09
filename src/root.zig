@@ -57,3 +57,6 @@ pub const SnapshotOutEdgeIterator = graph.SnapshotOutEdgeIterator;
 pub const GraphError = graph.GraphError;
 pub const DeinitError = graph.DeinitError;
 pub const Violation = graph.Violation;
+
+// ── Algorithms ────────────────────────────────────────────────────────
+pub const Context = @import("algorithms/context.zig").Context;

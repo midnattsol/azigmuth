@@ -17,8 +17,8 @@ pub fn beginReadSession(core: *graph_core.GraphCore) !ReadSession {
 }
 
 /// Captures a caller-owned snapshot backed by one read session.
-pub fn snapshot(core: *graph_core.GraphCore, allocator: std.mem.Allocator) !ReadSnapshot {
+pub fn snapshot(core: *graph_core.GraphCore, ctx: anytype) !ReadSnapshot {
     var read = try beginReadSession(core);
     errdefer read.deinit();
-    return snapshot_mod.ReadSnapshot.init(read, allocator);
+    return snapshot_mod.ReadSnapshot.init(read, ctx.allocator);
 }
