@@ -90,12 +90,15 @@ fn runBfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, allocator: st
     var snapshot = try graph.snapshot(allocator);
     defer snapshot.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const order = try snapshot.bfs(nodes[0], allocator);
+        const order = try snapshot.bfs(nodes[0], arena_allocator);
         if (order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(order);
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
@@ -106,12 +109,15 @@ fn runDfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, allocator: st
     var snapshot = try graph.snapshot(allocator);
     defer snapshot.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const order = try snapshot.dfs(nodes[0], allocator);
+        const order = try snapshot.dfs(nodes[0], arena_allocator);
         if (order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(order);
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
@@ -227,10 +233,14 @@ fn benchAlgorithmsHasCycleAcyclic(allocator: std.mem.Allocator) !harness.Result 
     var snapshot = try graph.snapshot(allocator);
     defer snapshot.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const has_cycle = try snapshot.hasCycle(allocator);
+        const has_cycle = try snapshot.hasCycle(arena_allocator);
         if (has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -249,10 +259,14 @@ fn benchAlgorithmsHasCycleCyclic(allocator: std.mem.Allocator) !harness.Result {
     var snapshot = try graph.snapshot(allocator);
     defer snapshot.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const has_cycle = try snapshot.hasCycle(allocator);
+        const has_cycle = try snapshot.hasCycle(arena_allocator);
         if (!has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -271,10 +285,14 @@ fn benchAlgorithmsHasCycleCyclicEarly(allocator: std.mem.Allocator) !harness.Res
     var snapshot = try graph.snapshot(allocator);
     defer snapshot.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const has_cycle = try snapshot.hasCycle(allocator);
+        const has_cycle = try snapshot.hasCycle(arena_allocator);
         if (!has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -307,21 +325,26 @@ fn benchSnapshotBundleForwardQueries(allocator: std.mem.Allocator) !harness.Resu
     const nodes = try buildBinaryTree(graph, allocator, 10);
     defer allocator.free(nodes);
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     var snapshot = try graph.snapshot(allocator);
     defer snapshot.deinit();
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const bfs_order = try snapshot.bfs(nodes[0], allocator);
+        _ = arena.reset(.retain_capacity);
+        const bfs_order = try snapshot.bfs(nodes[0], arena_allocator);
         if (bfs_order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(bfs_order);
 
-        const dfs_order = try snapshot.dfs(nodes[0], allocator);
+        _ = arena.reset(.retain_capacity);
+        const dfs_order = try snapshot.dfs(nodes[0], arena_allocator);
         if (dfs_order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(dfs_order);
 
-        const has_cycle = try snapshot.hasCycle(allocator);
+        _ = arena.reset(.retain_capacity);
+        const has_cycle = try snapshot.hasCycle(arena_allocator);
         if (has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
