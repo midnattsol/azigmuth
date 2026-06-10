@@ -92,9 +92,9 @@ test "fuzz: random single-block mutations match a reference matrix" {
     try expectGraphMatchesModel(graph, node_count, &model, expected_edge_count);
 
     // Full structural validation at the end.
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(testing.allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
@@ -147,9 +147,9 @@ test "fuzz: random hub mutations preserve model state across multi-block adjacen
     }
 
     // Full structural validation at the end.
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(testing.allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

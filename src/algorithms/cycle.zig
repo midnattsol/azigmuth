@@ -1,5 +1,6 @@
 const std = @import("std");
-const snapshot_view = @import("../query/snapshot_view.zig");
+const snapshot_iterators = @import("../query/snapshot/iterators.zig");
+const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
 
 /// Returns true if the fixed captured graph view contains at least one
@@ -35,7 +36,7 @@ pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, allocator:
         const current_idx = zero_indegree[head];
         processed_live += 1;
 
-        var cursor = try view.neighborsCursor(.{ .index = current_idx }) orelse continue;
+        var cursor = try snapshot_iterators.neighborsCursor(view, .{ .index = current_idx }) orelse continue;
         while (cursor.next()) |neighbor| {
             const neighbor_idx: usize = neighbor.index;
             std.debug.assert(indegrees[neighbor_idx] > 0);

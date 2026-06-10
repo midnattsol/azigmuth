@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const constants = @import("../core/constants.zig");
+const node_access = @import("../core/node_access.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const graph_mod = @import("../graph.zig");
@@ -144,12 +145,12 @@ pub const GraphBuilder = struct {
 
     fn resetPublishedAdjacencyBuffers(self: *GraphBuilder) void {
         for (0..self.graph.nodeCount()) |node_index| {
-            const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
-            node_buffer.fwd_buffers[0] = std.mem.zeroes(types.SideAdj);
-            node_buffer.fwd_buffers[1] = std.mem.zeroes(types.SideAdj);
-            node_buffer.rev_buffers[0] = std.mem.zeroes(types.SideAdj);
-            node_buffer.rev_buffers[1] = std.mem.zeroes(types.SideAdj);
+            const node = graph_mod.NodeId{ .index = @intCast(node_index) };
+            const node_buffer = node_access.nodeAt(&self.graph.graph, node);
+            node_access.resetPublishedSides(&self.graph.graph, node);
+            page_ops.nodeHotAt(&self.graph.graph, .{ .index = @intCast(node_index) }).storeNextLocalEdgeId(1);
             node_buffer.next_local_edge_id.store(1, .monotonic);
+            page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_index) }).storePublishedMeta(.{});
             node_buffer.storePublishedMeta(.{});
         }
     }
@@ -233,11 +234,15 @@ pub const GraphBuilder = struct {
             edge_index += live;
         }
 
-        const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = source_index });
+        const node = graph_mod.NodeId{ .index = source_index };
+        const node_buffer = node_access.nodeAt(&self.graph.graph, node);
         if (self.graph.graph.multigraph_enabled) {
+            page_ops.nodeHotAt(&self.graph.graph, .{ .index = source_index }).storeNextLocalEdgeId(next_edge_id);
             node_buffer.next_local_edge_id.store(next_edge_id, .monotonic);
         }
-        setContiguousSide(&node_buffer.fwd_buffers[0], first_block, block_count);
+        var side_adj = std.mem.zeroes(types.SideAdj);
+        setContiguousSide(&side_adj, first_block, block_count);
+        node_access.setInitialPublishedFwdSide(&self.graph.graph, node, side_adj);
     }
 
     fn publishForwardAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_fwd: u32) void {
@@ -279,8 +284,10 @@ pub const GraphBuilder = struct {
                 page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev).* = std.mem.zeroes(types.EdgeBlockRev);
             }
 
-            const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
-            setContiguousSide(&node_buffer.rev_buffers[0], next_block_index, block_count);
+            const node = graph_mod.NodeId{ .index = @intCast(node_index) };
+            var side_adj = std.mem.zeroes(types.SideAdj);
+            setContiguousSide(&side_adj, next_block_index, block_count);
+            node_access.setInitialPublishedRevSide(&self.graph.graph, node, side_adj);
             next_block_index += block_count;
         }
 
@@ -322,11 +329,11 @@ pub const GraphBuilder = struct {
 
     fn publishExactDegrees(self: *GraphBuilder, plan: *const FreezePlan) void {
         for (0..self.graph.nodeCount()) |node_index| {
-            const node_buffer = page_ops.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
-            node_buffer.storePublishedMeta(.{
-                .degree_fwd = @intCast(plan.fwd_degrees[node_index]),
-                .degree_rev = @intCast(plan.rev_degrees[node_index]),
-            });
+            const node_buffer = node_access.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
+            const meta = (types.PublishedMeta{}).withFwdDegree(@intCast(plan.fwd_degrees[node_index])).withRevDegree(@intCast(plan.rev_degrees[node_index]));
+            node_access.setPublishedDegrees(&self.graph.graph, .{ .index = @intCast(node_index) }, meta, @intCast(plan.fwd_degrees[node_index]), @intCast(plan.rev_degrees[node_index]));
+            page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_index) }).storePublishedMeta(meta);
+            node_buffer.storePublishedMeta(meta);
         }
     }
 

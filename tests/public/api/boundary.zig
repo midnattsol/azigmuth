@@ -45,7 +45,7 @@ test "addEdge with NodeId from a different graph succeeds when index happens to 
 
     // Verify the edge was added using the index, not the original node identity.
     try testing.expectEqual(@as(u64, 1), graph_b.edgeCount());
-    var snapshot = try graph_b.snapshot(testing.allocator);
+    var snapshot = try graph_b.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     try testing.expectEqual(@as(usize, 1), try snapshot.outDegree(node2_in_b));
 }
@@ -67,7 +67,7 @@ test "NodeId with zero index is valid after addNode called at least once" {
     defer graph.deinit();
 
     _ = try graph.addNode();
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     var neighbors = try snapshot.neighbors(.{ .index = 0 });
     try testing.expect(neighbors.next() == null);

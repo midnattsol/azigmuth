@@ -1,9 +1,11 @@
 const std = @import("std");
-const types = @import("../../core/types.zig");
-const common = @import("../common.zig");
+const node_meta = @import("../../../storage/node/meta.zig");
+const types = @import("../../../core/types.zig");
+const common = @import("../../common.zig");
 
 pub const RelatedNode = struct {
     node_index: u32,
+    node_meta: *node_meta.NodeMeta,
     node_buffer: *types.NodeBuffer,
     claims: common.ClaimedNodeSides,
     fwd_degree_delta: u22,

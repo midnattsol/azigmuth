@@ -10,14 +10,15 @@
 //!   const m = try g.addNode();
 //!   try g.addEdge(n, m, 0, .{});
 //!
-//!   var snapshot = try g.snapshot(allocator);
+//!   const ctx = graphz.Context.init(allocator);
+//!   var snapshot = try g.snapshot(ctx);
 //!   defer snapshot.deinit();
 //!   var neighbors = try snapshot.neighbors(n);
 //!   const all = try neighbors.materialize(allocator);
 //!   defer allocator.free(all);
-//!   const order = try snapshot.bfs(n, allocator);
+//!   const order = try snapshot.bfs(n, ctx);
 //!   defer allocator.free(order);
-//!   const has_cycle = try snapshot.hasCycle(allocator);
+//!   const has_cycle = try snapshot.hasCycle(ctx);
 //!   _ = has_cycle;
 //!
 //! Usage with GraphBuilder:

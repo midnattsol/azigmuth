@@ -33,12 +33,12 @@ pub const ReadSnapshot = opaque {
         return self.innerConst().inNeighbors(node);
     }
 
-    pub fn neighborsMaterialized(self: *const ReadSnapshot, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        return self.innerConst().neighborsMaterialized(node, allocator);
+    pub fn neighborsMaterialized(self: *const ReadSnapshot, node: internal.NodeId, ctx: internal.Context) internal.GraphError![]internal.NodeId {
+        return self.innerConst().neighborsMaterialized(node, ctx);
     }
 
-    pub fn inNeighborsMaterialized(self: *const ReadSnapshot, node: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        return self.innerConst().inNeighborsMaterialized(node, allocator);
+    pub fn inNeighborsMaterialized(self: *const ReadSnapshot, node: internal.NodeId, ctx: internal.Context) internal.GraphError![]internal.NodeId {
+        return self.innerConst().inNeighborsMaterialized(node, ctx);
     }
 
     pub fn outDegree(self: *const ReadSnapshot, node: internal.NodeId) internal.GraphError!usize {
@@ -57,19 +57,19 @@ pub const ReadSnapshot = opaque {
         return self.innerConst().validate();
     }
 
-    pub fn debugValidate(self: *const ReadSnapshot, allocator: std.mem.Allocator) internal.GraphError![]internal.Violation {
-        return self.innerConst().debugValidate(allocator);
+    pub fn debugValidate(self: *const ReadSnapshot, ctx: internal.Context) internal.GraphError![]internal.Violation {
+        return self.innerConst().debugValidate(ctx);
     }
 
-    pub fn bfs(self: *const ReadSnapshot, start: internal.NodeId, allocator: std.mem.Allocator) internal.GraphError![]internal.NodeId {
-        return self.innerConst().bfs(start, allocator);
+    pub fn bfs(self: *const ReadSnapshot, start: internal.NodeId, ctx: internal.Context) internal.GraphError![]internal.NodeId {
+        return self.innerConst().bfs(start, ctx);
     }
 
-    pub fn dfs(self: *const ReadSnapshot, start: internal.NodeId, ctx: anytype) internal.GraphError![]internal.NodeId {
+    pub fn dfs(self: *const ReadSnapshot, start: internal.NodeId, ctx: internal.Context) internal.GraphError![]internal.NodeId {
         return self.innerConst().dfs(start, ctx);
     }
 
-    pub fn hasCycle(self: *const ReadSnapshot, allocator: std.mem.Allocator) internal.GraphError!bool {
-        return self.innerConst().hasCycle(allocator);
+    pub fn hasCycle(self: *const ReadSnapshot, ctx: internal.Context) internal.GraphError!bool {
+        return self.innerConst().hasCycle(ctx);
     }
 };

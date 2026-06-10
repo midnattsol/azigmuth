@@ -96,7 +96,7 @@ test "fuzz failing allocator: random mutations with intermittent allocation fail
                 error.CorruptGraph => return error.TestExpectedEqual,
                 else => {},
             };
-            if (graph.debugValidate(testing.allocator)) |violations| {
+            if (graph.debugValidate(.{ .allocator = testing.allocator })) |violations| {
                 defer testing.allocator.free(violations);
                 try testing.expectEqual(@as(usize, 0), violations.len);
             } else |_| {}

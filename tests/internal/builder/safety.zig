@@ -128,7 +128,7 @@ test "builder: freeze produces zero-violation debugValidate" {
     var frozen = try builder.freeze();
     defer frozen.deinit();
 
-    const violations = try frozen.debugValidate(testing.allocator);
+    const violations = try frozen.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

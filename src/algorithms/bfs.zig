@@ -1,5 +1,6 @@
 const std = @import("std");
-const snapshot_view = @import("../query/snapshot_view.zig");
+const snapshot_iterators = @import("../query/snapshot/iterators.zig");
+const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
 
 /// Returns nodes in breadth-first order starting from `start` over a fixed
@@ -20,7 +21,7 @@ pub fn bfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         const current = queue.items[head];
-        var cursor = try view.neighborsCursor(current) orelse continue;
+        var cursor = try snapshot_iterators.neighborsCursor(view, current) orelse continue;
         while (cursor.next()) |neighbor| {
             if (!visited.isSet(neighbor.index)) {
                 visited.set(neighbor.index);

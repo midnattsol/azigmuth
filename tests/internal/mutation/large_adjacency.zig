@@ -35,6 +35,7 @@ fn publishReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_
     publish.publishedRevSide(node).first_block = block;
     publish.publishedRevSide(node).block_count = 1;
     publish.setPublishedRevDegree(node, 1);
+    try publish.syncToPublished(graph, destination_index);
 }
 
 test "large adjacency: removeEdge from tail block preserves all blocks when adjacency has >128 blocks" {
@@ -58,6 +59,7 @@ test "large adjacency: removeEdge from tail block preserves all blocks when adja
     publish.publishedFwdSide(source_node).group_count = 0;
     publish.setPublishedFwdDegree(source_node, block_count);
     publish.setPublishedFlags(source_node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    try publish.syncToPublished(&graph, source.index);
 
     for (1..block_count + 1) |dest_idx| {
         try publishReverseSource(&graph, @intCast(dest_idx), source.index);
@@ -96,6 +98,7 @@ test "large adjacency: addEdge COW preserves all blocks when adjacency has >128 
     publish.publishedFwdSide(source_node).group_count = 0;
     publish.setPublishedFwdDegree(source_node, 63);
     publish.setPublishedFlags(source_node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    try publish.syncToPublished(&graph, source.index);
 
     for (0..63) |j| {
         try publishReverseSource(&graph, 1 + @as(u32, @intCast(j)), source.index);
@@ -143,6 +146,7 @@ test "large adjacency: addEdge tail COW does not reject when MAX_GROUPS_PER_NODE
     publish.publishedFwdSide(source_node).first_group = g0;
     publish.setPublishedFlags(source_node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     publish.setPublishedFwdDegree(source_node, 256);
+    try publish.syncToPublished(&graph, source.index);
 
     for (1..257) |dest_idx| {
         try publishReverseSource(&graph, @intCast(dest_idx), source.index);

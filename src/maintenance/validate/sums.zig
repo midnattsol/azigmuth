@@ -40,15 +40,9 @@ pub fn sumGroupedRuns(graph: *const graph_core.GraphCore, first_group: u32, grou
 
 pub fn sumAdjacency(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) u64 {
     var total: u64 = 0;
-    common.forEachRunInAdj(graph, adjacency, side, &total, struct {
-        fn callback(
-            inner_graph: *const graph_core.GraphCore,
-            inner_total: *u64,
-            start: u32,
-            count: u16,
-            _: bool,
-        ) !void {
-            inner_total.* += sumContiguousBlocks(inner_graph, start, count, side);
+    common.forEachNodeIdInAdj(graph, adjacency, side, &total, struct {
+        fn callback(_: *const graph_core.GraphCore, inner_total: *u64, _: u32) !void {
+            inner_total.* += 1;
         }
     }.callback) catch return total;
     return total;
@@ -75,17 +69,9 @@ pub fn sumVisibleAdjacency(graph: *const graph_core.GraphCore, adjacency: types.
     if (adjacency.flags.removed) return 0;
 
     var total: u64 = 0;
-    common.forEachRunInAdj(graph, adjacency, side, &total, struct {
-        fn callback(
-            inner_graph: *const graph_core.GraphCore,
-            inner_total: *u64,
-            start: u32,
-            count: u16,
-            _: bool,
-        ) !void {
-            for (start..start + count) |block_index| {
-                inner_total.* += countVisibleEntriesInBlock(inner_graph, @intCast(block_index), side);
-            }
+    common.forEachNodeIdInAdj(graph, adjacency, side, &total, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_total: *u64, candidate_index: u32) !void {
+            if (node_validity.isNodeLiveIndex(inner_graph, candidate_index)) inner_total.* += 1;
         }
     }.callback) catch return total;
     return total;

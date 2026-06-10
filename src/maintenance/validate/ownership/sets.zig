@@ -1,8 +1,8 @@
-const common = @import("common.zig");
-const stacks = @import("stacks.zig");
+const common = @import("../common.zig");
+const stacks = @import("../stacks.zig");
 const std = @import("std");
-const constants = @import("../../core/constants.zig");
-const graph_core = @import("../../core/graph_core.zig");
+const constants = @import("../../../core/constants.zig");
+const graph_core = @import("../../../core/graph_core.zig");
 
 pub fn buildFreeBlockSet(
     graph: *const graph_core.GraphCore,

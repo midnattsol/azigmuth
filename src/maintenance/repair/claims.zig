@@ -1,13 +1,14 @@
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
+const node_hot = @import("../../storage/node/hot.zig");
 const types = @import("../../core/types.zig");
-const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency/mod.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
 const mutation_common = @import("../../mutation/common.zig");
 const debt_mod = @import("debt.zig");
+const page_ops = @import("../../storage/page_ops.zig");
 
 const WriterGuard = struct {
     graph: *graph_core.GraphCore,
@@ -25,23 +26,29 @@ pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
     return .{ .graph = graph };
 }
 
-pub fn claimNodeAdjacency(node_buffer: *types.NodeBuffer, comptime side: adjacency.AdjSide) !void {
-    const claim = if (side == .fwd) &node_buffer.fwd_claim else &node_buffer.rev_claim;
-    if (claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+pub fn claimNodeAdjacency(hot: *node_hot.NodeHot, comptime side: adjacency.AdjSide) !void {
+    switch (side) {
+        .fwd => try hot.claimFwd(),
+        .rev => try hot.claimRev(),
+    }
 }
 
-pub fn releaseNodeAdjacency(node_buffer: *types.NodeBuffer, comptime side: adjacency.AdjSide) void {
-    const claim = if (side == .fwd) &node_buffer.fwd_claim else &node_buffer.rev_claim;
-    claim.store(0, .release);
+pub fn releaseNodeAdjacency(hot: *node_hot.NodeHot, comptime side: adjacency.AdjSide) void {
+    switch (side) {
+        .fwd => hot.releaseFwd(),
+        .rev => hot.releaseRev(),
+    }
 }
 
-pub fn claimNodeForPublish(node_buffer: *types.NodeBuffer) !void {
-    try claimNodeAdjacency(node_buffer, .fwd);
-    errdefer releaseNodeAdjacency(node_buffer, .fwd);
-    try claimNodeAdjacency(node_buffer, .rev);
+pub fn claimNodeForPublish(graph: *graph_core.GraphCore, node: types.NodeId) !void {
+    const hot = try page_ops.ensureNodeHotAt(graph, node);
+    try claimNodeAdjacency(hot, .fwd);
+    errdefer releaseNodeAdjacency(hot, .fwd);
+    try claimNodeAdjacency(hot, .rev);
 }
 
-pub fn releaseNodeForPublish(node_buffer: *types.NodeBuffer) void {
-    releaseNodeAdjacency(node_buffer, .rev);
-    releaseNodeAdjacency(node_buffer, .fwd);
+pub fn releaseNodeForPublish(graph: *graph_core.GraphCore, node: types.NodeId) void {
+    const hot = page_ops.nodeHotAt(graph, node);
+    releaseNodeAdjacency(hot, .rev);
+    releaseNodeAdjacency(hot, .fwd);
 }

@@ -5,26 +5,79 @@ const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency/mod.zig");
+const node_published = @import("../../storage/node/published.zig");
+const node_tiny = @import("../../storage/node/tiny.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
 const side_adj = @import("../../adjacency/side_ops.zig");
 const mutation_common = @import("../../mutation/common.zig");
 const debt_mod = @import("debt.zig");
+const side_rebuild_apply = @import("side_rebuild_apply.zig");
 
 const ReverseSourceMatchCount = struct {
     source_idx: u32,
     total: usize = 0,
 };
 
-fn countReverseSourceMatch(
-    graph: *const graph_core.GraphCore,
-    count: *ReverseSourceMatchCount,
-    block_idx: u32,
-    slot: u7,
-) !void {
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-    if (block.sources[slot] == count.source_idx) count.total += 1;
+fn countReverseSourceMatch(_: *const graph_core.GraphCore, count: *ReverseSourceMatchCount, source_idx: u32) !void {
+    if (source_idx == count.source_idx) count.total += 1;
 }
+
+fn countLiveTinyForwardEntries(
+    graph: *const graph_core.GraphCore,
+    published_side: types.SideAdj,
+) !u16 {
+    var live_after: u16 = 0;
+    try side_adj.forEachForwardEntryInSide(graph, published_side, &live_after, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_live_after: *u16, entry: side_adj.ForwardEntryView) !void {
+            if (entry.destination < inner_graph.publishedNodeCount() and !node_validity.isNodeRemovedIndex(inner_graph, entry.destination)) {
+                inner_live_after.* += 1;
+            }
+        }
+    }.callback);
+    return live_after;
+}
+
+fn fillLiveTinyForwardEntries(
+    graph: *const graph_core.GraphCore,
+    published_side: types.SideAdj,
+    slot: *node_tiny.TinyFwdSlot,
+) !u16 {
+    const FillContext = struct {
+        slot: *node_tiny.TinyFwdSlot,
+        write_idx: u16 = 0,
+    };
+
+    var fill = FillContext{ .slot = slot };
+    try side_adj.forEachForwardEntryInSide(graph, published_side, &fill, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_fill: *FillContext, entry: side_adj.ForwardEntryView) !void {
+            if (entry.destination >= inner_graph.publishedNodeCount() or node_validity.isNodeRemovedIndex(inner_graph, entry.destination)) return;
+            inner_fill.slot.entries[inner_fill.write_idx] = .{
+                .destination = entry.destination,
+                .relation = entry.relation,
+                .flags = entry.flags,
+                .edge_id = entry.edge_id,
+            };
+            inner_fill.write_idx += 1;
+        }
+    }.callback);
+    return fill.write_idx;
+}
+
+fn clearForwardSide(adj: *types.NodeAdj) void {
+    adj.first_block_fwd = 0;
+    adj.block_count_fwd = 0;
+    adj.group_count_fwd = 0;
+    adj.first_group_fwd = 0;
+}
+
+fn writeTinyForwardSide(adj: *types.NodeAdj, slot_idx: u32, live_count: u16) void {
+    adj.first_block_fwd = slot_idx;
+    adj.block_count_fwd = node_published.TINY_MODE_BIT | live_count;
+    adj.group_count_fwd = 0;
+    adj.first_group_fwd = 0;
+}
+
 pub const ForwardTombstoneCompaction = struct {
     staging_adj: types.NodeAdj,
     live_after: usize,
@@ -36,12 +89,41 @@ pub const ReverseTombstoneCompaction = struct {
     live_after: usize,
 };
 
+fn rebuildTinyForwardLive(
+    graph: *graph_core.GraphCore,
+    node_idx: u32,
+    published_adj: types.NodeAdj,
+) !ForwardTombstoneCompaction {
+    const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
+    const live_after = try countLiveTinyForwardEntries(graph, published_side);
+
+    var staging_adj = published_adj;
+    const original_count = node_published.NodePublished.tinyCount(&published_side);
+    if (live_after == 0) {
+        clearForwardSide(&staging_adj);
+        debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
+        return .{ .staging_adj = staging_adj, .live_after = 0, .removed_count = original_count };
+    }
+
+    const new_slot_idx = try page_ops.allocTinyFwdSlot(graph);
+    const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
+    new_slot.* = std.mem.zeroes(node_tiny.TinyFwdSlot);
+    const copied_live_count = try fillLiveTinyForwardEntries(graph, published_side, new_slot);
+
+    writeTinyForwardSide(&staging_adj, new_slot_idx, copied_live_count);
+    debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
+    return .{ .staging_adj = staging_adj, .live_after = copied_live_count, .removed_count = original_count - copied_live_count };
+}
+
 pub fn rebuildForwardLive(
     graph: *graph_core.GraphCore,
     node_idx: u32,
     published_adj: types.NodeAdj,
     allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
+    const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
+    if (node_published.NodePublished.isTiny(&published_side)) return rebuildTinyForwardLive(graph, node_idx, published_adj);
+
     var result = try sorted_rebuild.sortedRebuildForward(
         graph,
         published_adj.first_block_fwd,
@@ -52,20 +134,16 @@ pub fn rebuildForwardLive(
     );
     defer result.new_blocks.deinit(graph.allocator);
 
-    allocs.adoptBlocks(graph.allocator, .fwd, result.new_blocks.items) catch |err| {
+    const rebuilt_side = side_rebuild_apply.adoptSortedRebuildSide(graph, .fwd, &result, allocs) catch |err| {
         for (result.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, .fwd);
         return err;
     };
 
     var staging_adj = published_adj;
-    {
-        var tmp: types.SideAdj = undefined;
-        try side_adj.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
-        staging_adj.first_block_fwd = tmp.first_block;
-        staging_adj.block_count_fwd = tmp.block_count;
-        staging_adj.group_count_fwd = tmp.group_count;
-        staging_adj.first_group_fwd = tmp.first_group;
-    }
+    staging_adj.first_block_fwd = rebuilt_side.first_block;
+    staging_adj.block_count_fwd = rebuilt_side.block_count;
+    staging_adj.group_count_fwd = rebuilt_side.group_count;
+    staging_adj.first_group_fwd = rebuilt_side.first_group;
     debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0 };
@@ -74,31 +152,26 @@ pub fn rebuildForwardLive(
 pub fn countReverseMatches(
     graph: *const graph_core.GraphCore,
     first_block: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group: u32,
     source_idx: u32,
 ) !usize {
+    const side_view: types.SideAdj = .{
+        .first_block = first_block,
+        .block_count = block_count,
+        .group_count = group_count,
+        .first_group = first_group,
+    };
     var count = ReverseSourceMatchCount{ .source_idx = source_idx };
-    try side_adj.forEachSlotInSide(
-        graph,
-        .{
-            .first_block = first_block,
-            .block_count = block_count,
-            .group_count = group_count,
-            .first_group = first_group,
-        },
-        .rev,
-        &count,
-        countReverseSourceMatch,
-    );
+    try side_adj.forEachNodeIdInSide(graph, side_view, .rev, &count, countReverseSourceMatch);
     return count.total;
 }
 
 pub fn prepareReverseDrop(
     graph: *graph_core.GraphCore,
     first_block: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group: u32,
     source_idx: u32,
@@ -128,20 +201,16 @@ pub fn rebuildReverseDrop(
     );
     defer result.new_blocks.deinit(graph.allocator);
 
-    allocs.adoptBlocks(graph.allocator, .rev, result.new_blocks.items) catch |err| {
+    const rebuilt_side = side_rebuild_apply.adoptSortedRebuildSide(graph, .rev, &result, allocs) catch |err| {
         for (result.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, .rev);
         return err;
     };
 
     var staging_adj = published_adj;
-    {
-        var tmp: types.SideAdj = undefined;
-        try side_adj.buildSideFromBlocks(&tmp, graph, result.new_blocks.items, allocs);
-        staging_adj.first_block_rev = tmp.first_block;
-        staging_adj.block_count_rev = tmp.block_count;
-        staging_adj.group_count_rev = tmp.group_count;
-        staging_adj.first_group_rev = tmp.first_group;
-    }
+    staging_adj.first_block_rev = rebuilt_side.first_block;
+    staging_adj.block_count_rev = rebuilt_side.block_count;
+    staging_adj.group_count_rev = rebuilt_side.group_count;
+    staging_adj.first_group_rev = rebuilt_side.first_group;
     debt_mod.updateRepairDebt(graph, &staging_adj, destination_idx, .rev);
 
     return .{ .staging_adj = staging_adj, .live_after = result.live_after };

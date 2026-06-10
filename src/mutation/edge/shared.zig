@@ -1,7 +1,10 @@
 const std = @import("std");
 const graph_core = @import("../../core/graph_core.zig");
-const types = @import("../../core/types.zig");
+const node_access = @import("../../core/node_access.zig");
+const node_meta_mod = @import("../../storage/node/meta.zig");
+const node_published_mod = @import("../../storage/node/published.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const types = @import("../../core/types.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const side_runs = @import("../../adjacency/runs.zig");
 const common = @import("../common.zig");
@@ -41,6 +44,10 @@ pub const OldGroupChain = struct {
 };
 
 pub const EndpointState = struct {
+    source_node_meta: *node_meta_mod.NodeMeta,
+    destination_node_meta: *node_meta_mod.NodeMeta,
+    source_published: *node_published_mod.NodePublished,
+    destination_published: *node_published_mod.NodePublished,
     source_node: *types.NodeBuffer,
     destination_node: *types.NodeBuffer,
     claims: common.ClaimedAdjacencies,
@@ -61,18 +68,26 @@ pub fn claimEndpoints(
         return error.InvalidNode;
     }
 
-    const source_node = page_ops.nodeAt(graph, source);
-    const destination_node = page_ops.nodeAt(graph, destination);
-    var claims = try common.tryClaimAdjacencies(source_node, destination_node, source.index, destination.index);
+    const source_node = node_access.nodeAt(graph, source);
+    const destination_node = node_access.nodeAt(graph, destination);
+    const source_node_meta = page_ops.nodeMetaAt(graph, source);
+    const destination_node_meta = page_ops.nodeMetaAt(graph, destination);
+    const source_published = try page_ops.ensureNodePublishedAt(graph, source);
+    const destination_published = if (source.index == destination.index) source_published else try page_ops.ensureNodePublishedAt(graph, destination);
+    var claims = try common.tryClaimAdjacencies(graph, source_node, destination_node, source.index, destination.index);
     errdefer claims.release();
 
-    const source_meta = source_node.loadPublishedMeta();
-    const destination_meta = destination_node.loadPublishedMeta();
+    const source_meta = node_access.loadPublishedMeta(source_node);
+    const destination_meta = node_access.loadPublishedMeta(destination_node);
     if (source_meta.removed or destination_meta.removed) return error.InvalidNode;
 
     return .{
         .source_node = source_node,
+        .source_node_meta = source_node_meta,
+        .source_published = source_published,
         .destination_node = destination_node,
+        .destination_node_meta = destination_node_meta,
+        .destination_published = destination_published,
         .claims = claims,
         .source_meta = source_meta,
         .destination_meta = destination_meta,
@@ -94,12 +109,12 @@ pub fn publishAdded(
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishBothDelta(endpoints.source_node, endpoints.source_meta, merged_flags, 1, 1);
+        _ = common.publishBothDelta(endpoints.source_node_meta, endpoints.source_published, endpoints.source_node, endpoints.source_meta, merged_flags, 1, 1);
         return;
     }
 
-    _ = common.publishStagedRev(endpoints.destination_node, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, 1);
-    _ = common.publishStagedFwd(endpoints.source_node, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, 1);
+    _ = common.publishStagedRev(endpoints.destination_node_meta, endpoints.destination_published, endpoints.destination_node, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, 1);
+    _ = common.publishStagedFwd(endpoints.source_node_meta, endpoints.source_published, endpoints.source_node, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, 1);
 }
 
 /// Retires superseded blocks, runs, and group chains after addEdge publication.

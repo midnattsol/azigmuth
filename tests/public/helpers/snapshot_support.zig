@@ -38,43 +38,43 @@ pub const SnapshotOutEdges = struct {
 };
 
 pub fn neighbors(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !SnapshotNeighbors {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     errdefer snapshot.deinit();
     return .{ .snapshot = snapshot, .iterator = try snapshot.neighbors(node) };
 }
 
 pub fn inNeighbors(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !SnapshotNeighbors {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     errdefer snapshot.deinit();
     return .{ .snapshot = snapshot, .iterator = try snapshot.inNeighbors(node) };
 }
 
 pub fn outEdges(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !SnapshotOutEdges {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     errdefer snapshot.deinit();
     return .{ .snapshot = snapshot, .iterator = try snapshot.outEdges(node) };
 }
 
 pub fn outDegree(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !usize {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.outDegree(node);
 }
 
 pub fn inDegree(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !usize {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.inDegree(node);
 }
 
 pub fn neighborsMaterialized(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) ![]graphz.NodeId {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    return snapshot.neighborsMaterialized(node, allocator);
+    return snapshot.neighborsMaterialized(node, .{ .allocator = allocator });
 }
 
 pub fn inNeighborsMaterialized(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) ![]graphz.NodeId {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    return snapshot.inNeighborsMaterialized(node, allocator);
+    return snapshot.inNeighborsMaterialized(node, .{ .allocator = allocator });
 }

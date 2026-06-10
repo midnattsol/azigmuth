@@ -1,5 +1,7 @@
 const graph_core = @import("../core/graph_core.zig");
-const iterator_common = @import("iterator_common.zig");
+const constants = @import("../core/constants.zig");
+const node_access = @import("../core/node_access.zig");
+const side_traversal = @import("side_traversal.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const rcu = @import("../concurrency/rcu.zig");
@@ -12,7 +14,6 @@ pub const LiveReadSnapshot = struct {
     node_adj_snapshot: types.NodeAdj,
 };
 
-/// Extracts one side view from a full published node adjacency snapshot.
 pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.SideAdj {
     return switch (direction) {
         .fwd => .{ .first_block = node_adj.first_block_fwd, .block_count = node_adj.block_count_fwd, .group_count = node_adj.group_count_fwd, .first_group = node_adj.first_group_fwd },
@@ -27,20 +28,43 @@ pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeI
     const reader_token = try rcu.readerEnter(@constCast(graph));
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    const meta = node_buffer.loadPublishedMeta();
-    const node_adj_snapshot = node_buffer.publishedAdjFromMeta(meta);
+    const node_buffer = node_access.nodeAtConst(graph, node);
+    const meta = node_access.loadPublishedMeta(node_buffer);
+    const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
 
     return .{ .reader_token = reader_token, .meta = meta, .node_adj_snapshot = node_adj_snapshot };
 }
 
-/// Validates the basic layout of one forward side snapshot before iteration.
 pub fn validateForwardSideQuick(graph: *const graph_core.GraphCore, side_snapshot: types.SideAdj) types.GraphError!void {
-    try iterator_common.validateReadSideQuick(graph, side_snapshot, .fwd);
+    try side_traversal.validateReadSideQuick(graph, side_snapshot, .fwd);
 }
 
-/// Validates the basic layout of one reverse side snapshot before iteration.
 pub fn validateReverseSideQuick(graph: *const graph_core.GraphCore, side_snapshot: types.SideAdj) types.GraphError!void {
-    try iterator_common.validateReadSideQuick(graph, side_snapshot, .rev);
+    try side_traversal.validateReadSideQuick(graph, side_snapshot, .rev);
+}
+
+/// Returns whether a candidate node should be treated as removed during live iteration.
+pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_index: u32) bool {
+    if (candidate_index >= graph.publishedNodeCount()) return true;
+    const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
+    if (iterator.cached_node_page == null or iterator.cached_node_page_index != page_index) {
+        iterator.cached_node_page = page_ops.nodePageAtConst(graph, page_index);
+        iterator.cached_node_page_index = page_index;
+    }
+
+    const slot_index = page_ops.slotOf(candidate_index, constants.NODES_PER_PAGE);
+    return node_access.loadPublishedMeta(&iterator.cached_node_page.?[slot_index]).removed;
+}
+
+/// Releases the reader token held by one live iterator, if still active.
+pub fn deinitReader(iterator: anytype, graph: *const graph_core.GraphCore) void {
+    if (!iterator.reader_active) return;
+
+    switch (rcu.beginCloseReaderToken(iterator.reader_token)) {
+        .inactive => {},
+        .pending => {},
+        .finalize => rcu.finalizeReaderExit(@constCast(graph), iterator.reader_token),
+    }
+    iterator.reader_active = false;
 }

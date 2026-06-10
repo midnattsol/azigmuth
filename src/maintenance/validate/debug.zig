@@ -1,11 +1,13 @@
-//! Debug validation — exhaustive check with allocation for detailed v.
+//! Debug validation — exhaustive allocating checks.
+//! Live debug validation audits the mutable engine state; snapshot debug
+//! validation audits only the captured view plus the referenced adjacency data.
 
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
-const snapshot_view = @import("../../query/snapshot_view.zig");
+const snapshot_view = @import("../../query/snapshot/view.zig");
 const std = @import("std");
 const common = @import("common.zig");
-const driver = @import("debug_driver.zig");
+const driver = @import("debug/driver.zig");
 
 pub fn debugValidate(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator) ![]types.Violation {
     const reader_token = try common.readerEnter(graph);

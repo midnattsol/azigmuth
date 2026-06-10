@@ -5,6 +5,11 @@ const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const adjacency = @import("../adjacency/mod.zig");
+const node_meta = @import("node/meta.zig");
+const node_hot = @import("node/hot.zig");
+const node_hot_layout = @import("node/hot_layout.zig");
+const node_published = @import("node/published.zig");
+const node_tiny = @import("node/tiny.zig");
 
 const EMPTY_INDEX: u32 = constants.END_OF_CHAIN;
 const StackKind = enum { free, retired };
@@ -24,20 +29,137 @@ pub inline fn makeIndex(page_index: u32, slot_index: u32, comptime entries_per_p
 /// Returns mutable access to one node buffer by flat node id.
 pub fn nodeAt(graph: *graph_core.GraphCore, id: types.NodeId) *types.NodeBuffer {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    const page = loadPageMut(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+    const page = loadPageMut(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn nodeMetaAt(graph: *graph_core.GraphCore, id: types.NodeId) *node_meta.NodeMeta {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = loadPageMut(node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn ensureNodeMetaPage(graph: *graph_core.GraphCore, page_index: u32) ![]node_meta.NodeMeta {
+    return ensurePage(graph, node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
+}
+
+/// Ensures the node page exists and returns mutable access to one node buffer.
+pub fn ensureNodeAt(graph: *graph_core.GraphCore, id: types.NodeId) !*types.NodeBuffer {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = try ensureNodePage(graph, page_index);
     return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
 /// Returns read-only access to one node buffer by flat node id.
 pub fn nodeAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const types.NodeBuffer {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    const page = loadPage(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+    const page = loadPage(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
     return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn nodeMetaAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const node_meta.NodeMeta {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = loadPage(node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn ensureNodePublishedPage(graph: *graph_core.GraphCore, page_index: u32) ![]node_published.NodePublished {
+    return ensurePage(graph, node_published.NodePublished, &graph.node_published_pages, page_index, constants.NODES_PER_PAGE);
+}
+
+pub fn ensureNodePublishedAt(graph: *graph_core.GraphCore, id: types.NodeId) !*node_published.NodePublished {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = try ensureNodePublishedPage(graph, page_index);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn nodePublishedAt(graph: *graph_core.GraphCore, id: types.NodeId) *node_published.NodePublished {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = loadPageMut(node_published.NodePublished, &graph.node_published_pages, page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn nodePublishedAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const node_published.NodePublished {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const raw = graph.node_published_pages.load(page_index);
+    std.debug.assert(raw != 0);
+    const page = loadPage(node_published.NodePublished, &graph.node_published_pages, page_index, constants.NODES_PER_PAGE);
+    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
+}
+
+pub fn ensureNodeHotPage(graph: *graph_core.GraphCore, page_index: u32) ![]node_hot_layout.Slot {
+    return ensurePage(graph, node_hot_layout.Slot, &graph.node_hot_pages, page_index, constants.NODES_PER_PAGE);
+}
+
+pub fn ensureNodeHotAt(graph: *graph_core.GraphCore, id: types.NodeId) !*node_hot.NodeHot {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = try ensureNodeHotPage(graph, page_index);
+    return page[slotOf(id.index, constants.NODES_PER_PAGE)].node();
+}
+
+pub fn nodeHotAt(graph: *graph_core.GraphCore, id: types.NodeId) *node_hot.NodeHot {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = loadPageMut(node_hot_layout.Slot, &graph.node_hot_pages, page_index, constants.NODES_PER_PAGE);
+    return page[slotOf(id.index, constants.NODES_PER_PAGE)].node();
+}
+
+pub fn nodeHotAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const node_hot.NodeHot {
+    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
+    const page = loadPage(node_hot_layout.Slot, &graph.node_hot_pages, page_index, constants.NODES_PER_PAGE);
+    return page[slotOf(id.index, constants.NODES_PER_PAGE)].nodeConst();
+}
+
+fn ensureTinyFwdPage(graph: *graph_core.GraphCore, page_index: u32) ![]node_tiny.TinyFwdSlot {
+    return ensurePage(graph, node_tiny.TinyFwdSlot, &graph.tiny_fwd_pages, page_index, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
+}
+
+fn ensureTinyRevPage(graph: *graph_core.GraphCore, page_index: u32) ![]node_tiny.TinyRevSlot {
+    return ensurePage(graph, node_tiny.TinyRevSlot, &graph.tiny_rev_pages, page_index, node_tiny.TINY_REV_SLOTS_PER_PAGE);
+}
+
+pub fn tinyFwdAt(graph: *graph_core.GraphCore, slot_idx: u32) *node_tiny.TinyFwdSlot {
+    return pageEntryAt(node_tiny.TinyFwdSlot, &graph.tiny_fwd_pages, slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
+}
+
+pub fn tinyFwdAtConst(graph: *const graph_core.GraphCore, slot_idx: u32) *const node_tiny.TinyFwdSlot {
+    return pageEntryAtConst(node_tiny.TinyFwdSlot, &graph.tiny_fwd_pages, slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
+}
+
+pub fn tinyRevAt(graph: *graph_core.GraphCore, slot_idx: u32) *node_tiny.TinyRevSlot {
+    return pageEntryAt(node_tiny.TinyRevSlot, &graph.tiny_rev_pages, slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
+}
+
+pub fn tinyRevAtConst(graph: *const graph_core.GraphCore, slot_idx: u32) *const node_tiny.TinyRevSlot {
+    return pageEntryAtConst(node_tiny.TinyRevSlot, &graph.tiny_rev_pages, slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
+}
+
+pub fn allocTinyFwdSlot(graph: *graph_core.GraphCore) !u32 {
+    while (true) {
+        const slot_idx = @atomicLoad(u32, &graph.tiny_fwd_count, .acquire);
+        const page_index = pageOf(slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
+        _ = try ensureTinyFwdPage(graph, page_index);
+        if (@cmpxchgWeak(u32, &graph.tiny_fwd_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
+            tinyFwdAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyFwdSlot);
+            return slot_idx;
+        }
+    }
+}
+
+pub fn allocTinyRevSlot(graph: *graph_core.GraphCore) !u32 {
+    while (true) {
+        const slot_idx = @atomicLoad(u32, &graph.tiny_rev_count, .acquire);
+        const page_index = pageOf(slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
+        _ = try ensureTinyRevPage(graph, page_index);
+        if (@cmpxchgWeak(u32, &graph.tiny_rev_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
+            tinyRevAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyRevSlot);
+            return slot_idx;
+        }
+    }
 }
 
 /// Returns one published node page as a read-only slice.
 pub fn nodePageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []const types.NodeBuffer {
-    return loadPage(types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+    return loadPage(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
 }
 
 fn ptrFromRaw(comptime T: type, raw: usize, comptime len: usize) []T {
@@ -50,14 +172,14 @@ fn ptrFromRawConst(comptime T: type, raw: usize, comptime len: usize) []const T 
     return page_ptr[0..len];
 }
 
-fn loadPage(comptime T: type, pages: []const std.atomic.Value(usize), page_index: u32, comptime entries_per_page: usize) []const T {
-    const raw = pages[@intCast(page_index)].load(.acquire);
+fn loadPage(comptime T: type, directory: anytype, page_index: u32, comptime entries_per_page: usize) []const T {
+    const raw = directory.load(page_index);
     std.debug.assert(raw != 0);
     return ptrFromRawConst(T, raw, entries_per_page);
 }
 
-fn loadPageMut(comptime T: type, pages: []const std.atomic.Value(usize), page_index: u32, comptime entries_per_page: usize) []T {
-    const raw = pages[@intCast(page_index)].load(.acquire);
+fn loadPageMut(comptime T: type, directory: anytype, page_index: u32, comptime entries_per_page: usize) []T {
+    const raw = directory.load(page_index);
     std.debug.assert(raw != 0);
     return ptrFromRaw(T, raw, entries_per_page);
 }
@@ -74,20 +196,20 @@ fn initMetaPage(page: []types.BlockMeta) void {
 fn ensurePage(
     graph: *graph_core.GraphCore,
     comptime T: type,
-    pages: []std.atomic.Value(usize),
+    directory: anytype,
     page_index: u32,
     comptime entries_per_page: usize,
 ) ![]T {
-    if (page_index >= pages.len) return error.OutOfMemory;
-
-    const existing = pages[@intCast(page_index)].load(.acquire);
+    const slot = try directory.slotPtr(graph.allocator, page_index);
+    const existing = slot.load(.acquire);
     if (existing != 0) return ptrFromRaw(T, existing, entries_per_page);
 
     const new_page = try graph.allocator.alloc(T, entries_per_page);
+    errdefer graph.allocator.free(new_page);
     @memset(new_page, std.mem.zeroes(T));
     const new_raw = @intFromPtr(new_page.ptr);
 
-    if (pages[@intCast(page_index)].cmpxchgStrong(0, new_raw, .acq_rel, .acquire)) |published_raw| {
+    if (slot.cmpxchgStrong(0, new_raw, .acq_rel, .acquire)) |published_raw| {
         graph.allocator.free(new_page);
         return ptrFromRaw(T, published_raw, entries_per_page);
     }
@@ -97,22 +219,21 @@ fn ensurePage(
 
 /// Ensures that one node page exists and returns mutable access to it.
 pub fn ensureNodePage(graph: *graph_core.GraphCore, page_index: u32) ![]types.NodeBuffer {
-    return ensurePage(graph, types.NodeBuffer, graph.node_pages_pages[0..], page_index, constants.NODES_PER_PAGE);
+    return ensurePage(graph, types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
 }
 
-fn ensureMetaPage(graph: *graph_core.GraphCore, pages: []std.atomic.Value(usize), page_index: u32) ![]types.BlockMeta {
-    return ensureMetaPageSized(graph, pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
+fn ensureMetaPage(graph: *graph_core.GraphCore, directory: anytype, page_index: u32) ![]types.BlockMeta {
+    return ensureMetaPageSized(graph, directory, page_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 fn ensureMetaPageSized(
     graph: *graph_core.GraphCore,
-    pages: []std.atomic.Value(usize),
+    directory: anytype,
     page_index: u32,
     comptime entries_per_page: usize,
 ) ![]types.BlockMeta {
-    if (page_index >= pages.len) return error.OutOfMemory;
-
-    const existing = pages[@intCast(page_index)].load(.acquire);
+    const slot = try directory.slotPtr(graph.allocator, page_index);
+    const existing = slot.load(.acquire);
     if (existing != 0) return ptrFromRaw(types.BlockMeta, existing, entries_per_page);
 
     const new_page = try graph.allocator.alloc(types.BlockMeta, entries_per_page);
@@ -120,7 +241,7 @@ fn ensureMetaPageSized(
     initMetaPage(new_page);
     const new_raw = @intFromPtr(new_page.ptr);
 
-    if (pages[@intCast(page_index)].cmpxchgStrong(0, new_raw, .acq_rel, .acquire)) |published_raw| {
+    if (slot.cmpxchgStrong(0, new_raw, .acq_rel, .acquire)) |published_raw| {
         graph.allocator.free(new_page);
         return ptrFromRaw(types.BlockMeta, published_raw, entries_per_page);
     }
@@ -130,27 +251,27 @@ fn ensureMetaPageSized(
 
 fn metaAt(graph: *graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide) *types.BlockMeta {
     return metaEntryAt(
-        if (side == .fwd) graph.edge_blocks_fwd_meta_pages[0..] else graph.edge_blocks_rev_meta_pages[0..],
+        if (side == .fwd) &graph.edge_blocks_fwd_meta_pages else &graph.edge_blocks_rev_meta_pages,
         block_index,
         constants.EDGE_BLOCKS_PER_PAGE,
     );
 }
 
 fn groupMetaAt(graph: *graph_core.GraphCore, group_index: u32) *types.BlockMeta {
-    return metaEntryAt(graph.edge_block_group_meta_pages[0..], group_index, constants.EDGE_GROUPS_PER_PAGE);
+    return metaEntryAt(&graph.edge_block_group_meta_pages, group_index, constants.EDGE_GROUPS_PER_PAGE);
 }
 
 fn ensureGroupMetaPage(graph: *graph_core.GraphCore, page_index: u32) ![]types.BlockMeta {
-    return ensureMetaPageSized(graph, graph.edge_block_group_meta_pages[0..], page_index, constants.EDGE_GROUPS_PER_PAGE);
+    return ensureMetaPageSized(graph, &graph.edge_block_group_meta_pages, page_index, constants.EDGE_GROUPS_PER_PAGE);
 }
 
 fn metaEntryAt(
-    pages: []std.atomic.Value(usize),
+    directory: anytype,
     index: u32,
     comptime entries_per_page: u32,
 ) *types.BlockMeta {
     const page_index = pageOf(index, entries_per_page);
-    const page = loadPageMut(types.BlockMeta, pages, page_index, entries_per_page);
+    const page = loadPageMut(types.BlockMeta, directory, page_index, entries_per_page);
     return &page[slotOf(index, entries_per_page)];
 }
 
@@ -249,54 +370,54 @@ fn detachGroupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, 
 
 fn pageEntryAt(
     comptime T: type,
-    pages: []std.atomic.Value(usize),
+    directory: anytype,
     index: u32,
     comptime entries_per_page: u32,
 ) *T {
     const page_index = pageOf(index, entries_per_page);
-    const page = loadPageMut(T, pages, page_index, entries_per_page);
+    const page = loadPageMut(T, directory, page_index, entries_per_page);
     return &page[slotOf(index, entries_per_page)];
 }
 
 fn pageEntryAtConst(
     comptime T: type,
-    pages: []const std.atomic.Value(usize),
+    directory: anytype,
     index: u32,
     comptime entries_per_page: u32,
 ) *const T {
     const page_index = pageOf(index, entries_per_page);
-    const page = loadPage(T, pages, page_index, entries_per_page);
+    const page = loadPage(T, directory, page_index, entries_per_page);
     return &page[slotOf(index, entries_per_page)];
 }
 
 /// Returns mutable access to one forward edge block.
 pub fn edgeBlockFwdAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwd {
-    return pageEntryAt(types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return pageEntryAt(types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns read-only access to one forward edge block.
 pub fn edgeBlockFwdAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwd {
-    return pageEntryAtConst(types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return pageEntryAtConst(types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns mutable access to one forward edge-id block.
 pub fn edgeBlockFwdIdsAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwdIds {
-    return pageEntryAt(types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return pageEntryAt(types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns read-only access to one forward edge-id block.
 pub fn edgeBlockFwdIdsAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwdIds {
-    return pageEntryAtConst(types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return pageEntryAtConst(types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns mutable access to one reverse edge block.
 pub fn edgeBlockRevAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockRev {
-    return pageEntryAt(types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return pageEntryAt(types.EdgeBlockRev, &graph.edge_blocks_rev_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns read-only access to one reverse edge block.
 pub fn edgeBlockRevAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockRev {
-    return pageEntryAtConst(types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return pageEntryAtConst(types.EdgeBlockRev, &graph.edge_blocks_rev_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns mutable access to one edge block on the requested side.
@@ -323,16 +444,16 @@ pub fn edgeBlockAtConst(graph: *const graph_core.GraphCore, block_index: u32, co
 
 /// Returns mutable access to one grouped-run descriptor.
 pub fn groupAt(graph: *graph_core.GraphCore, group_index: u32) *types.EdgeBlockGroup {
-    return pageEntryAt(types.EdgeBlockGroup, graph.edge_block_group_pages[0..], group_index, constants.EDGE_GROUPS_PER_PAGE);
+    return pageEntryAt(types.EdgeBlockGroup, &graph.edge_block_group_pages, group_index, constants.EDGE_GROUPS_PER_PAGE);
 }
 
 /// Returns read-only access to one grouped-run descriptor.
 pub fn groupAtConst(graph: *const graph_core.GraphCore, group_index: u32) *const types.EdgeBlockGroup {
-    return pageEntryAtConst(types.EdgeBlockGroup, graph.edge_block_group_pages[0..], group_index, constants.EDGE_GROUPS_PER_PAGE);
+    return pageEntryAtConst(types.EdgeBlockGroup, &graph.edge_block_group_pages, group_index, constants.EDGE_GROUPS_PER_PAGE);
 }
 
 fn ensureGroupPage(graph: *graph_core.GraphCore, page_index: u32) !void {
-    _ = try ensurePage(graph, types.EdgeBlockGroup, graph.edge_block_group_pages[0..], page_index, constants.EDGE_GROUPS_PER_PAGE);
+    _ = try ensurePage(graph, types.EdgeBlockGroup, &graph.edge_block_group_pages, page_index, constants.EDGE_GROUPS_PER_PAGE);
     _ = try ensureGroupMetaPage(graph, page_index);
 }
 
@@ -351,13 +472,13 @@ fn ensureGroupCapacity(graph: *graph_core.GraphCore, required_group_count: u32) 
 fn ensureBlockPage(graph: *graph_core.GraphCore, page_index: u32, comptime side: adjacency.AdjSide) !void {
     switch (side) {
         .fwd => {
-            _ = try ensurePage(graph, types.EdgeBlockFwd, graph.edge_blocks_fwd_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
-            if (graph.multigraph_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdIds, graph.edge_blocks_fwd_id_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
-            _ = try ensureMetaPage(graph, graph.edge_blocks_fwd_meta_pages[0..], page_index);
+            _ = try ensurePage(graph, types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
+            if (graph.multigraph_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
+            _ = try ensureMetaPage(graph, &graph.edge_blocks_fwd_meta_pages, page_index);
         },
         .rev => {
-            _ = try ensurePage(graph, types.EdgeBlockRev, graph.edge_blocks_rev_pages[0..], page_index, constants.EDGE_BLOCKS_PER_PAGE);
-            _ = try ensureMetaPage(graph, graph.edge_blocks_rev_meta_pages[0..], page_index);
+            _ = try ensurePage(graph, types.EdgeBlockRev, &graph.edge_blocks_rev_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
+            _ = try ensureMetaPage(graph, &graph.edge_blocks_rev_meta_pages, page_index);
         },
     }
 }
@@ -382,7 +503,7 @@ fn zeroBlockRange(graph: *graph_core.GraphCore, first_block_idx: u32, end_block_
     }
 }
 
-fn reserveFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, comptime side: adjacency.AdjSide) !?struct { first_block_idx: u32, end_block_idx: u32 } {
+fn reserveFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u32, comptime side: adjacency.AdjSide) !?struct { first_block_idx: u32, end_block_idx: u32 } {
     const first_block_idx = switch (side) {
         .fwd => @atomicLoad(u32, &graph.block_fwd_count, .acquire),
         .rev => @atomicLoad(u32, &graph.block_rev_count, .acquire),
@@ -451,7 +572,7 @@ fn allocFreshBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSid
 }
 
 /// Reserves a fresh contiguous span of blocks and zero-initializes it.
-pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u16, comptime side: adjacency.AdjSide) !u32 {
+pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u32, comptime side: adjacency.AdjSide) !u32 {
     std.debug.assert(span_count > 0);
 
     while (true) {

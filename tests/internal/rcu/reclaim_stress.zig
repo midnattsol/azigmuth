@@ -136,12 +136,12 @@ test "stress rcu: multiple readers and writers run concurrently without corrupti
     try testing.expect(patience > 0);
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
-test "stress rcu: flushRepairs tombstone scan runs safely under concurrent churn" {
+test "stress rcu: flushRepairs drains explicit debt safely under concurrent churn" {
     const allocator = std.heap.page_allocator;
     var graph = try graph_mod.Graph.init(allocator);
     defer graph.deinit();
@@ -172,21 +172,10 @@ test "stress rcu: flushRepairs tombstone scan runs safely under concurrent churn
     };
     const churn_thread = try std.Thread.spawn(.{}, churnLoop, .{&churn});
 
-    // Main thread: repeatedly clear the needs_repair_fwd flag and
-    // queues so only the explicit flushRepairs tombstone scan can
-    // discover the debt.
-    {
-        var buf = try graph.nodeAt(source);
-        var meta = buf.loadPublishedMeta();
-        var flags = meta.flags();
-        flags.needs_repair_fwd = false;
-        buf.storePublishedMeta(meta.withFlags(flags));
-    }
-    graph.graph.repair_fwd.clearRetainingCapacity();
-    graph.graph.repair_rev.clearRetainingCapacity();
+    // Main thread: keep the published repair flag intact while churn builds up
+    // retirement traffic around the explicit repair pass.
     graph.graph.repair_scan_cursor_fwd = 0;
     graph.graph.repair_scan_cursor_rev = 0;
-    graph.graph.repair_scan_cursor_tombstone = 0;
 
     // Let the churn thread build up traffic, then run flushRepairs
     // while blocks are being retired and reclaimed concurrently.
@@ -209,7 +198,7 @@ test "stress rcu: flushRepairs tombstone scan runs safely under concurrent churn
     }
     try testing.expect(patience > 0);
 
-    const violations = try graph.debugValidate(allocator);
+    const violations = try graph.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

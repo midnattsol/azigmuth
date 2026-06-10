@@ -1,10 +1,11 @@
 const common = @import("common.zig");
-const run_search = @import("run_search.zig");
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
+const node_access = @import("../../core/node_access.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const node_published = @import("../../storage/node/published.zig");
 
 const EdgeIdScan = struct {
     adjacency: types.NodeAdj,
@@ -39,30 +40,9 @@ fn appendCounterRegression(scan: *EdgeIdScan, next_id: u32) !void {
     } });
 }
 
-fn scanForwardEdgeIdRun(
-    graph: *const graph_core.GraphCore,
-    scan: *EdgeIdScan,
-    start: u32,
-    count: u16,
-) !void {
-    for (start..start + count) |block_idx_usize| {
-        const block_idx: u32 = @intCast(block_idx_usize);
-        const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-        const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_idx, .fwd).mask);
-        for (0..live_count) |slot| {
-            const edge_id = id_block.ids[slot];
-            if (edge_id == 0) try appendInvalidEdgeId(scan, block_idx, slot, edge_id);
-            scan.max_seen = @max(scan.max_seen, edge_id);
-            if (edgeIdAppearsLater(graph, scan.adjacency, block_idx, slot, edge_id)) {
-                try appendDuplicateEdgeId(scan, edge_id);
-            }
-        }
-    }
-}
-
 fn scanForwardEdgeIds(
     graph: *const graph_core.GraphCore,
-    node_buffer: *const types.NodeBuffer,
+    node_buffer: ?*const types.NodeBuffer,
     node_id: u32,
     adjacency: types.NodeAdj,
     allocator: ?std.mem.Allocator,
@@ -80,10 +60,21 @@ fn scanForwardEdgeIds(
         .violations = violations,
         .fail_fast = fail_fast,
     };
-    try run_search.forEachRunInAdj(graph, adjacency, .fwd, &scan, scanForwardEdgeIdRun);
 
-    const next_id = node_buffer.next_local_edge_id.load(.acquire);
-    if (scan.max_seen >= next_id) try appendCounterRegression(&scan, next_id);
+    try common.forEachForwardEntryInAdj(graph, adjacency, &scan, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_scan: *EdgeIdScan, entry: common.ForwardEntryView) !void {
+            if (entry.edge_id == 0) try appendInvalidEdgeId(inner_scan, entry.block_idx, entry.slot, entry.edge_id);
+            inner_scan.max_seen = @max(inner_scan.max_seen, entry.edge_id);
+            if (edgeIdAppearsLater(inner_graph, inner_scan.adjacency, entry.block_idx, entry.slot, entry.edge_id)) {
+                try appendDuplicateEdgeId(inner_scan, entry.edge_id);
+            }
+        }
+    }.callback);
+
+    if (node_buffer) |_| {
+        const next_id = page_ops.nodeHotAtConst(graph, .{ .index = node_id }).loadNextLocalEdgeId();
+        if (scan.max_seen >= next_id) try appendCounterRegression(&scan, next_id);
+    }
 }
 
 fn edgeIdAppearsLater(
@@ -94,6 +85,15 @@ fn edgeIdAppearsLater(
     edge_id: u32,
 ) bool {
     if (common.groupCount(adjacency, .fwd) == 0) {
+        const side_adj = common.sideAdjOf(adjacency, .fwd);
+        if (node_published.NodePublished.isTiny(&side_adj)) {
+            const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+            const count = node_published.NodePublished.tinyCount(&side_adj);
+            for (current_slot + 1..count) |slot_idx| {
+                if (slot.entries[slot_idx].edge_id == edge_id) return true;
+            }
+            return false;
+        }
         for (common.firstBlock(adjacency, .fwd)..common.firstBlock(adjacency, .fwd) + common.blockCount(adjacency, .fwd)) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
@@ -134,6 +134,16 @@ pub fn appendForwardEdgeIdViolations(
     adjacency: types.NodeAdj,
 ) !void {
     try scanForwardEdgeIds(graph, node_buffer, node_id, adjacency, allocator, violations, false);
+}
+
+pub fn appendForwardEdgeIdViolationsSnapshot(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    violations: *std.ArrayList(types.Violation),
+    node_id: u32,
+    adjacency: types.NodeAdj,
+) !void {
+    try scanForwardEdgeIds(graph, null, node_id, adjacency, allocator, violations, false);
 }
 
 pub fn validateForwardEdgeIdsFast(

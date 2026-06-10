@@ -4,7 +4,7 @@ const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const rcu = @import("../concurrency/rcu.zig");
+const node_published = @import("../storage/node/published.zig");
 
 pub const TraversalState = struct {
     contiguous_mode: bool,
@@ -13,9 +13,64 @@ pub const TraversalState = struct {
     current_group_index: u32,
 };
 
+pub const TinyState = struct {
+    tiny_mode: bool,
+    tiny_slot: u32,
+    tiny_count: u16,
+};
+
+pub const CursorInit = struct {
+    traversal: TraversalState,
+    tiny: TinyState,
+    group_count_bound: u16,
+};
+
+pub fn tinyState(side_adj: types.SideAdj) TinyState {
+    return .{
+        .tiny_mode = node_published.NodePublished.isTiny(&side_adj),
+        .tiny_slot = side_adj.first_block,
+        .tiny_count = if (node_published.NodePublished.isTiny(&side_adj)) node_published.NodePublished.tinyCount(&side_adj) else 0,
+    };
+}
+
+pub fn buildCursorInit(side_adj: types.SideAdj) CursorInit {
+    return .{
+        .traversal = buildTraversalState(side_adj),
+        .tiny = tinyState(side_adj),
+        .group_count_bound = side_adj.group_count,
+    };
+}
+
+fn blockLimitForSide(graph: *const graph_core.GraphCore, comptime side: adjacency.AdjSide) u32 {
+    return switch (side) {
+        .fwd => @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire),
+        .rev => @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire),
+    };
+}
+
+pub fn advanceTraversalBlock(iterator: anytype, graph: *const graph_core.GraphCore) ?u32 {
+    while (iterator.blocks_remaining == 0) {
+        if (!advanceToNextGroup(iterator, graph)) return null;
+    }
+
+    const block_idx = iterator.current_block_index;
+    iterator.current_block_index += 1;
+    iterator.blocks_remaining -= 1;
+    return block_idx;
+}
+
 /// Builds the initial traversal state for contiguous or grouped side storage.
 pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
     if (side_adj.block_count == 0) {
+        return .{
+            .contiguous_mode = true,
+            .current_block_index = 0,
+            .blocks_remaining = 0,
+            .current_group_index = constants.END_OF_CHAIN,
+        };
+    }
+
+    if (node_published.NodePublished.isTiny(&side_adj)) {
         return .{
             .contiguous_mode = true,
             .current_block_index = 0,
@@ -47,10 +102,11 @@ pub fn validateReadSideQuick(
     side_adj: types.SideAdj,
     comptime side: adjacency.AdjSide,
 ) !void {
-    const block_limit = switch (side) {
-        .fwd => @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire),
-        .rev => @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire),
-    };
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        return adjacency.validateSideAdjLayoutForSide(graph, side_adj, side);
+    }
+
+    const block_limit = blockLimitForSide(graph, side);
 
     if (side_adj.block_count == 0) {
         if (side_adj.group_count != 0) return error.CorruptGraph;
@@ -105,27 +161,38 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
     return true;
 }
 
-/// Returns whether a candidate node should be treated as removed during iteration.
-pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_index: u32) bool {
-    if (candidate_index >= graph.publishedNodeCount()) return true;
-    const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
-    if (iterator.cached_node_page == null or iterator.cached_node_page_index != page_index) {
-        iterator.cached_node_page = page_ops.nodePageAtConst(graph, page_index);
-        iterator.cached_node_page_index = page_index;
+pub fn loadNextNeighborMask(iterator: anytype, graph: *const graph_core.GraphCore) bool {
+    while (true) {
+        const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
+        switch (iterator.direction) {
+            .fwd => {
+                const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+                if (block.mask == 0) continue;
+                iterator.current_mask = block.mask;
+                iterator.cached_fwd_block = block;
+                iterator.cached_rev_block = null;
+            },
+            .rev => {
+                const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
+                if (block.mask == 0) continue;
+                iterator.current_mask = block.mask;
+                iterator.cached_rev_block = block;
+                iterator.cached_fwd_block = null;
+            },
+        }
+        return true;
     }
-
-    const slot_index = page_ops.slotOf(candidate_index, constants.NODES_PER_PAGE);
-    return iterator.cached_node_page.?[slot_index].loadPublishedMeta().removed;
 }
 
-/// Releases the reader token held by one live iterator, if still active.
-pub fn deinitReader(iterator: anytype, graph: *const graph_core.GraphCore) void {
-    if (!iterator.reader_active) return;
+pub fn loadNextOutEdgeMask(iterator: anytype, graph: *const graph_core.GraphCore) bool {
+    while (true) {
+        const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
+        const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+        if (block.mask == 0) continue;
 
-    switch (rcu.beginCloseReaderToken(iterator.reader_token)) {
-        .inactive => {},
-        .pending => {},
-        .finalize => rcu.finalizeReaderExit(@constCast(graph), iterator.reader_token),
+        iterator.current_mask = block.mask;
+        iterator.cached_fwd_block = block;
+        iterator.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+        return true;
     }
-    iterator.reader_active = false;
 }

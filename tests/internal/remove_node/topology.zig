@@ -36,7 +36,7 @@ test "removeNode: hub with many incoming edges cleans up forward and reverse sid
     const new_node = try graph.addNode();
     try testing.expect(graph.hasNode(new_node));
 
-    const violations = try graph.debugValidate(allocator);
+    const violations = try graph.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

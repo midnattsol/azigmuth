@@ -1,0 +1,67 @@
+const graph_core = @import("../../core/graph_core.zig");
+const node_access = @import("../../core/node_access.zig");
+const page_ops = @import("../../storage/page_ops.zig");
+const types = @import("../../core/types.zig");
+const adjacency = @import("../../adjacency/mod.zig");
+const rcu = @import("../../concurrency/rcu.zig");
+const common = @import("../common.zig");
+const remove_scan = @import("remove/scan.zig");
+const remove_validate = @import("remove/validate.zig");
+const remove_plan = @import("remove/plan.zig");
+const remove_publish = @import("remove/publish.zig");
+const node_validity = @import("../../core/node_validity.zig");
+
+/// Removes one live node and retires both of its published adjacencies.
+/// Returns a summary of visible edge removals and related-node updates.
+pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeRemovalSummary {
+    if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
+
+    const source_node = node_access.nodeAt(graph, node);
+    var source_claims = try common.tryClaimNodeSides(graph, source_node, node.index, true, true);
+    defer source_claims.release();
+
+    const source_adj_before = node_access.publishedAdjAtConst(graph, node);
+    if (!node_validity.snapshotIsLive(source_adj_before)) return error.InvalidNode;
+
+    try adjacency.validateNodeAdjLayout(graph, source_adj_before, .fwd);
+    try adjacency.validateNodeAdjLayout(graph, source_adj_before, .rev);
+
+    var scan = try remove_scan.scanNodeRemovalNeighborhood(graph, node);
+    defer scan.deinit(graph.allocator);
+
+    try remove_validate.validateNodeRemovalNeighborhood(graph, node, source_node, &scan);
+
+    var related = try remove_plan.collectRelatedNodeUpdates(graph, node, &scan);
+    defer related.deinit(graph.allocator);
+
+    var writer_guard = common.beginWriter(graph);
+    defer writer_guard.end();
+
+    const removed_visible_edge_count = scan.visible_forward + scan.visible_incoming;
+
+    const source_staging_adj = remove_publish.buildRemovedAdjEmpty(source_adj_before);
+
+    // Publish predecessor-side degree/repair updates before tombstoning the
+    // removed node. Readers may therefore observe a transient mixed-version
+    // view across endpoints while removeNode is in flight; the operation only
+    // guarantees logical consistency after it returns.
+    //
+    // Forward-degree decrements use the meta-only CAS helper
+    // (`publishMetaFwdDeltaUpdated`) which does NOT require `fwd_claim` on the
+    // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
+    // (RFC Phase 2 §concurrency note).
+    const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
+
+    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), source_node, source_staging_adj, 0, 0);
+
+    try remove_publish.retireRemovedNodeStorage(graph, source_adj_before);
+    _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);
+    rcu.bumpEpoch(graph);
+    writer_guard.end();
+
+    return .{
+        .removed_visible_edges = @intCast(removed_visible_edge_count),
+        .related_live_nodes_touched = @intCast(related.nodes.items.len),
+        .left_repair_debt = counts.predecessors > 0 or counts.destinations > 0,
+    };
+}

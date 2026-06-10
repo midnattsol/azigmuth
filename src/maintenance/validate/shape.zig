@@ -4,6 +4,7 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const node_published = @import("../../storage/node/published.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
@@ -20,7 +21,7 @@ pub fn validateBlockDense(graph: *const graph_core.GraphCore, block_index: u32, 
 pub fn validateDenseInContiguousBlocks(
     graph: *const graph_core.GraphCore,
     start: u32,
-    count: u16,
+    count: u32,
     comptime side: common.Side,
 ) !void {
     for (start..start + count) |block_index| {
@@ -49,7 +50,7 @@ pub fn validateDenseMasks(graph: *const graph_core.GraphCore, adjacency: types.N
             inner_graph: *const graph_core.GraphCore,
             _: void,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             try validateDenseInContiguousBlocks(inner_graph, start, count, side);
@@ -103,7 +104,7 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
 pub fn validateContiguousBlocksFast(
     graph: *const graph_core.GraphCore,
     start: u32,
-    count: u16,
+    count: u32,
     comptime side: common.Side,
 ) !u64 {
     var total: u64 = 0;
@@ -132,13 +133,53 @@ pub fn validateGroupedRunsFast(
 }
 
 pub fn validateAdjacencyBlocksFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !u64 {
+    const side_adj = common.sideAdjOf(adjacency, side);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        switch (side) {
+            .fwd => {
+                const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+                var prev_key: ?u32 = null;
+                var prev_id: u32 = 0;
+                for (0..count) |entry_idx| {
+                    const entry = slot.entries[entry_idx];
+                    if (entry.destination >= graph.publishedNodeCount()) return error.CorruptGraph;
+                    if (graph.multigraph_enabled) {
+                        if (entry.edge_id == 0) return error.CorruptGraph;
+                        if (prev_key) |previous| {
+                            if (entry.destination < previous) return error.CorruptGraph;
+                            if (entry.destination == previous and entry.edge_id <= prev_id) return error.CorruptGraph;
+                        }
+                        prev_id = entry.edge_id;
+                    } else if (prev_key) |previous| {
+                        if (entry.destination <= previous) return error.CorruptGraph;
+                    }
+                    prev_key = entry.destination;
+                }
+            },
+            .rev => {
+                const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+                var prev_key: ?u32 = null;
+                for (0..count) |entry_idx| {
+                    const source_idx = slot.sources[entry_idx];
+                    if (source_idx >= graph.publishedNodeCount()) return error.CorruptGraph;
+                    if (prev_key) |previous| {
+                        if (source_idx < previous or (!graph.multigraph_enabled and source_idx == previous)) return error.CorruptGraph;
+                    }
+                    prev_key = source_idx;
+                }
+            },
+        }
+        return count;
+    }
+
     var total = LiveTotal{};
     try common.forEachRunInAdj(graph, adjacency, side, &total, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
             inner_total: *LiveTotal,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             inner_total.value += try validateContiguousBlocksFast(inner_graph, start, count, side);
@@ -148,6 +189,7 @@ pub fn validateAdjacencyBlocksFast(graph: *const graph_core.GraphCore, adjacency
 }
 
 pub fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !void {
+    if (node_published.NodePublished.isTiny(&common.sideAdjOf(adjacency, side))) return;
     const block_count = common.blockCount(adjacency, side);
     if (block_count <= 1) return;
 
@@ -156,7 +198,7 @@ pub fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: type
             inner_graph: *const graph_core.GraphCore,
             _: *const graph_core.GraphCore,
             start: u32,
-            run_count: u16,
+            run_count: u32,
             is_last: bool,
         ) !void {
             const end = if (is_last) start + run_count - 1 else start + run_count;

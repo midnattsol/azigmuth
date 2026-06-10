@@ -1,9 +1,12 @@
-const graph_core = @import("../../core/graph_core.zig");
-const types = @import("../../core/types.zig");
-const page_ops = @import("../../storage/page_ops.zig");
-const common = @import("../common.zig");
-const node_validity = @import("../../core/node_validity.zig");
-const remove_types = @import("remove_types.zig");
+const graph_core = @import("../../../core/graph_core.zig");
+const node_access = @import("../../../core/node_access.zig");
+const types = @import("../../../core/types.zig");
+const page_ops = @import("../../../storage/page_ops.zig");
+const node_published = @import("../../../storage/node/published.zig");
+const side_ops = @import("../../../adjacency/side_ops.zig");
+const common = @import("../../common.zig");
+const node_validity = @import("../../../core/node_validity.zig");
+const remove_types = @import("types.zig");
 
 const ForwardDestinationCollection = struct {
     source_idx: u32,
@@ -17,8 +20,10 @@ fn appendForwardDestination(
     block_idx: u32,
     slot: u7,
 ) !void {
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-    const destination_idx = block.edges[slot].destination;
+    const destination_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
+        page_ops.tinyFwdAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot].destination
+    else
+        page_ops.edgeBlockAtConst(graph, block_idx, .fwd).edges[slot].destination;
     if (destination_idx >= collection.node_count) return error.CorruptGraph;
     try collection.scan.forward_destinations.append(graph.allocator, destination_idx);
     if (node_validity.isNodeLiveIndex(graph, destination_idx)) {
@@ -41,8 +46,10 @@ fn appendReverseSource(
     block_idx: u32,
     slot: u7,
 ) !void {
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-    const source_idx = block.sources[slot];
+    const source_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
+        page_ops.tinyRevAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG).sources[slot]
+    else
+        page_ops.edgeBlockAtConst(graph, block_idx, .rev).sources[slot];
     if (source_idx >= collection.node_count) return error.CorruptGraph;
     try collection.scan.reverse_sources.append(graph.allocator, source_idx);
     if (source_idx != collection.source_idx and node_validity.isNodeLiveIndex(graph, source_idx)) {
@@ -56,8 +63,21 @@ fn collectForwardDestinations(
     scan: *remove_types.RemovalScan,
 ) !void {
     const node_count = graph.publishedNodeCount();
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    const published_adj = node_buffer.publishedAdj();
+    const published_adj = node_access.publishedAdjAtConst(graph, node);
+    const side_view = common.sideAdjOfNode(published_adj, .fwd);
+
+    if (node_published.NodePublished.isTiny(&side_view)) {
+        const slot = page_ops.tinyFwdAtConst(graph, side_view.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_view);
+        for (0..count) |entry_idx| {
+            const destination_idx = slot.entries[entry_idx].destination;
+            if (destination_idx >= node_count) return error.CorruptGraph;
+            try scan.forward_destinations.append(graph.allocator, destination_idx);
+            if (node_validity.isNodeLiveIndex(graph, destination_idx)) scan.visible_forward += 1;
+            if (destination_idx == node.index) scan.self_edge_count += 1;
+        }
+        return;
+    }
 
     var collection = ForwardDestinationCollection{
         .source_idx = node.index,
@@ -78,8 +98,20 @@ fn collectReverseSources(
     node: types.NodeId,
     scan: *remove_types.RemovalScan,
 ) !void {
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    const published_adj = node_buffer.publishedAdj();
+    const published_adj = node_access.publishedAdjAtConst(graph, node);
+    const side_view = common.sideAdjOfNode(published_adj, .rev);
+
+    if (node_published.NodePublished.isTiny(&side_view)) {
+        const slot = page_ops.tinyRevAtConst(graph, side_view.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_view);
+        for (0..count) |entry_idx| {
+            const source_idx = slot.sources[entry_idx];
+            if (source_idx >= graph.publishedNodeCount()) return error.CorruptGraph;
+            try scan.reverse_sources.append(graph.allocator, source_idx);
+            if (source_idx != node.index and node_validity.isNodeLiveIndex(graph, source_idx)) scan.visible_incoming += 1;
+        }
+        return;
+    }
 
     var collection = ReverseSourceCollection{
         .node_count = graph.publishedNodeCount(),

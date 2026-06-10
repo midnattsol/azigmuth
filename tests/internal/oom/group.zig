@@ -4,7 +4,7 @@ const graph_mod = @import("graph_mod");
 const testing = std.testing;
 
 fn expectNoDebugViolations(graph: *const graph_mod.Graph) !void {
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

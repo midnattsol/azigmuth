@@ -3,14 +3,18 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const node_published = @import("../../storage/node/published.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
+const side_ops = @import("../../adjacency/side_ops.zig");
 const node_validity = @import("../../core/node_validity.zig");
 const side_runs = @import("../../adjacency/runs.zig");
 
 const TombstoneScan = struct { found: bool = false };
 
-fn sideAdjOf(adjacency: types.NodeAdj, comptime side: Side) types.SideAdj {
+pub const ForwardEntryView = side_ops.ForwardEntryView;
+
+pub fn sideAdjOf(adjacency: types.NodeAdj, comptime side: Side) types.SideAdj {
     return switch (side) {
         .fwd => .{
             .first_block = adjacency.first_block_fwd,
@@ -80,6 +84,66 @@ pub fn forEachLiveSlotInAdj(
     }.run);
 }
 
+pub fn forEachNodeIdInAdj(
+    graph: *const graph_core.GraphCore,
+    adjacency: types.NodeAdj,
+    comptime side: Side,
+    context: anytype,
+    comptime callback: anytype,
+) !void {
+    const side_adj = sideAdjOf(adjacency, side);
+    if (side_adj.block_count == 0) return;
+
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        switch (side) {
+            .fwd => {
+                const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+                for (0..count) |entry_idx| try callback(graph, context, slot.entries[entry_idx].destination);
+            },
+            .rev => {
+                const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+                for (0..count) |entry_idx| try callback(graph, context, slot.sources[entry_idx]);
+            },
+        }
+        return;
+    }
+
+    try side_ops.forEachNodeIdInSide(graph, side_adj, switch (side) {
+        .fwd => .fwd,
+        .rev => .rev,
+    }, context, callback);
+}
+
+pub fn forEachForwardEntryInAdj(
+    graph: *const graph_core.GraphCore,
+    adjacency: types.NodeAdj,
+    context: anytype,
+    comptime callback: anytype,
+) !void {
+    const side_adj = sideAdjOf(adjacency, .fwd);
+    if (side_adj.block_count == 0) return;
+
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        for (0..count) |entry_idx| {
+            const entry = slot.entries[entry_idx];
+            try callback(graph, context, ForwardEntryView{
+                .block_idx = side_adj.first_block,
+                .slot = @intCast(entry_idx),
+                .destination = entry.destination,
+                .relation = entry.relation,
+                .flags = entry.flags,
+                .edge_id = entry.edge_id,
+            });
+        }
+        return;
+    }
+
+    try side_ops.forEachForwardEntryInSide(graph, side_adj, context, callback);
+}
+
 fn scanForwardTombstone(
     graph: *const graph_core.GraphCore,
     scan: *TombstoneScan,
@@ -108,7 +172,14 @@ fn scanReverseTombstone(
 
 pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj) bool {
     var scan = TombstoneScan{};
-    forEachLiveSlotInAdj(graph, adjacency, .fwd, &scan, scanForwardTombstone) catch |err| {
+    forEachNodeIdInAdj(graph, adjacency, .fwd, &scan, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_scan: *TombstoneScan, destination_idx: u32) !void {
+            if (destination_idx < inner_graph.publishedNodeCount() and node_validity.isNodeRemovedIndex(inner_graph, destination_idx)) {
+                inner_scan.found = true;
+                return error.TombstoneFound;
+            }
+        }
+    }.callback) catch |err| {
         if (err == error.TombstoneFound) return true;
         return false;
     };
@@ -117,7 +188,14 @@ pub fn forwardHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
 
 pub fn reverseHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj) bool {
     var scan = TombstoneScan{};
-    forEachLiveSlotInAdj(graph, adjacency, .rev, &scan, scanReverseTombstone) catch |err| {
+    forEachNodeIdInAdj(graph, adjacency, .rev, &scan, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_scan: *TombstoneScan, source_idx: u32) !void {
+            if (source_idx < inner_graph.publishedNodeCount() and node_validity.isNodeRemovedIndex(inner_graph, source_idx)) {
+                inner_scan.found = true;
+                return error.TombstoneFound;
+            }
+        }
+    }.callback) catch |err| {
         if (err == error.TombstoneFound) return true;
         return false;
     };
@@ -161,7 +239,7 @@ pub fn readerExit(graph: *const graph_core.GraphCore, token: rcu.ReaderToken) vo
     rcu.readerExit(@constCast(graph), token);
 }
 
-pub fn blockCount(adjacency: types.NodeAdj, comptime side: Side) u16 {
+pub fn blockCount(adjacency: types.NodeAdj, comptime side: Side) u32 {
     return switch (side) {
         .fwd => adjacency.block_count_fwd,
         .rev => adjacency.block_count_rev,

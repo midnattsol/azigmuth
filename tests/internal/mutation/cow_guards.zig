@@ -13,8 +13,11 @@ test "cow guard: addEdge fails defensively when forward free-list returns publis
     defer graph.deinit();
 
     const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    var destinations: [9]graph_mod.NodeId = undefined;
+    for (0..destinations.len) |idx| {
+        destinations[idx] = try graph.addNode();
+        try graph.addEdge(src, destinations[idx], 0, 0);
+    }
 
     const src_node = try graph.nodeAt(src);
     const meta = src_node.loadPublishedMeta();
@@ -44,8 +47,11 @@ test "cow guard: removeEdge fails defensively when forward free-list returns pub
     defer graph.deinit();
 
     const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    var destinations: [9]graph_mod.NodeId = undefined;
+    for (0..destinations.len) |idx| {
+        destinations[idx] = try graph.addNode();
+        try graph.addEdge(src, destinations[idx], 0, 0);
+    }
 
     const src_node = try graph.nodeAt(src);
     const meta = src_node.loadPublishedMeta();
@@ -53,7 +59,7 @@ test "cow guard: removeEdge fails defensively when forward free-list returns pub
 
     page_ops.freeBlock(&graph.graph, published_fwd_block, .fwd);
 
-    const result = graph.removeEdge(src, dst);
+    const result = graph.removeEdge(src, destinations[8]);
     if (result) |removed| {
         try testing.expect(removed);
         _ = graph.validate() catch {};

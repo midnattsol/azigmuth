@@ -1,4 +1,5 @@
 const claims_mod = @import("claims.zig");
+const publish_mod = @import("publish.zig");
 const scratch_mod = @import("scratch.zig");
 const side_adj = @import("../adjacency/side_ops.zig");
 
@@ -8,14 +9,14 @@ pub const WriterGuard = claims_mod.WriterGuard;
 pub const beginWriter = claims_mod.beginWriter;
 pub const tryClaimAdjacencies = claims_mod.tryClaimAdjacencies;
 pub const tryClaimNodeSides = claims_mod.tryClaimNodeSides;
-pub const publishStagedFwd = claims_mod.publishStagedFwd;
-pub const publishStagedRev = claims_mod.publishStagedRev;
-pub const publishStagedBoth = claims_mod.publishStagedBoth;
-pub const publishBothDelta = claims_mod.publishBothDelta;
-pub const publishMetaFwdUpdated = claims_mod.publishMetaFwdUpdated;
-pub const publishMetaFwdDeltaUpdated = claims_mod.publishMetaFwdDeltaUpdated;
-pub const publishMetaRevDeltaUpdated = claims_mod.publishMetaRevDeltaUpdated;
-pub const publishMetaBothDeltaUpdated = claims_mod.publishMetaBothDeltaUpdated;
+pub const publishStagedFwd = publish_mod.publishStagedFwd;
+pub const publishStagedRev = publish_mod.publishStagedRev;
+pub const publishStagedBoth = publish_mod.publishStagedBoth;
+pub const publishBothDelta = publish_mod.publishBothDelta;
+pub const publishMetaFwdUpdated = publish_mod.publishMetaFwdUpdated;
+pub const publishMetaFwdDeltaUpdated = publish_mod.publishMetaFwdDeltaUpdated;
+pub const publishMetaRevDeltaUpdated = publish_mod.publishMetaRevDeltaUpdated;
+pub const publishMetaBothDeltaUpdated = publish_mod.publishMetaBothDeltaUpdated;
 
 pub const MutationScratch = scratch_mod.MutationScratch;
 

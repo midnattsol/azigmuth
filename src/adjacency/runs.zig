@@ -9,7 +9,7 @@ const scratch_mod = @import("../mutation/scratch.zig");
 
 pub const RunDesc = struct {
     start: u32,
-    count: u16,
+    count: u32,
 };
 
 pub fn runCount(side_adj: types.SideAdj) u16 {
@@ -74,7 +74,7 @@ pub fn forEachRun(
 pub const BlockCursor = struct {
     side: types.SideAdj,
     current_block_idx: u32 = 0,
-    blocks_remaining: u16 = 0,
+    blocks_remaining: u32 = 0,
     group_idx: u32 = constants.END_OF_CHAIN,
     groups_remaining: u16 = 0,
     contiguous: bool = false,
@@ -133,8 +133,8 @@ pub const BlockCursor = struct {
 
 pub const SideBuilder = struct {
     run_start_idx: u32 = 0,
-    run_block_count: u16 = 0,
-    total_blocks: u16 = 0,
+    run_block_count: u32 = 0,
+    total_blocks: u32 = 0,
     first_block_set: bool = false,
     runs: [constants.MAX_GROUPS_PER_NODE]RunDesc = undefined,
     run_count: u16 = 0,

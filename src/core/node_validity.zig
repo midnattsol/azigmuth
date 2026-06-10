@@ -1,5 +1,5 @@
 const graph_core = @import("graph_core.zig");
-const page_ops = @import("../storage/page_ops.zig");
+const node_access = @import("node_access.zig");
 const types = @import("types.zig");
 
 pub inline fn nodeExistsRaw(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
@@ -12,12 +12,12 @@ pub inline fn nodeExistsRawIndex(graph: *const graph_core.GraphCore, node_index:
 
 pub fn isNodeRemoved(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
     if (!nodeExistsRaw(graph, node)) return false;
-    return page_ops.nodeAtConst(graph, node).loadPublishedMeta().removed;
+    return node_access.loadPublishedMetaAtConst(graph, node).removed;
 }
 
 pub fn isNodeRemovedIndex(graph: *const graph_core.GraphCore, node_index: u32) bool {
     if (!nodeExistsRawIndex(graph, node_index)) return false;
-    return page_ops.nodeAtConst(graph, .{ .index = node_index }).loadPublishedMeta().removed;
+    return node_access.loadPublishedMetaAtConst(graph, .{ .index = node_index }).removed;
 }
 
 pub fn isNodeLive(graph: *const graph_core.GraphCore, node: types.NodeId) bool {

@@ -3,6 +3,7 @@ const run_search = @import("run_search.zig");
 const edge_ids = @import("edge_ids.zig");
 const std = @import("std");
 const graph_core = @import("../../core/graph_core.zig");
+const node_access = @import("../../core/node_access.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const node_validity = @import("../../core/node_validity.zig");
@@ -11,6 +12,7 @@ pub const runContainsTarget = run_search.runContainsTarget;
 pub const findSlotInRun = run_search.findSlotInRun;
 pub const adjacencyContains = run_search.adjacencyContains;
 pub const appendForwardEdgeIdViolations = edge_ids.appendForwardEdgeIdViolations;
+pub const appendForwardEdgeIdViolationsSnapshot = edge_ids.appendForwardEdgeIdViolationsSnapshot;
 pub const validateForwardEdgeIdsFast = edge_ids.validateForwardEdgeIdsFast;
 
 const ForwardMultiplicityContext = struct {
@@ -24,7 +26,7 @@ fn appendForwardMismatch(allocator: std.mem.Allocator, violations: *std.ArrayLis
 
 fn checkForwardPair(graph: *const graph_core.GraphCore, source_node: u32, source_adjacency: types.NodeAdj, destination_node: u32) !void {
     if (destination_node >= graph.publishedNodeCount()) return error.CorruptGraph;
-    const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+    const destination_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = destination_node });
     if (destination_adjacency.flags.removed) return;
     if (graph.multigraph_enabled) {
         const forward_count = run_search.countTargetMatches(graph, source_adjacency, destination_node, .fwd);
@@ -37,7 +39,7 @@ fn checkForwardPair(graph: *const graph_core.GraphCore, source_node: u32, source
 
 fn appendForwardPairViolations(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator, violations: *std.ArrayList(types.Violation), source_node: u32, source_adjacency: types.NodeAdj, destination_node: u32) !void {
     if (destination_node >= graph.publishedNodeCount()) return;
-    const destination_adjacency = page_ops.nodeAtConst(graph, .{ .index = destination_node }).publishedAdj();
+    const destination_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = destination_node });
     if (destination_adjacency.flags.removed) return;
     if (graph.multigraph_enabled) {
         const forward_count = run_search.countTargetMatches(graph, source_adjacency, destination_node, .fwd);
@@ -54,14 +56,14 @@ fn appendForwardPairViolations(graph: *const graph_core.GraphCore, allocator: st
 
 fn checkReversePair(graph: *const graph_core.GraphCore, source_node: u32, destination_node: u32) !void {
     if (source_node >= graph.publishedNodeCount()) return error.CorruptGraph;
-    const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+    const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     if (source_adjacency.flags.removed) return;
     if (!run_search.adjacencyContains(graph, source_adjacency, destination_node, .fwd)) return error.CorruptGraph;
 }
 
 fn appendReversePairViolations(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator, violations: *std.ArrayList(types.Violation), source_node: u32, destination_node: u32) !void {
     if (source_node >= graph.publishedNodeCount()) return;
-    const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+    const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     if (source_adjacency.flags.removed) return;
     if (!run_search.adjacencyContains(graph, source_adjacency, destination_node, .fwd)) {
         try appendForwardMismatch(allocator, violations, source_node, destination_node);
@@ -82,7 +84,7 @@ fn validateForwardMultiplicityRun(graph: *const graph_core.GraphCore, context: *
 
 pub fn appendForwardConsistencyViolations(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator, violations: *std.ArrayList(types.Violation), source_node: u32, blocks: []const common.TraversedBlock) !void {
     if (!node_validity.isNodeLiveIndex(graph, source_node)) return;
-    const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+    const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_index, .fwd)) continue;
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .fwd);
@@ -119,15 +121,23 @@ pub fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
     if (graph.multigraph_enabled) {
-        const context = ForwardMultiplicityContext{ .source_node = source_node, .adjacency = adjacency };
-        try run_search.forEachRunInAdj(graph, adjacency, .fwd, &context, validateForwardMultiplicityRun);
+        try common.forEachForwardEntryInAdj(graph, adjacency, ForwardMultiplicityContext{ .source_node = source_node, .adjacency = adjacency }, struct {
+            fn callback(inner_graph: *const graph_core.GraphCore, context: ForwardMultiplicityContext, entry: common.ForwardEntryView) !void {
+                try checkForwardPair(inner_graph, context.source_node, context.adjacency, entry.destination);
+            }
+        }.callback);
         return;
     }
-    try run_search.forEachRunInAdj(graph, adjacency, .fwd, source_node, validateForwardRun);
+    try common.forEachForwardEntryInAdj(graph, adjacency, source_node, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_source_node: u32, entry: common.ForwardEntryView) !void {
+            const source_adjacency = node_access.publishedAdjAtConst(inner_graph, .{ .index = inner_source_node });
+            try checkForwardPair(inner_graph, inner_source_node, source_adjacency, entry.destination);
+        }
+    }.callback);
 }
 
 pub fn validateForwardConsistencyInContiguousBlocks(graph: *const graph_core.GraphCore, source_node: u32, start: u32, count: u16) !void {
-    const source_adjacency = page_ops.nodeAtConst(graph, .{ .index = source_node }).publishedAdj();
+    const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     for (start..start + count) |block_index| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
         const live_count = @popCount(block.mask);
@@ -140,8 +150,11 @@ pub fn validateForwardConsistencyInContiguousBlocks(graph: *const graph_core.Gra
 pub fn validateReverseConsistencyFast(graph: *const graph_core.GraphCore, destination_node: u32, adjacency: types.NodeAdj) !void {
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .rev) == 0) return;
-    var destination_ctx = destination_node;
-    try run_search.forEachRunInAdj(graph, adjacency, .rev, &destination_ctx, validateReverseRun);
+    try common.forEachNodeIdInAdj(graph, adjacency, .rev, destination_node, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_destination_node: u32, source_node: u32) !void {
+            try checkReversePair(inner_graph, source_node, inner_destination_node);
+        }
+    }.callback);
 }
 
 pub fn validateReverseConsistencyInContiguousBlocks(graph: *const graph_core.GraphCore, destination_node: u32, start: u32, count: u16) !void {

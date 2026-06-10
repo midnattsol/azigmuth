@@ -1,6 +1,6 @@
 const std = @import("std");
 const graph_mod = @import("graph_mod");
-const page_ops = graph_mod.page_ops_mod;
+const publish = @import("publish");
 const testing = std.testing;
 
 test "edge metadata: distinct relation values coexist in the same forward adjacency" {
@@ -14,14 +14,11 @@ test "edge metadata: distinct relation values coexist in the same forward adjace
         try graph.addEdge(source, targets[target_index], @intCast(target_index), 0);
     }
 
-    const node_buffer = try graph.nodeAt(source);
-    const meta = node_buffer.loadPublishedMeta();
-    const fwd = node_buffer.publishedFwdFromMeta(meta);
-    const block = page_ops.edgeBlockAtConst(&graph.graph, fwd.first_block, .fwd);
-
+    const adj = try graph.publishedNodeAdj(source);
     var seen_relations: [5]bool = .{ false } ** 5;
-    for (0..@intCast(@popCount(block.mask))) |slot| {
-        const relation: usize = block.edges[slot].relation;
+    const live = try publish.forwardLiveCount(&graph, adj);
+    for (0..live) |entry_idx| {
+        const relation: usize = (try publish.readForwardEntry(&graph, adj, entry_idx)).relation;
         try testing.expect(relation < 5);
         try testing.expect(!seen_relations[relation]);
         seen_relations[relation] = true;
@@ -46,12 +43,8 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
     try testing.expect(try graph.removeEdge(source, peers[2]));
     try testing.expect(try graph.removeEdge(source, peers[4]));
 
-    const node_buffer = try graph.nodeAt(source);
-    const meta = node_buffer.loadPublishedMeta();
-    const fwd = node_buffer.publishedFwdFromMeta(meta);
-    const block = page_ops.edgeBlockAtConst(&graph.graph, fwd.first_block, .fwd);
-
-    const live = @popCount(block.mask);
+    const adj = try graph.publishedNodeAdj(source);
+    const live = try publish.forwardLiveCount(&graph, adj);
     try testing.expectEqual(@as(u64, peer_count - 2), live);
 
     // Verify each surviving edge carries the correct destination→relation pair.
@@ -62,16 +55,16 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
     }
 
     var seen_count: usize = 0;
-    for (0..@intCast(live)) |slot| {
-        const dest_index: u32 = block.edges[slot].destination;
-        const relation: u16 = block.edges[slot].relation;
-        // Find which peer this destination corresponds to.
+    for (0..@intCast(live)) |entry_idx| {
+        const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
+        const dest_index: u32 = entry.destination;
+        const relation: u16 = entry.relation;
         var matched = false;
         for (peers, 0..) |peer, peer_index| {
             if (peer.index == dest_index) {
                 try testing.expect(expected_relation_by_dest[peer_index] != null);
                 try testing.expectEqual(expected_relation_by_dest[peer_index].?, relation);
-                expected_relation_by_dest[peer_index] = null; // mark seen
+                expected_relation_by_dest[peer_index] = null;
                 matched = true;
                 seen_count += 1;
                 break;
@@ -118,17 +111,14 @@ test "edge metadata: non-zero flags survive a chain of mutations that force copy
     }
     try expected.put(replacement.index, flags_keep);
 
-    const node_buffer = try graph.nodeAt(source);
-    const meta = node_buffer.loadPublishedMeta();
-    const fwd = node_buffer.publishedFwdFromMeta(meta);
-    const block = page_ops.edgeBlockAtConst(&graph.graph, fwd.first_block, .fwd);
-
-    const live = @popCount(block.mask);
+    const adj = try graph.publishedNodeAdj(source);
+    const live = try publish.forwardLiveCount(&graph, adj);
     try testing.expectEqual(@as(u64, expected.count()), live);
 
-    for (0..@intCast(live)) |slot| {
-        const dest = block.edges[slot].destination;
-        const raw_flags = @as(u16, @bitCast(block.edges[slot].flags));
+    for (0..@intCast(live)) |entry_idx| {
+        const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
+        const dest = entry.destination;
+        const raw_flags = @as(u16, @bitCast(entry.flags));
         const expected_flags = expected.get(dest) orelse {
             try testing.expect(false); // destination not in expected set
             unreachable;
@@ -186,11 +176,9 @@ test "edge metadata: relation = u16 max and flags with all bits set round-trip" 
     try graph.validate();
 
     const adj = try graph.publishedNodeAdj(source);
-    const block = page_ops.edgeBlockAtConst(&graph.graph, adj.first_block_fwd, .fwd);
-
-    try testing.expectEqual(@as(usize, 1), @popCount(block.mask));
-    try testing.expectEqual(std.math.maxInt(u16), block.edges[0].relation);
-    try testing.expectEqual(std.math.maxInt(u16), @as(u16, @bitCast(block.edges[0].flags)));
+    const entry = try publish.readForwardEntry(&graph, adj, 0);
+    try testing.expectEqual(std.math.maxInt(u16), entry.relation);
+    try testing.expectEqual(std.math.maxInt(u16), @as(u16, @bitCast(entry.flags)));
 
     try testing.expect(graph.hasEdgeInAdj(adj, target.index));
 }
@@ -206,8 +194,7 @@ test "edge metadata: relation = 0 and flags = 0 round-trip correctly" {
     try graph.validate();
 
     const adj = try graph.publishedNodeAdj(source);
-    const block = page_ops.edgeBlockAtConst(&graph.graph, adj.first_block_fwd, .fwd);
-
-    try testing.expectEqual(@as(u16, 0), block.edges[0].relation);
-    try testing.expectEqual(@as(u16, 0), @as(u16, @bitCast(block.edges[0].flags)));
+    const entry = try publish.readForwardEntry(&graph, adj, 0);
+    try testing.expectEqual(@as(u16, 0), entry.relation);
+    try testing.expectEqual(@as(u16, 0), @as(u16, @bitCast(entry.flags)));
 }

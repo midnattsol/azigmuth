@@ -1,10 +1,10 @@
-const common = @import("common.zig");
-const ownership_sets = @import("ownership_sets.zig");
-const block_shape = @import("block_shape.zig");
+const common = @import("../common.zig");
+const ownership_sets = @import("sets.zig");
+const block_shape = @import("../block_shape.zig");
 const std = @import("std");
-const constants = @import("../../core/constants.zig");
-const graph_core = @import("../../core/graph_core.zig");
-const types = @import("../../core/types.zig");
+const constants = @import("../../../core/constants.zig");
+const graph_core = @import("../../../core/graph_core.zig");
+const types = @import("../../../core/types.zig");
 
 pub fn appendOwnershipAndShapeViolations(
     graph: *const graph_core.GraphCore,

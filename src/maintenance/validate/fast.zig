@@ -3,8 +3,8 @@
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
+const node_access = @import("../../core/node_access.zig");
 const types = @import("../../core/types.zig");
-const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 
 const common = @import("common.zig");
@@ -42,8 +42,12 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
 
     for (0..node_count) |node_index| {
         const node_id: u32 = @intCast(node_index);
-        const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
-        const adjacency = node_buffer.publishedAdj();
+        const node = types.NodeId{ .index = node_id };
+        const node_buffer = node_access.nodeAtConst(graph, node);
+        const adjacency = node_access.publishedAdjAtConst(graph, node);
+        const meta = node_access.loadPublishedMeta(node_buffer);
+        const degree_fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta);
+        const degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta);
 
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd);
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .rev);
@@ -59,11 +63,10 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         try consistency.validateForwardConsistencyFast(graph, node_id, adjacency);
         try consistency.validateReverseConsistencyFast(graph, node_id, adjacency);
 
-        const meta = node_buffer.loadPublishedMeta();
         try logical.validateLiveNodeState(
             adjacency,
-            meta.degree_fwd,
-            meta.degree_rev,
+            degree_fwd,
+            degree_rev,
             fwd_visible,
             rev_visible,
             common.forwardHasTombstone(graph, adjacency),

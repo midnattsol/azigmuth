@@ -1,12 +1,15 @@
 const std = @import("std");
-const constants = @import("../../core/constants.zig");
-const graph_core = @import("../../core/graph_core.zig");
-const types = @import("../../core/types.zig");
-const page_ops = @import("../../storage/page_ops.zig");
-const common = @import("common.zig");
-const sums = @import("sums.zig");
-const consistency = @import("consistency.zig");
-const v = @import("violations.zig");
+const constants = @import("../../../core/constants.zig");
+const graph_core = @import("../../../core/graph_core.zig");
+const node_access = @import("../../../core/node_access.zig");
+const types = @import("../../../core/types.zig");
+const page_ops = @import("../../../storage/page_ops.zig");
+const node_published = @import("../../../storage/node/published.zig");
+const common = @import("../common.zig");
+const shape = @import("../shape.zig");
+const sums = @import("../sums.zig");
+const consistency = @import("../consistency.zig");
+const v = @import("../violations.zig");
 
 pub const VisibleTotals = struct {
     fwd: u64 = 0,
@@ -61,11 +64,16 @@ fn appendBlockCountMismatches(
     forward_block_count: usize,
     reverse_block_count: usize,
 ) !void {
-    if (forward_block_count != adjacency.block_count_fwd) {
-        try list.append(allocator, .{ .block_count_group_mismatch = .{ .node = node_id, .declared = adjacency.block_count_fwd, .actual = @intCast(forward_block_count) } });
+    const forward_side = common.sideAdjOf(adjacency, .fwd);
+    const reverse_side = common.sideAdjOf(adjacency, .rev);
+    const declared_forward_count: u32 = if (node_published.NodePublished.isTiny(&forward_side)) 0 else adjacency.block_count_fwd;
+    const declared_reverse_count: u32 = if (node_published.NodePublished.isTiny(&reverse_side)) 0 else adjacency.block_count_rev;
+
+    if (forward_block_count != declared_forward_count) {
+        try list.append(allocator, .{ .block_count_group_mismatch = .{ .node = node_id, .declared = declared_forward_count, .actual = @intCast(forward_block_count) } });
     }
-    if (reverse_block_count != adjacency.block_count_rev) {
-        try list.append(allocator, .{ .block_count_group_mismatch = .{ .node = node_id, .declared = adjacency.block_count_rev, .actual = @intCast(reverse_block_count) } });
+    if (reverse_block_count != declared_reverse_count) {
+        try list.append(allocator, .{ .block_count_group_mismatch = .{ .node = node_id, .declared = declared_reverse_count, .actual = @intCast(reverse_block_count) } });
     }
 }
 
@@ -147,6 +155,13 @@ fn appendLayoutViolations(
 ) !void {
     if (adjacency.flags.removed) return;
 
+    const fwd_side = common.sideAdjOf(adjacency, .fwd);
+    if (node_published.NodePublished.isTiny(&fwd_side)) {
+        _ = shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd) catch {
+            try list.append(allocator, .{ .unsorted_block = .{ .node = node_id, .block = fwd_side.first_block, .slot = 0 } });
+        };
+    }
+
     if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) {
         try list.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = 0, .occupancy = 0 } });
     }
@@ -179,13 +194,46 @@ pub fn appendNodeViolations(
     try trackGroupsForSide(allocator, list, tracking, node_id, adjacency.first_group_fwd, adjacency.group_count_fwd);
     try trackGroupsForSide(allocator, list, tracking, node_id, adjacency.first_group_rev, adjacency.group_count_rev);
 
-    const node_buffer = page_ops.nodeAtConst(graph, .{ .index = node_id });
+    const node_buffer = node_access.nodeAtConst(graph, .{ .index = node_id });
 
     try v.appendOwnershipAndShapeViolations(graph, allocator, list, &tracking.owned_forward_blocks, &tracking.free_forward_blocks, &tracking.retired_forward_blocks, node_id, forward_blocks.items, .fwd);
     try v.appendOwnershipAndShapeViolations(graph, allocator, list, &tracking.owned_reverse_blocks, &tracking.free_reverse_blocks, &tracking.retired_reverse_blocks, node_id, reverse_blocks.items, .rev);
 
     if (!adjacency.flags.removed) {
         try consistency.appendForwardEdgeIdViolations(graph, allocator, list, node_id, node_buffer, adjacency);
+        try consistency.appendForwardConsistencyViolations(graph, allocator, list, node_id, forward_blocks.items);
+        try consistency.appendReverseConsistencyViolations(graph, allocator, list, node_id, reverse_blocks.items);
+    }
+
+    const visible_fwd = sums.sumVisibleAdjacency(graph, adjacency, .fwd);
+    const visible_rev = sums.sumVisibleAdjacency(graph, adjacency, .rev);
+    try appendDegreeAndTombstoneViolations(graph, allocator, list, node_id, adjacency, degree_fwd, degree_rev, visible_fwd, visible_rev);
+    try appendLayoutViolations(graph, allocator, list, node_id, adjacency);
+
+    if (adjacency.flags.removed) return .{};
+    return .{ .fwd = visible_fwd, .rev = visible_rev };
+}
+
+pub fn appendSnapshotNodeViolations(
+    graph: *const graph_core.GraphCore,
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(types.Violation),
+    node_id: u32,
+    adjacency: types.NodeAdj,
+    degree_fwd: u32,
+    degree_rev: u32,
+) !VisibleTotals {
+    var forward_blocks: std.ArrayList(common.TraversedBlock) = .empty;
+    defer forward_blocks.deinit(allocator);
+    var reverse_blocks: std.ArrayList(common.TraversedBlock) = .empty;
+    defer reverse_blocks.deinit(allocator);
+
+    try v.collectAdjacencyBlocks(graph, allocator, list, node_id, adjacency, &forward_blocks, .fwd);
+    try v.collectAdjacencyBlocks(graph, allocator, list, node_id, adjacency, &reverse_blocks, .rev);
+    try appendBlockCountMismatches(allocator, list, node_id, adjacency, forward_blocks.items.len, reverse_blocks.items.len);
+
+    if (!adjacency.flags.removed) {
+        try consistency.appendForwardEdgeIdViolationsSnapshot(graph, allocator, list, node_id, adjacency);
         try consistency.appendForwardConsistencyViolations(graph, allocator, list, node_id, forward_blocks.items);
         try consistency.appendReverseConsistencyViolations(graph, allocator, list, node_id, reverse_blocks.items);
     }

@@ -110,7 +110,7 @@ test "addNode: parallel producers with concurrent edge insertion keep forward/re
     try testing.expectEqual(@as(usize, producer_count * per_producer), graph.nodeCount());
     try testing.expect(adder_ctx.successful_adds.load(.acquire) > 0);
 
-    const violations = try graph.debugValidate(allocator);
+    const violations = try graph.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 

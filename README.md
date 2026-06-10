@@ -12,10 +12,17 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 
 ## Design limits
 
-- Max degree per side per node: **4,194,240** (`65,535 * 64` edges).
+- Max degree per side per node: **16,777,216** (`262,144 * 64` edges).
 - Max block groups per node: **4** (`MAX_GROUPS_PER_NODE`).
-- Supernodes (> 4.19M edges in one direction) are not supported in the
+- Supernodes (> 16.7M edges in one direction) are not supported in the
   current storage format — accepted architecture trade-off.
+
+Implementation notes:
+
+- Const read paths compose adjacency from `NodeMeta + NodePublished`.
+- `NodeHot` lives in padded `hot_layout.Slot` entries (default `32 B` stride).
+- `NodeBuffer` remains as the mutation staging / compatibility layer, not the
+  canonical const read source for published adjacency.
 
 ## Basic usage
 
@@ -124,7 +131,8 @@ call `reclaimRetired()` explicitly:
 g.reclaimRetired();
 ```
 
-When you want debt observability or an explicit repair flush:
+When you want debt observability or an explicit repair flush that drains only
+published repair debt sources:
 
 ```zig
 const stats = try g.debtStats();
@@ -142,7 +150,9 @@ an owned slice. Public adjacency queries, degree queries, and algorithms all go
 through `ReadSnapshot`, not `Graph`.
 
 ```zig
-var snapshot = try g.snapshot(allocator);
+const ctx = gz.Context.init(allocator);
+
+var snapshot = try g.snapshot(ctx);
 defer snapshot.deinit();
 var it = try snapshot.neighbors(node);
 const all = try it.materialize(allocator);
@@ -150,14 +160,16 @@ defer allocator.free(all);
 // it.next() returns null after materialize()
 
 try snapshot.validate();
-const violations = try snapshot.debugValidate(allocator);
+const violations = try snapshot.debugValidate(ctx);
 defer allocator.free(violations);
 ```
 
 ## Algorithms
 
 ```zig
-var snapshot = try g.snapshot(allocator);
+const ctx = gz.Context.init(allocator);
+
+var snapshot = try g.snapshot(ctx);
 defer snapshot.deinit();
 
 try std.testing.expectEqual(@as(usize, 2), try snapshot.outDegree(start));
@@ -166,13 +178,13 @@ var neighbors = try snapshot.neighbors(start);
 const all = try neighbors.materialize(allocator);
 defer allocator.free(all);
 
-const snap_has_cycle = try snapshot.hasCycle(allocator);
+const snap_has_cycle = try snapshot.hasCycle(ctx);
 _ = snap_has_cycle;
 
-const snap_bfs = try snapshot.bfs(start, allocator);
+const snap_bfs = try snapshot.bfs(start, ctx);
 defer allocator.free(snap_bfs);
 
-const snap_dfs = try snapshot.dfs(start, allocator);
+const snap_dfs = try snapshot.dfs(start, ctx);
 defer allocator.free(snap_dfs);
 ```
 
@@ -182,8 +194,10 @@ maintenance.
 
 `Graph.validate()` remains the live fast-path structural check over the mutable
 engine state. `snapshot.validate()` is the fast logical/structural check over a
-sealed captured view, and `snapshot.debugValidate(allocator)` is the exhaustive
-allocating validator over that same captured view.
+sealed captured view, and `snapshot.debugValidate(ctx)` is the exhaustive
+allocating validator over that same captured view. Unlike live
+`Graph.debugValidate(ctx)`, snapshot debug validation does not audit free lists,
+retired stacks, or other ownership details of the mutable engine.
 
 ## Commands
 

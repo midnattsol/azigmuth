@@ -55,10 +55,11 @@ test "concurrent repair: two repairBudgeted callers in parallel do not crash or 
     // Mark many nodes for repair to create contention on the queue.
     for (0..30) |i| {
         if (i % 3 == 0) {
-            const buf = try graph.nodeAt(.{ .index = @intCast(i) });
-            var flags = buf.loadPublishedMeta().flags();
+            var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
+            var flags = meta.flags();
             flags.needs_repair_fwd = true;
-            publish.setPublishedFlags(buf, flags);
+            meta = meta.withFlags(flags);
+            publish.storePublishedMeta(&graph, @intCast(i), meta);
         }
     }
 
@@ -95,7 +96,7 @@ test "concurrent repair: two repairBudgeted callers in parallel do not crash or 
 
     try drainRepairDebtUntilIdle(&graph);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     for (violations) |v| {
@@ -131,10 +132,11 @@ test "concurrent repair: repairBudgeted + removeEdge in parallel does not crash"
 
     for (0..20) |i| {
         if (i % 5 == 0) {
-            const buf = try graph.nodeAt(.{ .index = @intCast(i) });
-            var flags = buf.loadPublishedMeta().flags();
+            var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
+            var flags = meta.flags();
             flags.needs_repair_fwd = true;
-            publish.setPublishedFlags(buf, flags);
+            meta = meta.withFlags(flags);
+            publish.storePublishedMeta(&graph, @intCast(i), meta);
         }
     }
 
@@ -173,7 +175,7 @@ test "concurrent repair: repairBudgeted + removeEdge in parallel does not crash"
 
     try drainRepairDebtUntilIdle(&graph);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     for (violations) |v| {
@@ -204,10 +206,11 @@ test "concurrent repair: repairBudgeted + removeNode in parallel does not crash"
 
     for (0..20) |i| {
         if (i % 5 == 0) {
-            const buf = try graph.nodeAt(.{ .index = @intCast(i) });
-            var flags = buf.loadPublishedMeta().flags();
+            var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
+            var flags = meta.flags();
             flags.needs_repair_fwd = true;
-            publish.setPublishedFlags(buf, flags);
+            meta = meta.withFlags(flags);
+            publish.storePublishedMeta(&graph, @intCast(i), meta);
         }
     }
 
@@ -243,7 +246,7 @@ test "concurrent repair: repairBudgeted + removeNode in parallel does not crash"
 
     try drainRepairDebtUntilIdle(&graph);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     for (violations) |v| {
@@ -326,7 +329,7 @@ test "concurrent repair: stress mixed addEdge/removeEdge/removeNode + repairBudg
 
     try drainRepairDebtUntilIdle(&graph);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     for (violations) |v| {

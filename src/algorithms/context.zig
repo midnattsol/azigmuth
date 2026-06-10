@@ -22,4 +22,8 @@ pub const Context = struct {
     io: ?Io = null,
     parallel_min_nodes: usize = 1024,
     cancel_token: ?*CancelToken = null,
+
+    pub fn init(allocator: std.mem.Allocator) Context {
+        return .{ .allocator = allocator };
+    }
 };

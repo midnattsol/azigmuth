@@ -207,6 +207,7 @@ test "sorted rebuild forward: two blocks with mixed tombstones produce packed ou
     const pfwd = publish.publishedFwdSide(node);
     pfwd.first_block = block0;
     pfwd.block_count = 2;
+    try publish.syncToPublished(&graph, nodes[11].index);
 
     _ = try graph.removeNode(nodes[3]);
     _ = try graph.removeNode(nodes[8]);

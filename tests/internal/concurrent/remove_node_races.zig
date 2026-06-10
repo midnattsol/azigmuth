@@ -113,7 +113,7 @@ test "concurrent: removeNode survives forward mutation on a predecessor being va
 
     try testing.expectEqual(@as(u64, 1), rm_ctx.successes.load(.acquire));
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
@@ -257,8 +257,8 @@ test "concurrent: removeNode predecessor degree update does not require forward 
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, target, 0, 0);
 
-    const predecessor_buffer = try graph.nodeAt(predecessor);
-    try testing.expectEqual(@as(u8, 0), predecessor_buffer.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
+    const predecessor_claim = &graph_mod.page_ops_mod.nodeAt(&graph.graph, predecessor).fwd_claim;
+    try testing.expectEqual(@as(u8, 0), predecessor_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
 
     // removeNode must succeed even though predecessor's fwd_claim is held
     // by an unrelated writer.
@@ -266,7 +266,7 @@ test "concurrent: removeNode predecessor degree update does not require forward 
     try testing.expect(!graph.hasNode(target));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    predecessor_buffer.fwd_claim.store(0, .release);
+    predecessor_claim.store(0, .release);
 
     // Clean up: after removeNode the predecessor has a tombstone but the
     // graph is structurally consistent.

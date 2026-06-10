@@ -77,9 +77,9 @@ test "GraphBuilder: frozen graph passes validation and algorithms" {
 
     try graph.validate();
 
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const bfs_order = try snapshot.bfs(node0, testing.allocator);
+    const bfs_order = try snapshot.bfs(node0, .{ .allocator = testing.allocator });
     defer testing.allocator.free(bfs_order);
     try testing.expect(bfs_order.len >= 4);
 }
@@ -310,9 +310,9 @@ test "graph_builder: 500+ edges freeze produces a valid graph with zero debug vi
     try testing.expect(edge_count >= 500);
     try graph.validate();
 
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(testing.allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
     try testing.expect(graph.edgeCount() > 0);

@@ -24,9 +24,10 @@ test "graph debug validate: detects forward entry without reverse entry" {
     publish.clearPublishedSides(a_node);
     publish.publishedFwdSide(a_node).first_block = block;
     publish.publishedFwdSide(a_node).block_count = 1;
+    try publish.syncToPublished(&graph, a.index);
     graph.graph.edge_count.store(1, .release);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found = false;
@@ -60,16 +61,18 @@ test "graph debug validate: detects removed node with outgoing adjacency" {
     publish.publishedFwdSide(removed_raw).block_count = 1;
     publish.setPublishedFlags(removed_raw, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = true });
     publish.setPublishedFwdDegree(removed_raw, @as(u22, @intCast(1)));
+    try publish.syncToPublished(&graph, removed.index);
 
     const live_raw = try graph.nodeAt(live);
     publish.publishedRevSide(live_raw).first_block = rev_block;
     publish.publishedRevSide(live_raw).block_count = 1;
     publish.setPublishedRevDegree(live_raw, @as(u22, @intCast(1)));
+    try publish.syncToPublished(&graph, live.index);
     graph.graph.edge_count.store(1, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found_outgoing = false;
@@ -99,8 +102,9 @@ test "graph debug validate: detects reverse entry without forward entry" {
     publish.clearPublishedSides(b_node);
     publish.publishedRevSide(b_node).first_block = block;
     publish.publishedRevSide(b_node).block_count = 1;
+    try publish.syncToPublished(&graph, b.index);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found = false;

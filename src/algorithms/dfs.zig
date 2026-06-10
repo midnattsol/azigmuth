@@ -1,128 +1,33 @@
 const std = @import("std");
-const snapshot_view = @import("../query/snapshot_view.zig");
-const page_ops = @import("../storage/page_ops.zig");
+const snapshot_iterators = @import("../query/snapshot/iterators.zig");
+const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
 
 const DfsFrame = struct {
     node_idx: u32,
-    current_block_index: u32,
-    blocks_remaining: u16,
-    next_group_index: u32,
-    groups_remaining: u16,
-
-    current_mask: u64,
-    cached_fwd_block: ?*const types.EdgeBlockFwd = null,
-
-    check_removed_candidates: bool,
-
-    fn advanceToNextGroup(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) bool {
-        if (self.groups_remaining == 0) return false;
-        const group = page_ops.groupAtConst(view.core, self.next_group_index);
-        self.current_block_index = group.start;
-        self.blocks_remaining = group.count;
-        self.next_group_index += 1;
-        self.groups_remaining -= 1;
-        return true;
-    }
-
-    fn loadNextNonEmptyMask(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) bool {
-        while (true) {
-            while (self.blocks_remaining == 0) {
-                if (!self.advanceToNextGroup(view)) return false;
-            }
-
-            const block_idx = self.current_block_index;
-            self.current_block_index += 1;
-            self.blocks_remaining -= 1;
-
-            const block = page_ops.edgeBlockAtConst(view.core, block_idx, .fwd);
-            if (block.mask == 0) continue;
-            self.current_mask = block.mask;
-            self.cached_fwd_block = block;
-            return true;
-        }
-    }
-
-    fn next(self: *DfsFrame, view: *const snapshot_view.CapturedGraphView) ?types.NodeId {
-        while (true) {
-            while (self.current_mask == 0) {
-                if (!self.loadNextNonEmptyMask(view)) return null;
-            }
-
-            const bit_index: u6 = @intCast(@ctz(self.current_mask));
-            self.current_mask &= self.current_mask - 1;
-            const neighbor = types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination };
-            if (neighbor.index >= view.nodeCount()) continue;
-            if (self.check_removed_candidates and !view.isLiveIndex(neighbor.index)) continue;
-            return neighbor;
-        }
-    }
+    cursor: snapshot_iterators.SnapshotNeighborIterator,
 };
 
-fn initFrame(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) types.GraphError!?DfsFrame {
-    if (node.index >= view.nodeCount()) return null;
-    if (!view.isLiveIndex(node.index)) return null;
-
-    const snapshot_side = view.fwd_side[node.index];
-    if (snapshot_side.block_count == 0) {
-        return .{
-            .node_idx = node.index,
-            .current_block_index = 0,
-            .blocks_remaining = 0,
-            .next_group_index = 0,
-            .groups_remaining = 0,
-            .current_mask = 0,
-            .check_removed_candidates = view.needsRepairFwd(node.index),
-        };
-    }
-
-    if (snapshot_side.group_count == 0) {
-        return .{
-            .node_idx = node.index,
-            .current_block_index = snapshot_side.first_block,
-            .blocks_remaining = snapshot_side.block_count,
-            .next_group_index = 0,
-            .groups_remaining = 0,
-            .current_mask = 0,
-            .check_removed_candidates = view.needsRepairFwd(node.index),
-        };
-    }
-
-    return .{
-        .node_idx = node.index,
-        .current_block_index = 0,
-        .blocks_remaining = 0,
-        .next_group_index = snapshot_side.first_group,
-        .groups_remaining = snapshot_side.group_count,
-        .current_mask = 0,
-        .check_removed_candidates = view.needsRepairFwd(node.index),
-    };
-}
-
 fn initFrameLive(view: *const snapshot_view.CapturedGraphView, node_idx: u32) DfsFrame {
-    const snapshot_side = view.fwd_side[node_idx];
-    if (snapshot_side.block_count == 0) {
-        return .{ .node_idx = node_idx, .current_block_index = 0, .blocks_remaining = 0, .next_group_index = 0, .groups_remaining = 0, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
-    }
-    if (snapshot_side.group_count == 0) {
-        return .{ .node_idx = node_idx, .current_block_index = snapshot_side.first_block, .blocks_remaining = snapshot_side.block_count, .next_group_index = 0, .groups_remaining = 0, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
-    }
-    return .{ .node_idx = node_idx, .current_block_index = 0, .blocks_remaining = 0, .next_group_index = snapshot_side.first_group, .groups_remaining = snapshot_side.group_count, .current_mask = 0, .check_removed_candidates = view.needsRepairFwd(node_idx) };
+    return .{
+        .node_idx = node_idx,
+        .cursor = snapshot_iterators.neighborsCursor(view, .{ .index = node_idx }) catch unreachable orelse unreachable,
+    };
 }
 
 /// Returns nodes in depth-first order starting from `start` over a fixed
 /// captured graph view.
-pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, ctx: anytype) types.GraphError![]types.NodeId {
+pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
     const node_count = view.nodeCount();
     try view.ensureLiveStart(start);
 
-    var visited = try std.DynamicBitSetUnmanaged.initEmpty(ctx.allocator, node_count);
-    defer visited.deinit(ctx.allocator);
+    var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+    defer visited.deinit(allocator);
 
-    var stack = try std.ArrayList(DfsFrame).initCapacity(ctx.allocator, node_count);
-    defer stack.deinit(ctx.allocator);
-    var order = try std.ArrayList(types.NodeId).initCapacity(ctx.allocator, node_count);
-    errdefer order.deinit(ctx.allocator);
+    var stack = try std.ArrayList(DfsFrame).initCapacity(allocator, node_count);
+    defer stack.deinit(allocator);
+    var order = try std.ArrayList(types.NodeId).initCapacity(allocator, node_count);
+    errdefer order.deinit(allocator);
 
     visited.set(start.index);
     order.appendAssumeCapacity(start);
@@ -134,7 +39,7 @@ pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
         const current = &stack.items[stack.items.len - 1];
 
         var pushed = false;
-        while (current.next(view)) |neighbor| {
+        while (current.cursor.next()) |neighbor| {
             if (visited.isSet(neighbor.index)) continue;
 
             visited.set(neighbor.index);
@@ -155,5 +60,5 @@ pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
         }
     }
 
-    return order.toOwnedSlice(ctx.allocator);
+    return order.toOwnedSlice(allocator);
 }

@@ -50,10 +50,10 @@ fn replaceTailSuffixWithFreshSpan(
 
     scratch.freeTrackedBlock(graph, side, discarded_block_idx);
 
-    const new_run_block_count: u16 = penultimate_run.count + tail_run.count + @as(u16, if (append_new_block) 1 else 0);
+    const new_run_block_count: u32 = penultimate_run.count + tail_run.count + @as(u32, if (append_new_block) 1 else 0);
     const first_block_idx = try scratch.allocFreshBlockSpan(graph, side, new_run_block_count);
 
-    var block_offset: u16 = 0;
+    var block_offset: u32 = 0;
     while (block_offset < penultimate_run.count) : (block_offset += 1) {
         copyBlock(graph, penultimate_run.start + block_offset, first_block_idx + block_offset, side);
     }

@@ -27,14 +27,14 @@ pub const MutationScratch = struct {
         return block;
     }
 
-    pub fn allocFreshBlockSpan(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_count: u16) !u32 {
+    pub fn allocFreshBlockSpan(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_count: u32) !u32 {
         const first_block_idx = try page_ops.allocFreshBlockSpan(graph, block_count, side);
         const list = switch (side) {
             .fwd => &self.fwd_blocks,
             .rev => &self.rev_blocks,
         };
 
-        var tracked_blocks: u16 = 0;
+        var tracked_blocks: u32 = 0;
         errdefer {
             var block_offset = tracked_blocks;
             while (block_offset > 0) {
