@@ -1,52 +1,56 @@
-const std = @import("std");
 const graph_core = @import("../core/graph_core.zig");
+const page_ops = @import("../storage/page_ops.zig");
+const node_hot = @import("../storage/node/hot.zig");
 const types = @import("../core/types.zig");
 
 pub const ClaimedAdjacencies = struct {
     source_node: *types.NodeBuffer,
     destination_node: *types.NodeBuffer,
+    source_hot: *node_hot.NodeHot,
+    destination_hot: *node_hot.NodeHot,
     source_fwd_claimed: bool = false,
     source_rev_claimed: bool = false,
     destination_fwd_claimed: bool = false,
     destination_rev_claimed: bool = false,
 
     pub fn release(self: *ClaimedAdjacencies) void {
-        if (self.destination_rev_claimed) self.destination_node.rev_claim.store(0, .release);
-        if (self.destination_fwd_claimed) self.destination_node.fwd_claim.store(0, .release);
-        if (self.source_rev_claimed) self.source_node.rev_claim.store(0, .release);
-        if (self.source_fwd_claimed) self.source_node.fwd_claim.store(0, .release);
+        if (self.destination_rev_claimed) self.destination_hot.releaseRev();
+        if (self.destination_fwd_claimed) self.destination_hot.releaseFwd();
+        if (self.source_rev_claimed) self.source_hot.releaseRev();
+        if (self.source_fwd_claimed) self.source_hot.releaseFwd();
     }
 
-    fn claimNodeFwd(self: *ClaimedAdjacencies, node: *types.NodeBuffer) !void {
-        if (node.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
-        if (node == self.source_node) self.source_fwd_claimed = true else self.destination_fwd_claimed = true;
+    fn claimNodeFwd(self: *ClaimedAdjacencies, hot: *node_hot.NodeHot, is_source: bool) !void {
+        try hot.claimFwd();
+        if (is_source) self.source_fwd_claimed = true else self.destination_fwd_claimed = true;
     }
 
-    fn claimNodeRev(self: *ClaimedAdjacencies, node: *types.NodeBuffer) !void {
-        if (node.rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
-        if (node == self.source_node) self.source_rev_claimed = true else self.destination_rev_claimed = true;
+    fn claimNodeRev(self: *ClaimedAdjacencies, hot: *node_hot.NodeHot, is_source: bool) !void {
+        try hot.claimRev();
+        if (is_source) self.source_rev_claimed = true else self.destination_rev_claimed = true;
     }
 };
 
 pub const ClaimedNodeSides = struct {
     node: *types.NodeBuffer,
+    hot: *node_hot.NodeHot,
     fwd_claimed: bool = false,
     rev_claimed: bool = false,
 
     pub fn release(self: *ClaimedNodeSides) void {
-        if (self.rev_claimed) self.node.rev_claim.store(0, .release);
-        if (self.fwd_claimed) self.node.fwd_claim.store(0, .release);
+        if (self.rev_claimed) self.hot.releaseRev();
+        if (self.fwd_claimed) self.hot.releaseFwd();
     }
 
     pub fn ensureFwd(self: *ClaimedNodeSides) !void {
         if (self.fwd_claimed) return;
-        if (self.node.fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+        try self.hot.claimFwd();
         self.fwd_claimed = true;
     }
 
     pub fn ensureRev(self: *ClaimedNodeSides) !void {
         if (self.rev_claimed) return;
-        if (self.node.rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return error.ConcurrentMutation;
+        try self.hot.claimRev();
         self.rev_claimed = true;
     }
 };
@@ -67,136 +71,30 @@ pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
     return .{ .graph = graph };
 }
 
-pub fn tryClaimAdjacencies(source_node: *types.NodeBuffer, destination_node: *types.NodeBuffer, source_index: u32, destination_index: u32) !ClaimedAdjacencies {
+pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_node: *types.NodeBuffer, destination_node: *types.NodeBuffer, source_index: u32, destination_index: u32) !ClaimedAdjacencies {
+    const source_hot = try page_ops.ensureNodeHotAt(graph, .{ .index = source_index });
+    const destination_hot = if (source_index == destination_index) source_hot else try page_ops.ensureNodeHotAt(graph, .{ .index = destination_index });
     var claims = ClaimedAdjacencies{
         .source_node = source_node,
         .destination_node = destination_node,
+        .source_hot = source_hot,
+        .destination_hot = destination_hot,
     };
     errdefer claims.release();
-
     if (source_index == destination_index) {
-        try claims.claimNodeFwd(source_node);
-        try claims.claimNodeRev(source_node);
+        try claims.claimNodeFwd(source_hot, true);
+        try claims.claimNodeRev(source_hot, true);
     } else {
-        try claims.claimNodeFwd(source_node);
-        try claims.claimNodeRev(destination_node);
+        try claims.claimNodeFwd(source_hot, true);
+        try claims.claimNodeRev(destination_hot, false);
     }
-
     return claims;
 }
 
-pub fn tryClaimNodeSides(node: *types.NodeBuffer, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
-    var claims = ClaimedNodeSides{ .node = node };
+pub fn tryClaimNodeSides(graph: *graph_core.GraphCore, node: *types.NodeBuffer, node_index: u32, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
+    var claims = ClaimedNodeSides{ .node = node, .hot = try page_ops.ensureNodeHotAt(graph, .{ .index = node_index }) };
     errdefer claims.release();
     if (want_fwd) try claims.ensureFwd();
     if (want_rev) try claims.ensureRev();
     return claims;
-}
-
-pub fn publishStagedFwd(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        const new_degree: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_fwd)) + delta));
-        const desired = types.NodeBuffer.desiredMetaForPublishFwd(expected, needs_repair_fwd or expected.needs_repair_fwd, new_degree);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
-}
-
-pub fn publishStagedRev(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: i23) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        const new_degree: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_rev)) + delta));
-        const desired = types.NodeBuffer.desiredMetaForPublishRev(expected, needs_repair_rev or expected.needs_repair_rev, new_degree);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
-}
-
-pub fn publishStagedBoth(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u22, rev_degree: u22) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        const desired = types.NodeBuffer.desiredMetaForPublishBoth(expected, flags, fwd_degree, rev_degree);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
-}
-
-pub fn publishBothDelta(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        const new_fwd: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_fwd)) + fwd_delta));
-        const new_rev: u22 = @as(u22, @intCast(@as(i64, @intCast(expected.degree_rev)) + rev_delta));
-        var merged_flags = flags;
-        merged_flags.needs_repair_fwd = merged_flags.needs_repair_fwd or expected.needs_repair_fwd;
-        merged_flags.needs_repair_rev = merged_flags.needs_repair_rev or expected.needs_repair_rev;
-        merged_flags.removed = merged_flags.removed or expected.removed;
-        const desired = types.NodeBuffer.desiredMetaForPublishBoth(expected, merged_flags, new_fwd, new_rev);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
-}
-
-/// CAS-only forward degree update — decrement by 1.
-pub fn publishMetaFwdUpdated(node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool) types.PublishedMeta {
-    return publishMetaFwdDeltaUpdated(node, expected_meta, needs_repair_fwd, 1);
-}
-
-/// CAS-only forward degree update — decrement by an exact delta.
-pub fn publishMetaFwdDeltaUpdated(
-    node: *types.NodeBuffer,
-    expected_meta: types.PublishedMeta,
-    needs_repair_fwd: bool,
-    delta: u22,
-) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        std.debug.assert(delta > 0);
-        std.debug.assert(expected.degree_fwd >= delta);
-        const new_degree: u22 = @as(u22, @intCast(@as(u64, expected.degree_fwd) - delta));
-        const desired = types.NodeBuffer.desiredMetaForUpdateFwd(expected, needs_repair_fwd or expected.needs_repair_fwd, new_degree);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
-}
-
-pub fn publishMetaRevDeltaUpdated(
-    node: *types.NodeBuffer,
-    expected_meta: types.PublishedMeta,
-    needs_repair_rev: bool,
-    delta: u22,
-) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        std.debug.assert(delta > 0);
-        std.debug.assert(expected.degree_rev >= delta);
-        const new_degree: u22 = @as(u22, @intCast(@as(u64, expected.degree_rev) - delta));
-        const desired = types.NodeBuffer.desiredMetaForUpdateRev(expected, needs_repair_rev or expected.needs_repair_rev, new_degree);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
-}
-
-pub fn publishMetaBothDeltaUpdated(
-    node: *types.NodeBuffer,
-    expected_meta: types.PublishedMeta,
-    flags: types.NodeFlags,
-    fwd_delta: u22,
-    rev_delta: u22,
-) types.PublishedMeta {
-    var expected = expected_meta;
-    while (true) {
-        std.debug.assert(fwd_delta > 0 or rev_delta > 0);
-        std.debug.assert(expected.degree_fwd >= fwd_delta);
-        std.debug.assert(expected.degree_rev >= rev_delta);
-        const new_fwd: u22 = @as(u22, @intCast(@as(u64, expected.degree_fwd) - fwd_delta));
-        const new_rev: u22 = @as(u22, @intCast(@as(u64, expected.degree_rev) - rev_delta));
-        var merged_flags = flags;
-        merged_flags.needs_repair_fwd = merged_flags.needs_repair_fwd or expected.needs_repair_fwd;
-        merged_flags.needs_repair_rev = merged_flags.needs_repair_rev or expected.needs_repair_rev;
-        merged_flags.removed = merged_flags.removed or expected.removed;
-        const desired = types.NodeBuffer.desiredMetaForUpdateBoth(expected, merged_flags, new_fwd, new_rev);
-        const actual = node.cmpxchgPublishedMeta(expected, desired) orelse return desired;
-        expected = actual;
-    }
 }

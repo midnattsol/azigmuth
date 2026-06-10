@@ -2,9 +2,10 @@ const common = @import("common.zig");
 const run_search = @import("run_search.zig");
 const shape = @import("shape.zig");
 const graph_core = @import("../../core/graph_core.zig");
-const snapshot_view = @import("../../query/snapshot_view.zig");
+const snapshot_view = @import("../../query/snapshot/view.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const node_published = @import("../../storage/node/published.zig");
 const logical = @import("logical.zig");
 
 fn countVisibleEntriesInBlockSnapshot(
@@ -29,6 +30,24 @@ fn countVisibleEntriesInBlockSnapshot(
     return total;
 }
 
+fn countVisibleEntriesInTinySnapshot(
+    graph: *const graph_core.GraphCore,
+    view: *const snapshot_view.CapturedGraphView,
+    side_adj: types.SideAdj,
+    comptime side: common.Side,
+) u64 {
+    const count = node_published.NodePublished.tinyCount(&side_adj);
+    var total: u64 = 0;
+    for (0..count) |entry_idx| {
+        const candidate_idx = switch (side) {
+            .fwd => page_ops.tinyFwdAtConst(graph, side_adj.first_block).entries[entry_idx].destination,
+            .rev => page_ops.tinyRevAtConst(graph, side_adj.first_block).sources[entry_idx],
+        };
+        if (candidate_idx < view.nodeCount() and view.isLiveIndex(candidate_idx)) total += 1;
+    }
+    return total;
+}
+
 fn sumVisibleAdjacencySnapshot(
     graph: *const graph_core.GraphCore,
     view: *const snapshot_view.CapturedGraphView,
@@ -36,6 +55,10 @@ fn sumVisibleAdjacencySnapshot(
     comptime side: common.Side,
 ) u64 {
     if (adjacency.flags.removed) return 0;
+    const side_adj = common.sideAdjOf(adjacency, side);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        return countVisibleEntriesInTinySnapshot(graph, view, side_adj, side);
+    }
 
     const SumContext = struct {
         view: *const snapshot_view.CapturedGraphView,
@@ -48,7 +71,7 @@ fn sumVisibleAdjacencySnapshot(
             inner_graph: *const graph_core.GraphCore,
             inner_context: *SumContext,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
@@ -66,6 +89,18 @@ fn hasTombstoneSnapshot(
     comptime side: common.Side,
 ) bool {
     if (adjacency.flags.removed) return false;
+    const side_adj = common.sideAdjOf(adjacency, side);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        for (0..count) |entry_idx| {
+            const candidate_idx = switch (side) {
+                .fwd => page_ops.tinyFwdAtConst(graph, side_adj.first_block).entries[entry_idx].destination,
+                .rev => page_ops.tinyRevAtConst(graph, side_adj.first_block).sources[entry_idx],
+            };
+            if (candidate_idx < view.nodeCount() and !view.isLiveIndex(candidate_idx)) return true;
+        }
+        return false;
+    }
 
     const TombstoneContext = struct {
         view: *const snapshot_view.CapturedGraphView,
@@ -77,7 +112,7 @@ fn hasTombstoneSnapshot(
             inner_graph: *const graph_core.GraphCore,
             inner_context: *TombstoneContext,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
@@ -144,13 +179,22 @@ fn validateForwardEdgeIdsSnapshot(
     if (!graph.multigraph_enabled) return;
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
+    const side_adj = common.sideAdjOf(adjacency, .fwd);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        for (0..count) |entry_idx| {
+            if (slot.entries[entry_idx].edge_id == 0) return error.CorruptGraph;
+        }
+        return;
+    }
 
     try common.forEachRunInAdj(graph, adjacency, .fwd, {}, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
             _: void,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
@@ -173,6 +217,25 @@ fn validateForwardConsistencySnapshot(
 ) !void {
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
+    const side_adj = common.sideAdjOf(adjacency, .fwd);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        for (0..count) |entry_idx| {
+            const destination_idx = slot.entries[entry_idx].destination;
+            if (destination_idx >= view.nodeCount()) return error.CorruptGraph;
+            const destination_adjacency = view.adjacency(destination_idx);
+            if (destination_adjacency.flags.removed) continue;
+            if (graph.multigraph_enabled) {
+                const forward_count = countTargetMatchesSnapshot(graph, adjacency, destination_idx, .fwd);
+                const reverse_count = countTargetMatchesSnapshot(graph, destination_adjacency, source_idx, .rev);
+                if (forward_count != reverse_count) return error.CorruptGraph;
+            } else if (!adjacencyContainsSnapshot(graph, destination_adjacency, source_idx, .rev)) {
+                return error.CorruptGraph;
+            }
+        }
+        return;
+    }
 
     const ForwardContext = struct {
         view: *const snapshot_view.CapturedGraphView,
@@ -186,7 +249,7 @@ fn validateForwardConsistencySnapshot(
             inner_graph: *const graph_core.GraphCore,
             inner_context: *ForwardContext,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
@@ -219,6 +282,19 @@ fn validateReverseConsistencySnapshot(
 ) !void {
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .rev) == 0) return;
+    const side_adj = common.sideAdjOf(adjacency, .rev);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        for (0..count) |entry_idx| {
+            const source_idx = slot.sources[entry_idx];
+            if (source_idx >= view.nodeCount()) return error.CorruptGraph;
+            const source_adjacency = view.adjacency(source_idx);
+            if (source_adjacency.flags.removed) continue;
+            if (!adjacencyContainsSnapshot(graph, source_adjacency, destination_idx, .fwd)) return error.CorruptGraph;
+        }
+        return;
+    }
 
     const ReverseContext = struct {
         view: *const snapshot_view.CapturedGraphView,
@@ -231,7 +307,7 @@ fn validateReverseConsistencySnapshot(
             inner_graph: *const graph_core.GraphCore,
             inner_context: *ReverseContext,
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {

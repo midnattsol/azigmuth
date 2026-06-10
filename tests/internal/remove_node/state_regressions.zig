@@ -42,7 +42,7 @@ test "removeNode regression: validate and debugValidate agree on removed node wi
     }
 
     try graph.validate();
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 
@@ -72,10 +72,11 @@ test "removeNode regression: validate and debugValidate agree on grouped chain s
     publish.publishedFwdSide(node_buffer).group_count = 2;
     publish.publishedFwdSide(node_buffer).first_group = group;
     publish.setPublishedFwdDegree(node_buffer, 2);
+    try publish.syncToPublished(&graph, node.index);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(violations.len > 0);
 }

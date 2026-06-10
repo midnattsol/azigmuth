@@ -106,7 +106,7 @@ test "concurrent: many writers to a single destination serialize via reverse-cla
     try testing.expectEqual(actual_out_degree_total, hub_in_degree);
     try testing.expectEqual(@as(u64, @intCast(hub_in_degree)), graph.edgeCount());
 
-    const violations = try graph.debugValidate(allocator);
+    const violations = try graph.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
@@ -222,7 +222,7 @@ test "concurrent: reader sees a sorted, valid snapshot under a continuous write 
     try testing.expect(total_observations > 0);
     try testing.expectEqual(@as(u64, 0), unsorted_snapshots);
 
-    const violations = try graph.debugValidate(allocator);
+    const violations = try graph.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 
@@ -370,7 +370,7 @@ test "concurrent: reclaimRetired does not free blocks still observed by reader" 
 
     graph.reclaimRetired();
 
-    const violations = try graph.debugValidate(allocator);
+    const violations = try graph.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

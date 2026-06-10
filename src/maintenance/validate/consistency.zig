@@ -7,6 +7,7 @@ pub const runContainsTarget = pair.runContainsTarget;
 pub const findSlotInRun = pair.findSlotInRun;
 pub const adjacencyContains = pair.adjacencyContains;
 pub const appendForwardEdgeIdViolations = pair.appendForwardEdgeIdViolations;
+pub const appendForwardEdgeIdViolationsSnapshot = pair.appendForwardEdgeIdViolationsSnapshot;
 pub const validateForwardEdgeIdsFast = pair.validateForwardEdgeIdsFast;
 pub const appendForwardConsistencyViolations = pair.appendForwardConsistencyViolations;
 pub const appendReverseConsistencyViolations = pair.appendReverseConsistencyViolations;

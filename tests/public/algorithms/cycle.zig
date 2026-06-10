@@ -2,9 +2,9 @@ const std = @import("std");
 const graphz = @import("graphz");
 
 fn hasCycleOnGraph(graph: *graphz.Graph, allocator: std.mem.Allocator) !bool {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    return snapshot.hasCycle(allocator);
+    return snapshot.hasCycle(.{ .allocator = allocator });
 }
 
 test "empty graph has no cycle" {
@@ -234,7 +234,7 @@ test "cycle detection with dense hub and many tombstoned sources is correct" {
     try graph.validate();
     try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
 
-    var snapshot = try graph.snapshot(std.testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = std.testing.allocator });
     defer snapshot.deinit();
     const visible = try snapshot.inDegree(hub);
     try std.testing.expect(visible > 0);

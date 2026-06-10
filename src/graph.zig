@@ -1,6 +1,7 @@
 const std = @import("std");
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
+const node_access = @import("core/node_access.zig");
 const types = @import("core/types.zig");
 
 // ── Implementation modules ───────────────────────────────────────────────
@@ -12,9 +13,15 @@ const graph_live_query = @import("query/live_query.zig");
 const repair = @import("maintenance/repair.zig");
 const stats_mod = @import("maintenance/stats.zig");
 const validate_mod = @import("maintenance/validate.zig");
-const graph_snapshot_api = @import("query/snapshot_api.zig");
+const graph_snapshot_api = @import("query/snapshot/api.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
+const algorithm_context = @import("algorithms/context.zig");
+const node_meta_mod = @import("storage/node/meta.zig");
+const node_hot_mod = @import("storage/node/hot.zig");
+const node_hot_layout_mod = @import("storage/node/hot_layout.zig");
+const node_published_mod = @import("storage/node/published.zig");
+const node_tiny_mod = @import("storage/node/tiny.zig");
 
 // ── Internal API used by public wrappers ─────────────────────────────────
 pub const NodeId = types.NodeId;
@@ -32,18 +39,25 @@ pub const GraphOptions = types.GraphOptions;
 pub const NodeRemovalSummary = types.NodeRemovalSummary;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
+pub const Context = algorithm_context.Context;
 pub const ReadSession = graph_snapshot_api.ReadSession;
 pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
 pub const SnapshotNeighborIterator = graph_snapshot_api.SnapshotNeighborIterator;
 pub const SnapshotOutEdgeIterator = graph_snapshot_api.SnapshotOutEdgeIterator;
 
-fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: []std.atomic.Value(usize), entries_per_page: usize) void {
-    for (directory) |*entry| {
-        const raw = entry.load(.acquire);
-        if (raw == 0) continue;
-        const page_ptr: [*]T = @ptrFromInt(raw);
-        allocator.free(page_ptr[0..entries_per_page]);
+fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: anytype, entries_per_page: usize) void {
+    const Directory = @TypeOf(directory.*);
+    var leaf_idx: usize = 0;
+    while (leaf_idx < Directory.l1_count) : (leaf_idx += 1) {
+        const leaf = directory.leafSliceAtConst(leaf_idx) orelse continue;
+        for (leaf) |*entry| {
+            const raw = entry.load(.acquire);
+            if (raw == 0) continue;
+            const page_ptr: [*]T = @ptrFromInt(raw);
+            allocator.free(page_ptr[0..entries_per_page]);
+        }
     }
+    directory.deinitLeaves(allocator);
 }
 
 pub const Graph = struct {
@@ -125,7 +139,8 @@ pub const Graph = struct {
             .repair_rev = .empty,
         };
 
-        state_value.node_pages_pages[0].store(@intFromPtr(first_page.ptr), .release);
+        const first_page_slot = try state_value.node_pages_pages.slotPtr(allocator, 0);
+        first_page_slot.store(@intFromPtr(first_page.ptr), .release);
 
         return .{ .graph = state_value };
     }
@@ -148,16 +163,23 @@ pub const Graph = struct {
         }
 
         const alloc = self.graph.allocator;
-        freeAtomicPages(types.NodeBuffer, alloc, self.graph.node_pages_pages[0..], constants.NODES_PER_PAGE);
-        freeAtomicPages(std.atomic.Value(u64), alloc, self.graph.repair_queued_fwd_pages[0..], node_bitmap.WORDS_PER_PAGE);
-        freeAtomicPages(std.atomic.Value(u64), alloc, self.graph.repair_queued_rev_pages[0..], node_bitmap.WORDS_PER_PAGE);
-        freeAtomicPages(types.EdgeBlockFwd, alloc, self.graph.edge_blocks_fwd_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.EdgeBlockRev, alloc, self.graph.edge_blocks_rev_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.EdgeBlockGroup, alloc, self.graph.edge_block_group_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
-        if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, self.graph.edge_blocks_fwd_id_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_fwd_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_blocks_rev_meta_pages[0..], constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, self.graph.edge_block_group_meta_pages[0..], constants.EDGE_GROUPS_PER_PAGE);
+        freeAtomicPages(types.NodeBuffer, alloc, &self.graph.node_pages_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_meta_mod.NodeMeta, alloc, &self.graph.node_meta_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_published_mod.NodePublished, alloc, &self.graph.node_published_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_hot_layout_mod.Slot, alloc, &self.graph.node_hot_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_tiny_mod.TinyFwdSlot, alloc, &self.graph.tiny_fwd_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
+        freeAtomicPages(node_tiny_mod.TinyRevSlot, alloc, &self.graph.tiny_rev_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
+        freeAtomicPages(std.atomic.Value(u64), alloc, &self.graph.repair_queued_fwd_pages, node_bitmap.WORDS_PER_PAGE);
+        freeAtomicPages(std.atomic.Value(u64), alloc, &self.graph.repair_queued_rev_pages, node_bitmap.WORDS_PER_PAGE);
+        freeAtomicPages(types.EdgeBlockFwd, alloc, &self.graph.edge_blocks_fwd_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.EdgeBlockRev, alloc, &self.graph.edge_blocks_rev_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.EdgeBlockGroup, alloc, &self.graph.edge_block_group_pages, constants.EDGE_GROUPS_PER_PAGE);
+        if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, &self.graph.edge_blocks_fwd_id_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_fwd_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_rev_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_block_group_meta_pages, constants.EDGE_GROUPS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_fwd_meta_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_rev_meta_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
 
         self.graph.repair_fwd.deinit(alloc);
         self.graph.repair_rev.deinit(alloc);
@@ -179,16 +201,7 @@ pub const Graph = struct {
         const core = try self.beginMutCall();
         defer endCall(core);
 
-        while (true) {
-            const index = core.publishedNodeCount();
-            const page = page_ops.pageOf(index, constants.NODES_PER_PAGE);
-            _ = try page_ops.ensureNodePage(core, page);
-            page_ops.nodeAt(core, .{ .index = index }).next_local_edge_id.store(1, .monotonic);
-
-            if (core.node_count.cmpxchgWeak(index, index + 1, .acq_rel, .acquire) == null) {
-                return types.NodeId{ .index = index };
-            }
-        }
+        return mutation.addNode(core);
     }
 
     pub fn nodeCount(self: *const Graph) usize {
@@ -213,12 +226,12 @@ pub const Graph = struct {
 
     pub fn nodeAt(self: *Graph, node: types.NodeId) !*types.NodeBuffer {
         try node_validity.ensureLiveNode(&self.graph, node);
-        return page_ops.nodeAt(&self.graph, node);
+        return node_access.nodeAt(&self.graph, node);
     }
 
     pub fn nodeAtConst(self: *const Graph, node: types.NodeId) !*const types.NodeBuffer {
         try node_validity.ensureLiveNode(&self.graph, node);
-        return page_ops.nodeAtConst(&self.graph, node);
+        return node_access.nodeAtConst(&self.graph, node);
     }
 
     pub fn nodePageCount(self: *const Graph) usize {
@@ -295,10 +308,10 @@ pub const Graph = struct {
         return validate_mod.validate(core);
     }
 
-    pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) GraphError![]types.Violation {
+    pub fn debugValidate(self: *const Graph, ctx: Context) GraphError![]types.Violation {
         const core = try self.beginConstCall();
         defer endCall(core);
-        return validate_mod.debugValidate(core, allocator);
+        return validate_mod.debugValidate(core, ctx.allocator);
     }
 
     // ── Query API ─────────────────────────────────────────────────────
@@ -339,10 +352,10 @@ pub const Graph = struct {
         return graph_snapshot_api.beginReadSession(core);
     }
 
-    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) GraphError!ReadSnapshot {
+    pub fn snapshot(self: *const Graph, ctx: Context) GraphError!ReadSnapshot {
         const core = try self.beginConstCall();
         errdefer endCall(core);
-        return graph_snapshot_api.snapshot(core, allocator);
+        return graph_snapshot_api.snapshot(core, ctx);
     }
 
     // ── Repair API ────────────────────────────────────────────────────

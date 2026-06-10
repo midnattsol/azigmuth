@@ -91,9 +91,11 @@ pub const PublishedMeta = packed struct(u64) {
     needs_repair_fwd: bool = false,
     needs_repair_rev: bool = false,
     removed: bool = false,
+    degree_fwd_overflow: bool = false,
+    degree_rev_overflow: bool = false,
     degree_fwd: u22 = 0,
     degree_rev: u22 = 0,
-    version: u15 = 0,
+    version: u13 = 0,
 
     pub fn flags(self: PublishedMeta) NodeFlags {
         return NodeFlags.fromMeta(self);
@@ -110,6 +112,32 @@ pub const PublishedMeta = packed struct(u64) {
     pub fn bumpedVersion(self: PublishedMeta) PublishedMeta {
         var next = self;
         next.version +%= 1;
+        return next;
+    }
+
+    pub fn withFwdDegree(self: PublishedMeta, degree_fwd: u32) PublishedMeta {
+        const inline_limit: u22 = 65535 * 64;
+        var next = self;
+        if (degree_fwd <= inline_limit) {
+            next.degree_fwd = @intCast(degree_fwd);
+            next.degree_fwd_overflow = false;
+        } else {
+            next.degree_fwd = inline_limit;
+            next.degree_fwd_overflow = true;
+        }
+        return next;
+    }
+
+    pub fn withRevDegree(self: PublishedMeta, degree_rev: u32) PublishedMeta {
+        const inline_limit: u22 = 65535 * 64;
+        var next = self;
+        if (degree_rev <= inline_limit) {
+            next.degree_rev = @intCast(degree_rev);
+            next.degree_rev_overflow = false;
+        } else {
+            next.degree_rev = inline_limit;
+            next.degree_rev_overflow = true;
+        }
         return next;
     }
 };
@@ -131,10 +159,10 @@ pub const Edge = packed struct {
 
 // ── Per-side adjacency descriptor ─────────────────────────────────────
 
-/// Forward or reverse side metadata. 12 bytes, 4-byte aligned.
+/// Forward or reverse side metadata.
 pub const SideAdj = extern struct {
     first_block: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group: u32,
 };
@@ -143,15 +171,15 @@ pub const SideAdj = extern struct {
 
 /// Full-node adjacency snapshot for iteration, validation, and bulk operations.
 /// Obtained via `NodeBuffer.publishedAdj()` which composes from both sides.
-/// 28 bytes, naturally aligned (no padding).
+/// Full published adjacency snapshot.
 pub const NodeAdj = extern struct {
     first_block_fwd: u32,
-    block_count_fwd: u16,
+    block_count_fwd: u32,
     group_count_fwd: u16,
     first_group_fwd: u32,
 
     first_block_rev: u32,
-    block_count_rev: u16,
+    block_count_rev: u32,
     group_count_rev: u16,
     first_group_rev: u32,
 
@@ -162,9 +190,10 @@ pub const NodeAdj = extern struct {
 
 /// RCU double-buffer for adjacency headers, per side, with a single atomic
 /// publication word that selects both published side buffers and carries the
-/// public node flags plus exact logical degree per side.  Readers load one
+/// public node flags plus exact logical degree per side. Readers load one
 /// coherent node snapshot from `published_meta`, while writers on disjoint
-/// logical sides still publish with per-side claims and CAS.  Exactly 64 bytes.
+/// logical sides still publish with per-side claims and CAS. The current
+/// compatibility/staging layout measures 80 bytes.
 pub const NodeBuffer = extern struct {
     published_meta: std.atomic.Value(u64) = std.atomic.Value(u64).init(@bitCast(PublishedMeta{})),
 
@@ -243,32 +272,28 @@ pub const NodeBuffer = extern struct {
         self.rev_buffers[1 - meta.rev_index] = self.rev_buffers[meta.rev_index];
     }
 
-    pub fn desiredMetaForPublishFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u22) PublishedMeta {
+    pub fn desiredMetaForPublishFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) PublishedMeta {
         var desired = meta.bumpedVersion();
         desired.fwd_index = 1 - meta.fwd_index;
         desired.needs_repair_fwd = needs_repair_fwd;
-        desired.degree_fwd = new_degree_fwd;
-        return desired;
+        return desired.withFwdDegree(new_degree_fwd);
     }
 
-    pub fn desiredMetaForPublishRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) PublishedMeta {
+    pub fn desiredMetaForPublishRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) PublishedMeta {
         var desired = meta.bumpedVersion();
         desired.rev_index = 1 - meta.rev_index;
         desired.needs_repair_rev = needs_repair_rev;
-        desired.degree_rev = new_degree_rev;
-        return desired;
+        return desired.withRevDegree(new_degree_rev);
     }
 
-    pub fn desiredMetaForPublishBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u22, rev_degree: u22) PublishedMeta {
+    pub fn desiredMetaForPublishBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u32, rev_degree: u32) PublishedMeta {
         var desired = meta.bumpedVersion();
         desired.fwd_index = 1 - meta.fwd_index;
         desired.rev_index = 1 - meta.rev_index;
         desired.needs_repair_fwd = flags.needs_repair_fwd;
         desired.needs_repair_rev = flags.needs_repair_rev;
         desired.removed = flags.removed;
-        desired.degree_fwd = fwd_degree;
-        desired.degree_rev = rev_degree;
-        return desired;
+        return desired.withFwdDegree(fwd_degree).withRevDegree(rev_degree);
     }
 
     /// CAS-friendly forward update: changes `degree_fwd` and `needs_repair_fwd`
@@ -276,28 +301,24 @@ pub const NodeBuffer = extern struct {
     /// Safe to call without `fwd_claim` — the 64-bit CAS on `published_meta`
     /// provides the atomicity.  Intended for paths where only the meta counters
     /// need updating (e.g. predecessor forward-degree decrement in removeNode).
-    pub fn desiredMetaForUpdateFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u22) PublishedMeta {
+    pub fn desiredMetaForUpdateFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) PublishedMeta {
         var desired = meta.bumpedVersion();
         desired.needs_repair_fwd = needs_repair_fwd;
-        desired.degree_fwd = new_degree_fwd;
-        return desired;
+        return desired.withFwdDegree(new_degree_fwd);
     }
 
-    pub fn desiredMetaForUpdateRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u22) PublishedMeta {
+    pub fn desiredMetaForUpdateRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) PublishedMeta {
         var desired = meta.bumpedVersion();
         desired.needs_repair_rev = needs_repair_rev;
-        desired.degree_rev = new_degree_rev;
-        return desired;
+        return desired.withRevDegree(new_degree_rev);
     }
 
-    pub fn desiredMetaForUpdateBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u22, rev_degree: u22) PublishedMeta {
+    pub fn desiredMetaForUpdateBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u32, rev_degree: u32) PublishedMeta {
         var desired = meta.bumpedVersion();
         desired.needs_repair_fwd = flags.needs_repair_fwd;
         desired.needs_repair_rev = flags.needs_repair_rev;
         desired.removed = flags.removed;
-        desired.degree_fwd = fwd_degree;
-        desired.degree_rev = rev_degree;
-        return desired;
+        return desired.withFwdDegree(fwd_degree).withRevDegree(rev_degree);
     }
 
     /// Composes a full NodeAdj snapshot from the current published sides.
@@ -364,8 +385,7 @@ pub const EdgeBlockFwdIds = struct {
 pub const EdgeBlockGroup = struct {
     start: u32,
     next: u32,
-    count: u16,
-    _pad: u16 = 0,
+    count: u32,
 };
 
 /// Per-block metadata used by lock-free retired/free stacks.
@@ -396,13 +416,13 @@ pub const Violation = union(enum) {
     edge_id_counter_regressed: struct { node: u32, next_id: u32, max_seen: u32 },
     blockgroup_chain_cycle: struct { node: u32, group: u32 },
     blockgroup_overlap: struct { node: u32, group_a: u32, group_b: u32 },
-    run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u16 },
+    run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u32 },
     grouped_layout_needs_canonicalization: struct { node: u32, first_group: u32 },
     block_double_owned: struct { block: u32 },
     block_orphaned_in_free_list: struct { block: u32 },
     repair_debt_invalid_node: struct { entry: u32 },
     removed_node_has_outgoing: struct { node: u32 },
-    removed_node_has_reverse_residual: struct { node: u32, degree_rev: u22 },
+    removed_node_has_reverse_residual: struct { node: u32, degree_rev: u32 },
     removed_node_marked_for_repair: struct { node: u32 },
     forward_tombstone_missing_repair_flag: struct { node: u32 },
     reverse_tombstone_missing_repair_flag: struct { node: u32 },
@@ -412,5 +432,5 @@ pub const Violation = union(enum) {
     unreachable_forward_block: struct { block: u32 },
     unreachable_reverse_block: struct { block: u32 },
     unreachable_group: struct { group: u32 },
-    block_count_group_mismatch: struct { node: u32, declared: u16, actual: u16 },
+    block_count_group_mismatch: struct { node: u32, declared: u32, actual: u32 },
 };

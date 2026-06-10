@@ -13,7 +13,7 @@
 //!   - While `deinitChecked()` has atomically closed the graph to new work,
 //!     fallible APIs MAY return `error.GraphBusy`; non-fallible accessors
 //!     (`hasNode`, `nodeCount`, `edgeCount`) return safe defaults.
-//!   - `snapshot(allocator)`, `validate`, and `debugValidate` are read-side
+//!   - `snapshot(ctx)`, `validate`, and `debugValidate(ctx)` are read-side
 //!     operations and never block writers.
 
 const std = @import("std");
@@ -97,14 +97,15 @@ pub const Graph = opaque {
         return self.innerConst().validate();
     }
 
-    pub fn debugValidate(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError![]internal.Violation {
-        return self.innerConst().debugValidate(allocator);
+    pub fn debugValidate(self: *const Graph, ctx: internal.Context) internal.GraphError![]internal.Violation {
+        return self.innerConst().debugValidate(ctx);
     }
 
-    pub fn snapshot(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!*public_snapshot.ReadSnapshot {
+    pub fn snapshot(self: *const Graph, ctx: internal.Context) internal.GraphError!*public_snapshot.ReadSnapshot {
+        const allocator = ctx.allocator;
         const snapshot_handle = try allocator.create(internal.ReadSnapshot);
         errdefer allocator.destroy(snapshot_handle);
-        snapshot_handle.* = try self.innerConst().snapshot(allocator);
+        snapshot_handle.* = try self.innerConst().snapshot(ctx);
         return @ptrCast(snapshot_handle);
     }
 

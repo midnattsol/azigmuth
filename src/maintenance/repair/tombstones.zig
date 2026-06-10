@@ -7,6 +7,7 @@ const adjacency = @import("../../adjacency/mod.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
 const side_adj = @import("../../adjacency/side_ops.zig");
+const validate_common = @import("../validate/common.zig");
 const debt_mod = @import("debt.zig");
 
 const TombstoneProbe = struct {
@@ -20,6 +21,12 @@ fn stopOnTombstone(
     slot: u7,
     comptime side: adjacency.AdjSide,
 ) !void {
+    if ((block_idx & side_adj.TINY_SLOT_TAG) != 0) {
+        const node_id = side_adj.readNodeIdAtSlot(graph, block_idx, slot, side);
+        if (!nodeIdRemoved(graph, node_id)) return;
+        probe.found = true;
+        return error.TombstoneFound;
+    }
     const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
     if (!edgePointsToRemoved(graph, block, slot, side)) return;
     probe.found = true;
@@ -43,6 +50,12 @@ fn collectForwardTombstoneDestination(
     block_idx: u32,
     slot: u7,
 ) !void {
+    if ((block_idx & side_adj.TINY_SLOT_TAG) != 0) {
+        const destination = side_adj.readNodeIdAtSlot(graph, block_idx, slot, .fwd);
+        if (!nodeIdRemoved(graph, destination)) return;
+        try appendUniqueDestination(graph.allocator, destinations, destination);
+        return;
+    }
     const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     if (!edgePointsToRemoved(graph, block, slot, .fwd)) return;
     try appendUniqueDestination(graph.allocator, destinations, block.edges[slot].destination);
@@ -61,10 +74,15 @@ pub fn edgePointsToRemoved(
     return node_validity.isNodeRemovedIndex(graph, node_id);
 }
 
+fn nodeIdRemoved(graph: *const graph_core.GraphCore, node_id: u32) bool {
+    if (node_id >= graph.publishedNodeCount()) return false;
+    return node_validity.isNodeRemovedIndex(graph, node_id);
+}
+
 pub fn hasAnyTombstone(
     graph: *const graph_core.GraphCore,
     first_block: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group: u32,
     comptime side: adjacency.AdjSide,
@@ -103,11 +121,9 @@ pub fn collectForwardTombstones(
     published_adj: types.NodeAdj,
     destinations: *std.ArrayList(u32),
 ) !void {
-    try side_adj.forEachSlotInSide(
-        graph,
-        side_adj.sideAdjOfNode(published_adj, .fwd),
-        .fwd,
-        destinations,
-        collectForwardTombstoneDestination,
-    );
+    try validate_common.forEachForwardEntryInAdj(graph, published_adj, destinations, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_destinations: *std.ArrayList(u32), entry: validate_common.ForwardEntryView) !void {
+            if (nodeIdRemoved(inner_graph, entry.destination)) try appendUniqueDestination(inner_graph.allocator, inner_destinations, entry.destination);
+        }
+    }.callback);
 }

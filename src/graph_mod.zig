@@ -16,13 +16,15 @@ pub const types_mod = types;
 pub const graph_core_mod = graph_core;
 pub const page_ops_mod = page_ops;
 pub const adjacency_mod = adjacency;
+pub const side_ops_mod = @import("adjacency/side_ops.zig");
+pub const node_published_mod = @import("storage/node/published.zig");
 pub const mutation_common_mod = @import("mutation/common.zig");
 pub const repair_mod = repair;
 pub const query_mod = neighbor_iter;
 pub const bfs_mod = @import("algorithms/bfs.zig");
 pub const dfs_mod = @import("algorithms/dfs.zig");
 pub const cycle_mod = @import("algorithms/cycle.zig");
-pub const snapshot_view_mod = @import("query/snapshot_view.zig");
+pub const snapshot_view_mod = @import("query/snapshot/view.zig");
 
 pub const NodeId = types.NodeId;
 pub const NodeBuffer = types.NodeBuffer;

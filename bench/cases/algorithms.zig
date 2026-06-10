@@ -1,6 +1,7 @@
 const std = @import("std");
 const graphz = @import("graphz");
 const harness = @import("../harness.zig");
+const Context = graphz.Context;
 
 fn buildBinaryTree(graph: *graphz.Graph, allocator: std.mem.Allocator, depth: usize) ![]graphz.NodeId {
     const node_count: usize = (@as(usize, 1) << @as(u6, @intCast(depth + 1))) - 1;
@@ -86,32 +87,44 @@ fn buildStar(graph: *graphz.Graph, allocator: std.mem.Allocator, node_count: usi
     return nodes;
 }
 
-fn runBfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, allocator: std.mem.Allocator) !harness.Result {
-    var snapshot = try graph.snapshot(allocator);
+fn runBfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context) !harness.Result {
+    var snapshot = try graph.snapshot(ctx);
     defer snapshot.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+    var arena_ctx = ctx;
+    arena_ctx.allocator = arena_allocator;
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const order = try snapshot.bfs(nodes[0], allocator);
+        _ = arena.reset(.retain_capacity);
+        const order = try snapshot.bfs(nodes[0], arena_ctx);
         if (order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(order);
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
     return .{ .ops = iterations, .elapsed_ns = elapsed_ns };
 }
 
-fn runDfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, allocator: std.mem.Allocator) !harness.Result {
-    var snapshot = try graph.snapshot(allocator);
+fn runDfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context) !harness.Result {
+    var snapshot = try graph.snapshot(ctx);
     defer snapshot.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+    var arena_ctx = ctx;
+    arena_ctx.allocator = arena_allocator;
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const order = try snapshot.dfs(nodes[0], allocator);
+        _ = arena.reset(.retain_capacity);
+        const order = try snapshot.dfs(nodes[0], arena_ctx);
         if (order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(order);
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
@@ -124,7 +137,7 @@ fn benchAlgorithmsBfs(allocator: std.mem.Allocator) !harness.Result {
 
     const nodes = try buildBinaryTreePermuted(graph, allocator, 10);
     defer allocator.free(nodes);
-    return runBfsBench(graph, nodes, allocator);
+    return runBfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsDfs(allocator: std.mem.Allocator) !harness.Result {
@@ -134,7 +147,7 @@ fn benchAlgorithmsDfs(allocator: std.mem.Allocator) !harness.Result {
     const nodes = try buildBinaryTreePermuted(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    return runDfsBench(graph, nodes, allocator);
+    return runDfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsBfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Result {
@@ -144,7 +157,7 @@ fn benchAlgorithmsBfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Res
     const nodes = try buildBinaryTree(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    return runBfsBench(graph, nodes, allocator);
+    return runBfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsDfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Result {
@@ -154,7 +167,7 @@ fn benchAlgorithmsDfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Res
     const nodes = try buildBinaryTree(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    return runDfsBench(graph, nodes, allocator);
+    return runDfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsBfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Result {
@@ -164,7 +177,7 @@ fn benchAlgorithmsBfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Resul
     const nodes = try buildBinaryTreePreorder(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    return runBfsBench(graph, nodes, allocator);
+    return runBfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsDfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Result {
@@ -174,7 +187,7 @@ fn benchAlgorithmsDfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Resul
     const nodes = try buildBinaryTreePreorder(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    return runDfsBench(graph, nodes, allocator);
+    return runDfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsBfsChain(allocator: std.mem.Allocator) !harness.Result {
@@ -184,7 +197,7 @@ fn benchAlgorithmsBfsChain(allocator: std.mem.Allocator) !harness.Result {
     const nodes = try buildChain(graph, allocator, 2048);
     defer allocator.free(nodes);
 
-    return runBfsBench(graph, nodes, allocator);
+    return runBfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsDfsChain(allocator: std.mem.Allocator) !harness.Result {
@@ -194,7 +207,7 @@ fn benchAlgorithmsDfsChain(allocator: std.mem.Allocator) !harness.Result {
     const nodes = try buildChain(graph, allocator, 2048);
     defer allocator.free(nodes);
 
-    return runDfsBench(graph, nodes, allocator);
+    return runDfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsBfsStar(allocator: std.mem.Allocator) !harness.Result {
@@ -204,7 +217,7 @@ fn benchAlgorithmsBfsStar(allocator: std.mem.Allocator) !harness.Result {
     const nodes = try buildStar(graph, allocator, 2048);
     defer allocator.free(nodes);
 
-    return runBfsBench(graph, nodes, allocator);
+    return runBfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsDfsStar(allocator: std.mem.Allocator) !harness.Result {
@@ -214,7 +227,7 @@ fn benchAlgorithmsDfsStar(allocator: std.mem.Allocator) !harness.Result {
     const nodes = try buildStar(graph, allocator, 2048);
     defer allocator.free(nodes);
 
-    return runDfsBench(graph, nodes, allocator);
+    return runDfsBench(graph, nodes, .{ .allocator = allocator });
 }
 
 fn benchAlgorithmsHasCycleAcyclic(allocator: std.mem.Allocator) !harness.Result {
@@ -224,13 +237,18 @@ fn benchAlgorithmsHasCycleAcyclic(allocator: std.mem.Allocator) !harness.Result 
     const nodes = try buildBinaryTree(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const has_cycle = try snapshot.hasCycle(allocator);
+        _ = arena.reset(.retain_capacity);
+        const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -246,13 +264,18 @@ fn benchAlgorithmsHasCycleCyclic(allocator: std.mem.Allocator) !harness.Result {
     defer allocator.free(nodes);
     try graph.addEdge(nodes[nodes.len - 1], nodes[0], 0, .{});
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const has_cycle = try snapshot.hasCycle(allocator);
+        _ = arena.reset(.retain_capacity);
+        const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (!has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -268,13 +291,18 @@ fn benchAlgorithmsHasCycleCyclicEarly(allocator: std.mem.Allocator) !harness.Res
     defer allocator.free(nodes);
     try graph.addEdge(nodes[1], nodes[0], 0, .{});
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const has_cycle = try snapshot.hasCycle(allocator);
+        _ = arena.reset(.retain_capacity);
+        const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (!has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -292,12 +320,42 @@ fn benchSnapshotCapture(allocator: std.mem.Allocator) !harness.Result {
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        var snapshot = try graph.snapshot(allocator);
+        var snapshot = try graph.snapshot(.{ .allocator = allocator });
         snapshot.deinit();
     }
     const elapsed_ns = harness.nowNs() - start_ns;
 
     return .{ .ops = iterations, .elapsed_ns = elapsed_ns };
+}
+
+fn benchSnapshotCaptureDenseBinary(allocator: std.mem.Allocator) !harness.Result {
+    return benchSnapshotCapture(allocator);
+}
+
+fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.init(allocator);
+    defer graph.deinit();
+
+    var previous: ?graphz.NodeId = null;
+    const node_count: usize = 131072;
+    const linked_prefix: usize = 1024;
+    for (0..node_count) |node_idx| {
+        const node = try graph.addNode();
+        if (node_idx < linked_prefix) {
+            if (previous) |source| try graph.addEdge(source, node, 0, .{});
+            previous = node;
+        }
+    }
+
+    const iterations: usize = 8;
+    const start_ns = harness.nowNs();
+    for (0..iterations) |_| {
+        var snapshot = try graph.snapshot(.{ .allocator = allocator });
+        snapshot.deinit();
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    return .{ .ops = node_count * iterations, .elapsed_ns = elapsed_ns };
 }
 
 fn benchSnapshotBundleForwardQueries(allocator: std.mem.Allocator) !harness.Result {
@@ -307,21 +365,26 @@ fn benchSnapshotBundleForwardQueries(allocator: std.mem.Allocator) !harness.Resu
     const nodes = try buildBinaryTree(graph, allocator, 10);
     defer allocator.free(nodes);
 
-    var snapshot = try graph.snapshot(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
-        const bfs_order = try snapshot.bfs(nodes[0], allocator);
+        _ = arena.reset(.retain_capacity);
+        const bfs_order = try snapshot.bfs(nodes[0], .{ .allocator = arena_allocator });
         if (bfs_order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(bfs_order);
 
-        const dfs_order = try snapshot.dfs(nodes[0], allocator);
+        _ = arena.reset(.retain_capacity);
+        const dfs_order = try snapshot.dfs(nodes[0], .{ .allocator = arena_allocator });
         if (dfs_order.len != nodes.len) return error.CorruptGraph;
-        allocator.free(dfs_order);
 
-        const has_cycle = try snapshot.hasCycle(allocator);
+        _ = arena.reset(.retain_capacity);
+        const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (has_cycle) return error.CorruptGraph;
     }
     const elapsed_ns = harness.nowNs() - start_ns;
@@ -343,6 +406,7 @@ pub const cases = [_]harness.Case{
     .{ .name = "algorithms.hascycle_acyclic", .run = benchAlgorithmsHasCycleAcyclic },
     .{ .name = "algorithms.hascycle_cyclic", .run = benchAlgorithmsHasCycleCyclic },
     .{ .name = "algorithms.hascycle_cyclic_early", .run = benchAlgorithmsHasCycleCyclicEarly },
-    .{ .name = "snapshot.capture", .run = benchSnapshotCapture },
+    .{ .name = "snapshot.capture_dense_binary", .run = benchSnapshotCaptureDenseBinary },
+    .{ .name = "snapshot.capture_sparse_emptyheavy", .run = benchSnapshotCaptureSparseEmptyHeavy },
     .{ .name = "snapshot.bundle_forward_queries", .run = benchSnapshotBundleForwardQueries },
 };

@@ -119,9 +119,9 @@ test "contract: removeNode tolerates unrelated predecessor forward mutation" {
     try testing.expectEqual(@as(u64, 1), rm_ctx.successes.load(.acquire));
     try testing.expect(mut_ctx.mutations.load(.acquire) > 0);
 
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(testing.allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }

@@ -4,6 +4,7 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const node_published = @import("../../storage/node/published.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
@@ -39,6 +40,15 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
     retired_groups: []const u64,
     comptime side: common.Side,
 ) !void {
+    const side_view = common.sideAdjOf(adjacency, side);
+    if (node_published.NodePublished.isTiny(&side_view)) {
+        try adjacency_mod.validateSideAdjLayoutForSide(graph, side_view, switch (side) {
+            .fwd => .fwd,
+            .rev => .rev,
+        });
+        return;
+    }
+
     const count = common.blockCount(adjacency, side);
     const groups = common.groupCount(adjacency, side);
     if (count == 0) {
@@ -58,7 +68,7 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
     }
 
     var visited_groups: u32 = 0;
-    var counted_blocks: u16 = 0;
+    var counted_blocks: u32 = 0;
     const first_group_idx = common.firstGroup(adjacency, side);
     const end_group = std.math.add(u32, first_group_idx, groups) catch return error.CorruptGraph;
     if (end_group > graph.group_count) return error.CorruptGraph;

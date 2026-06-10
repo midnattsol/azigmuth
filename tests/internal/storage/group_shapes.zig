@@ -23,6 +23,7 @@ fn publishReverseSources(graph: *graph_mod.Graph, source_idx: u32, first_destina
         publish.publishedRevSide(buf).first_block = block;
         publish.publishedRevSide(buf).block_count = 1;
         publish.setPublishedRevDegree(buf, 1);
+        try publish.syncToPublished(graph, first_destination + @as(u32, @intCast(offset)));
     }
 }
 
@@ -50,10 +51,11 @@ test "invalid shape: block_count == 1 with group_count > 1 fails validate" {
     publish.publishedFwdSide(buf).group_count = 2;
     publish.publishedFwdSide(buf).first_group = g0;
     publish.setPublishedState(buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false }, 1, 0);
+    try publish.syncToPublished(&graph, node.index);
 
     // debugValidate must report a violation; validate may or may not trigger
     // in the fast path, but must not crash.
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(violations.len > 0);
 
@@ -79,8 +81,9 @@ test "shape: grouped single-block adjacency is accepted as valid layout" {
     publish.publishedFwdSide(buf).group_count = 1;
     publish.publishedFwdSide(buf).first_group = group;
     publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 0, 0);
+    try publish.syncToPublished(&graph, node.index);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found_canonicalization = false;
@@ -121,9 +124,10 @@ test "shape: grouped contiguous run layout is accepted without repair flag" {
     publish.publishedFwdSide(buf).group_count = 1;
     publish.publishedFwdSide(buf).first_group = g0;
     publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 97, 0);
+    try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(97, .release);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found = false;
@@ -162,8 +166,9 @@ test "invalid shape: too many groups without needs_repair fails validate" {
     publish.publishedFwdSide(buf).group_count = @intCast(groups.len);
     publish.publishedFwdSide(buf).first_group = groups[0];
     publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 0, 0);
+    try publish.syncToPublished(&graph, node.index);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(violations.len > 0);
 
@@ -204,9 +209,10 @@ test "shape: short non-tail run without needs_repair is accepted as valid layout
     publish.publishedFwdSide(buf).group_count = 2;
     publish.publishedFwdSide(buf).first_group = short_run_group;
     publish.setPublishedState(buf, .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = false }, 97, 0);
+    try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(97, .release);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found = false;

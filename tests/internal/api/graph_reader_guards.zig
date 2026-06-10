@@ -57,7 +57,7 @@ test "graph readers: validate APIs release reader guards" {
     try graph.validate();
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));

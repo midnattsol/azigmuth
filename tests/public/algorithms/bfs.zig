@@ -2,9 +2,9 @@ const std = @import("std");
 const graphz = @import("graphz");
 
 fn bfsOnGraph(graph: *graphz.Graph, start: graphz.NodeId, allocator: std.mem.Allocator) ![]graphz.NodeId {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    return snapshot.bfs(start, allocator);
+    return snapshot.bfs(start, .{ .allocator = allocator });
 }
 
 fn idxOf(order: []const graphz.NodeId, target: usize) usize {

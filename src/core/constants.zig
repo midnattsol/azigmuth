@@ -27,33 +27,41 @@ pub const MIN_OCCUPANCY: u6 = 48;
 /// Maximum number of groups per node before repair is required.
 pub const MAX_GROUPS_PER_NODE: u16 = 4;
 
-/// Maximum number of blocks per side per node.  With 64 edges per block
-/// the theoretical maximum degree per side is 4,194,240.
-pub const MAX_BLOCKS_PER_SIDE: u22 = 65535;
+/// Maximum number of blocks a single side can currently own.
+/// Bounded by the total block capacity of the graph.
+pub const MAX_BLOCKS_PER_SIDE: u32 = MAX_EDGE_BLOCK_PAGES * EDGE_BLOCKS_PER_PAGE;
 
 /// Maximum number of edges per block.
 pub const EDGES_PER_BLOCK: u7 = 64;
 
 /// Maximum number of edges per side per node.
-pub const MAX_DEGREE_PER_SIDE: u22 = 65535 * 64;
+pub const MAX_DEGREE_PER_SIDE: u32 = MAX_BLOCKS_PER_SIDE * EDGES_PER_BLOCK;
 
 /// Maximum page directory sizes for atomically-published storage pages.
 /// These keep page lookup lock-free while preserving stable page addresses.
-pub const MAX_NODE_PAGES: usize = 4096;
-pub const MAX_EDGE_BLOCK_PAGES: usize = 4096;
-pub const MAX_EDGE_GROUP_PAGES: usize = 4096;
+pub const NODE_PAGE_DIR_L1: usize = 1024;
+pub const NODE_PAGE_DIR_L2: usize = 4096;
+pub const MAX_NODE_PAGES: usize = NODE_PAGE_DIR_L1 * NODE_PAGE_DIR_L2;
+
+pub const EDGE_BLOCK_PAGE_DIR_L1: usize = 64;
+pub const EDGE_BLOCK_PAGE_DIR_L2: usize = 64;
+pub const MAX_EDGE_BLOCK_PAGES: usize = EDGE_BLOCK_PAGE_DIR_L1 * EDGE_BLOCK_PAGE_DIR_L2;
+
+pub const EDGE_GROUP_PAGE_DIR_L1: usize = 64;
+pub const EDGE_GROUP_PAGE_DIR_L2: usize = 64;
+pub const MAX_EDGE_GROUP_PAGES: usize = EDGE_GROUP_PAGE_DIR_L1 * EDGE_GROUP_PAGE_DIR_L2;
 
 /// Maximum number of simultaneously active reader critical sections tracked
 /// with precise epochs. Overflow readers fall back to conservative reclamation.
 pub const MAX_READER_SLOTS: usize = 256;
 
 comptime {
-    std.debug.assert(@sizeOf(types.NodeBuffer) == 64);
+    std.debug.assert(@sizeOf(types.NodeBuffer) == 80);
     std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 520);
     std.debug.assert(@sizeOf(types.EdgeBlockRev) == 264);
     std.debug.assert(@sizeOf(types.EdgeBlockGroup) == 12);
-    std.debug.assert(@sizeOf(types.NodeAdj) == 28);
-    std.debug.assert(@sizeOf(types.SideAdj) == 12);
+    std.debug.assert(@sizeOf(types.NodeAdj) == 36);
+    std.debug.assert(@sizeOf(types.SideAdj) == 16);
     std.debug.assert(@sizeOf(types.PublishedMeta) == 8);
     std.debug.assert(@bitSizeOf(types.PublishedMeta) == 64);
 }

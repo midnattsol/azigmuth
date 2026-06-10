@@ -14,17 +14,17 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
         try graph.addEdge(source, destinations[i], 0, 0);
     }
 
-    // Create grouped layout: COW a non-tail block.
+    // Create a fragmented forward layout by removing from a large adjacency.
     _ = try graph.removeEdge(source, destinations[199]);
 
-    var source_adj = (try graph.nodeAtConst(source)).publishedAdj();
-    try testing.expect(source_adj.group_count_fwd > 0);
+    var source_adj = try graph.publishedNodeAdj(source);
+    try testing.expect(source_adj.block_count_fwd > 1 or source_adj.group_count_fwd > 0);
 
     // Create tombstones: remove destinations in different original blocks.
     _ = try graph.removeNode(destinations[64]);
     _ = try graph.removeNode(destinations[128]);
 
-    source_adj = (try graph.nodeAtConst(source)).publishedAdj();
+    source_adj = try graph.publishedNodeAdj(source);
     try testing.expect(source_adj.flags.needs_repair_fwd);
 
     try graph.repairNode(source);
@@ -67,7 +67,7 @@ test "repair: repairBudgeted discovers grouped forward tombstone debt without ex
     try graph.addEdge(source, extra, 0, 0);
     _ = try graph.removeNode(extra);
 
-    const source_adj = (try graph.nodeAtConst(source)).publishedAdj();
+    const source_adj = try graph.publishedNodeAdj(source);
     try testing.expect(source_adj.flags.needs_repair_fwd);
 
     // Clear repair queues so only flag discovery works.

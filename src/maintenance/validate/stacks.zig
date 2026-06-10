@@ -25,8 +25,8 @@ pub fn blockMetaNextFast(graph: *const graph_core.GraphCore, block_index: u32, c
     if (!common.blockExists(graph, block_index, side)) return error.CorruptGraph;
     const page_index = page_ops.pageOf(block_index, constants.EDGE_BLOCKS_PER_PAGE);
     const raw = switch (side) {
-        .fwd => graph.edge_blocks_fwd_meta_pages[@intCast(page_index)].load(.acquire),
-        .rev => graph.edge_blocks_rev_meta_pages[@intCast(page_index)].load(.acquire),
+        .fwd => graph.edge_blocks_fwd_meta_pages.load(page_index),
+        .rev => graph.edge_blocks_rev_meta_pages.load(page_index),
     };
     if (raw == 0) return error.CorruptGraph;
     const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
@@ -63,7 +63,7 @@ pub fn groupSpanStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime 
 pub fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_index: u32) !u32 {
     if (group_index >= graph.group_count) return error.CorruptGraph;
     const page_index = page_ops.pageOf(group_index, constants.EDGE_GROUPS_PER_PAGE);
-    const raw = graph.edge_block_group_meta_pages[@intCast(page_index)].load(.acquire);
+    const raw = graph.edge_block_group_meta_pages.load(page_index);
     if (raw == 0) return error.CorruptGraph;
     const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
     const page = page_ptr[0..constants.EDGE_GROUPS_PER_PAGE];

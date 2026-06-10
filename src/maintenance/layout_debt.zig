@@ -3,6 +3,7 @@ const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const adjacency = @import("../adjacency/mod.zig");
+const node_published = @import("../storage/node/published.zig");
 
 pub const LayoutShapeReport = struct {
     grouped_single_block: bool = false,
@@ -38,6 +39,12 @@ pub fn analyzeSideLayout(
     comptime side: adjacency.AdjSide,
 ) !LayoutShapeReport {
     var report = LayoutShapeReport{};
+
+    if (node_published.NodePublished.isTiny(&side_view)) {
+        try adjacency.validateSideAdjLayoutForSide(graph, side_view, side);
+        report.chain_is_contiguous = true;
+        return report;
+    }
 
     if (side_view.block_count <= 1) {
         report.grouped_single_block = side_view.group_count > 0;

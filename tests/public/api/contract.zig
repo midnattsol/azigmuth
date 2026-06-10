@@ -4,7 +4,7 @@ const graphz = @import("graphz");
 const testing = std.testing;
 
 fn captureSnapshot(graph: *graphz.Graph) !*graphz.ReadSnapshot {
-    return graph.snapshot(testing.allocator);
+    return graph.snapshot(.{ .allocator = testing.allocator });
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ test "contract: deinitChecked fails with active snapshot and handle stays usable
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
 
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
 
     try testing.expectError(error.GraphBusy, graph.deinitChecked());
     snapshot.deinit();
@@ -373,7 +373,7 @@ test "contract: neighborsMaterialized convenience matches neighbors + materializ
 
     var snapshot = try captureSnapshot(graph);
     defer snapshot.deinit();
-    const direct = try snapshot.neighborsMaterialized(source, testing.allocator);
+    const direct = try snapshot.neighborsMaterialized(source, .{ .allocator = testing.allocator });
     defer testing.allocator.free(direct);
 
     var iter = try snapshot.neighbors(source);
@@ -398,7 +398,7 @@ test "contract: inNeighborsMaterialized convenience matches inNeighbors + materi
 
     var snapshot = try captureSnapshot(graph);
     defer snapshot.deinit();
-    const direct = try snapshot.inNeighborsMaterialized(target, testing.allocator);
+    const direct = try snapshot.inNeighborsMaterialized(target, .{ .allocator = testing.allocator });
     defer testing.allocator.free(direct);
 
     var iter = try snapshot.inNeighbors(target);

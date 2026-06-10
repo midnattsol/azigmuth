@@ -25,7 +25,7 @@ fn benchRemoveNodeHub(allocator: std.mem.Allocator) !harness.Result {
 
     if (summary.removed_visible_edges != outgoing + incoming) return error.CorruptGraph;
     try graph.validate();
-    return .{ .ops = 1, .elapsed_ns = elapsed_ns };
+    return .{ .ops = outgoing + incoming, .elapsed_ns = elapsed_ns };
 }
 
 fn benchRepairBudgetedFlagged(allocator: std.mem.Allocator) !harness.Result {

@@ -3,18 +3,19 @@ const std = @import("std");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
+const node_published = @import("../../storage/node/published.zig");
 
 pub const DebugGroupSpan = struct {
     group: u32,
     start: u32,
-    count: u16,
+    count: u32,
 };
 
 pub fn appendContiguousBlocks(
     blocks: *std.ArrayList(common.TraversedBlock),
     allocator: std.mem.Allocator,
     start: u32,
-    count: u16,
+    count: u32,
 ) !void {
     for (start..start + count) |block_index| {
         try blocks.append(allocator, .{ .block_index = @intCast(block_index) });
@@ -36,7 +37,9 @@ pub fn collectAdjacencyBlocks(
     blocks: *std.ArrayList(common.TraversedBlock),
     comptime side: common.Side,
 ) !void {
-    if (common.blockCount(adjacency, side) == 0) return;
+    const side_view = common.sideAdjOf(adjacency, side);
+    if (side_view.block_count == 0) return;
+    if (node_published.NodePublished.isTiny(&side_view)) return;
 
     if (common.groupCount(adjacency, side) == 0) {
         try appendContiguousBlocks(blocks, allocator, common.firstBlock(adjacency, side), common.blockCount(adjacency, side));

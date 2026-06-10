@@ -29,6 +29,7 @@ fn publishForwardSingleGroup(
         .first_group = first_group,
     };
     node_buffer.storePublishedMeta(.{ .needs_repair_fwd = true });
+    try publish.syncToPublished(&graph, node.index);
 }
 
 test "validation: debugValidate accepts short non-tail runs as valid layout" {
@@ -63,8 +64,9 @@ test "validation: debugValidate accepts short non-tail runs as valid layout" {
         .group_count = 2,
         .first_group = short_run_group,
     };
+    try publish.syncToPublished(&graph, node.index);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(!hasViolationTag(violations, .run_fragmentation_requires_repair));
 }
@@ -97,8 +99,9 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
         .group_count = 1,
         .first_group = group,
     };
+    try publish.syncToPublished(&graph, node.index);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(!hasViolationTag(violations, .grouped_layout_needs_canonicalization));
 }
@@ -114,11 +117,12 @@ test "validation: debugValidate emits degree_mismatch when cached degree diverge
     try graph.addEdge(source, target_a, 0, 0);
     try graph.addEdge(source, target_b, 0, 0);
 
-    const node_buffer = try graph.nodeAt(source);
-    publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(0)));
-    publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(99)));
+    var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, source).loadPublishedMeta();
+    meta.degree_fwd = 0;
+    meta.degree_rev = 99;
+    publish.storePublishedMeta(&graph, source.index, meta);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(hasViolationTag(violations, .degree_mismatch));
 
@@ -150,19 +154,22 @@ test "validation: debugValidate detects forward/reverse visible count mismatch" 
     try graph.addEdge(c, b, 0, 0);
     try graph.validate();
 
-    const b_node = try graph.nodeAt(b);
-    const b_adj = b_node.publishedAdj();
-    const rev_block = page_ops.edgeBlockAt(&graph.graph, b_adj.first_block_rev, .rev);
-    const live: u7 = @intCast(@popCount(rev_block.mask));
+    const b_adj = try graph.publishedNodeAdj(b);
+    if (publish.reverseIsTiny(b_adj)) {
+        try publish.appendReverseSource(&graph, b, b_adj, try publish.readReverseSource(&graph, b_adj, 0));
+    } else {
+        const rev_block = page_ops.edgeBlockAt(&graph.graph, b_adj.first_block_rev, .rev);
+        const live: u7 = @intCast(@popCount(rev_block.mask));
 
-    // Duplicate the first source entry to create 3 reverse but only 2 forward.
-    if (live < 64) {
-        const dup_source = rev_block.sources[0];
-        rev_block.sources[live] = dup_source;
-        rev_block.mask = constants.denseMask(@intCast(live + 1));
+        // Duplicate the first source entry to create 3 reverse but only 2 forward.
+        if (live < 64) {
+            const dup_source = rev_block.sources[0];
+            rev_block.sources[live] = dup_source;
+            rev_block.mask = constants.denseMask(@intCast(live + 1));
+        }
     }
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(hasViolationTag(violations, .forward_reverse_count_mismatch));
 
@@ -185,14 +192,11 @@ test "validation: debugValidate emits forward_tombstone_missing_repair_flag when
     _ = try graph.removeNode(b);
     try graph.validate();
 
-    const a_node = try graph.nodeAt(a);
-    {
-        var flags = a_node.loadPublishedMeta().flags();
-        flags.needs_repair_fwd = false;
-        publish.setPublishedFlags(a_node, flags);
-    }
+    var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, a).loadPublishedMeta();
+    meta.needs_repair_fwd = false;
+    publish.storePublishedMeta(&graph, a.index, meta);
 
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(hasViolationTag(violations, .forward_tombstone_missing_repair_flag));
 
@@ -221,12 +225,13 @@ test "validation: debugValidate catches group_count longer than actual chain eve
     publish.publishedFwdSide(node_buffer).group_count = 2;
     publish.publishedFwdSide(node_buffer).first_group = g0;
     publish.setPublishedFwdDegree(node_buffer, 1);
+    try publish.syncToPublished(&graph, node.index);
 
     // Fast validator: chain length (1) != declared group_count (2) → CorruptGraph
     try testing.expectError(error.CorruptGraph, graph.validate());
 
     // Debug validator must also catch this.
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(violations.len > 0);
 }

@@ -1,12 +1,12 @@
 const std = @import("std");
-const graph_core = @import("../../core/graph_core.zig");
-const types = @import("../../core/types.zig");
-const page_ops = @import("../../storage/page_ops.zig");
-const adjacency = @import("../../adjacency/mod.zig");
-const rcu = @import("../../concurrency/rcu.zig");
-const repair = @import("../../maintenance/repair.zig");
-const node_validity = @import("../../core/node_validity.zig");
-const remove_types = @import("remove_types.zig");
+const graph_core = @import("../../../core/graph_core.zig");
+const node_access = @import("../../../core/node_access.zig");
+const types = @import("../../../core/types.zig");
+const adjacency = @import("../../../adjacency/mod.zig");
+const rcu = @import("../../../concurrency/rcu.zig");
+const repair = @import("../../../maintenance/repair.zig");
+const node_validity = @import("../../../core/node_validity.zig");
+const remove_types = @import("types.zig");
 
 fn validateForwardDestinations(graph: *graph_core.GraphCore, forward_destinations: []const u32) !void {
     if (graph.multigraph_enabled) return;
@@ -39,7 +39,7 @@ fn validateForwardView(
     var destination_iter = destination_counts.iterator();
     while (destination_iter.next()) |kv| {
         const destination_idx = kv.key_ptr.*;
-        const destination_adj = page_ops.nodeAtConst(graph, .{ .index = destination_idx }).publishedAdj();
+        const destination_adj = node_access.publishedAdjAtConst(graph, .{ .index = destination_idx });
         const reverse_count = try repair.countReverseMatches(
             graph,
             destination_adj.first_block_rev,
@@ -58,7 +58,8 @@ fn validateReverseView(
     source_node: *types.NodeBuffer,
     scan: *const remove_types.RemovalScan,
 ) !void {
-    const source_meta = source_node.loadPublishedMeta();
+    const source_meta = node_access.loadPublishedMeta(source_node);
+    const source_degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, source_meta);
     const predecessor_reader = try rcu.readerEnter(graph);
     defer rcu.readerExit(graph, predecessor_reader);
 
@@ -89,7 +90,7 @@ fn validateReverseView(
             const source_idx = kv.key_ptr.*;
             if (source_idx == node.index) continue;
 
-            const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_idx }).publishedAdj();
+            const source_fwd = node_access.publishedAdjAtConst(graph, .{ .index = source_idx });
             const forward_count = try adjacency.countForwardDestinationMatchesChecked(
                 graph,
                 source_fwd.first_block_fwd,
@@ -101,7 +102,7 @@ fn validateReverseView(
             const reverse_count = kv.value_ptr.*;
             if (forward_count != reverse_count) return error.CorruptGraph;
             valid_count += @as(u22, @intCast(reverse_count));
-            if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
+            if (valid_count + self_count > source_degree_rev) return error.CorruptGraph;
         }
     } else {
         var seen_incoming = std.AutoHashMap(u32, void).init(graph.allocator);
@@ -118,17 +119,19 @@ fn validateReverseView(
             const entry = try seen_incoming.getOrPut(source_idx);
             if (entry.found_existing) return error.CorruptGraph;
 
-            const source_fwd = page_ops.nodeAtConst(graph, .{ .index = source_idx }).publishedAdj();
+            const source_fwd = node_access.publishedAdjAtConst(graph, .{ .index = source_idx });
             if (!(try adjacency.hasEdgeInAdjChecked(graph, source_fwd, node.index))) return error.CorruptGraph;
 
             valid_count += 1;
-            if (valid_count + self_count > source_meta.degree_rev) return error.CorruptGraph;
+            if (valid_count + self_count > source_degree_rev) return error.CorruptGraph;
         }
     }
 
-    if (valid_count + self_count != source_meta.degree_rev) return error.CorruptGraph;
+    if (valid_count + self_count != source_degree_rev) return error.CorruptGraph;
 }
 
+/// Validates the scanned node-removal neighborhood against the current graph state.
+/// Returns error.CorruptGraph when the published views no longer match the scan.
 pub fn validateNodeRemovalNeighborhood(
     graph: *graph_core.GraphCore,
     node: types.NodeId,

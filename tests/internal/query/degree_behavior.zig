@@ -15,6 +15,7 @@ test "degree behavior: inDegree returns exact published degree" {
 
     const hub = try graph.addNode();
     publish.setPublishedRevDegree(try graph.nodeAt(hub), 42);
+    publish.syncMetaToPublished(&graph, hub.index);
     try testing.expectEqual(@as(usize, 42), try graph.inDegree(hub));
 }
 
@@ -24,6 +25,7 @@ test "degree behavior: outDegree returns exact published degree" {
 
     const source = try graph.addNode();
     publish.setPublishedFwdDegree(try graph.nodeAt(source), 99);
+    publish.syncMetaToPublished(&graph, source.index);
     try testing.expectEqual(@as(usize, 99), try graph.outDegree(source));
 }
 
@@ -33,6 +35,7 @@ test "degree behavior: outDegree on removed node returns InvalidNode" {
 
     const node = try graph.addNode();
     publish.setPublishedFlags(try graph.nodeAt(node), .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = true });
+    publish.syncMetaToPublished(&graph, node.index);
     try testing.expectError(error.InvalidNode, graph.outDegree(node));
 }
 
@@ -42,6 +45,7 @@ test "degree behavior: inDegree on removed node returns InvalidNode" {
 
     const node = try graph.addNode();
     publish.setPublishedFlags(try graph.nodeAt(node), .{ .needs_repair_fwd = false, .needs_repair_rev = false, .removed = true });
+    publish.syncMetaToPublished(&graph, node.index);
     try testing.expectError(error.InvalidNode, graph.inDegree(node));
 }
 
@@ -51,9 +55,7 @@ test "degree behavior: addEdge with degree_fwd at max returns DegreeLimitReached
 
     const source = try graph.addNode();
     const destination = try graph.addNode();
-    const source_node = try graph.nodeAt(source);
-
-    publish.setPublishedFwdDegree(source_node, constants.MAX_DEGREE_PER_SIDE);
+    publish.setPublishedFwdDegreeExact(&graph, source.index, constants.MAX_DEGREE_PER_SIDE);
 
     try testing.expectError(error.DegreeLimitReached, graph.addEdge(source, destination, 0, 0));
 }
@@ -64,9 +66,7 @@ test "degree behavior: addEdge with degree_rev at max returns DegreeLimitReached
 
     const source = try graph.addNode();
     const destination = try graph.addNode();
-    const destination_node = try graph.nodeAt(destination);
-
-    publish.setPublishedRevDegree(destination_node, constants.MAX_DEGREE_PER_SIDE);
+    publish.setPublishedRevDegreeExact(&graph, destination.index, constants.MAX_DEGREE_PER_SIDE);
 
     try testing.expectError(error.DegreeLimitReached, graph.addEdge(source, destination, 0, 0));
 }

@@ -4,6 +4,7 @@
 const std = @import("std");
 const graph_mod = @import("graph_mod");
 const adjacency_mod = graph_mod.adjacency_mod;
+const publish = @import("publish");
 
 const testing = std.testing;
 
@@ -13,12 +14,18 @@ test "adjacency parity: tailBlockIndexSide returns the correct tail for contiguo
 
     const src = try graph.addNode();
     var targets: [3]graph_mod.NodeId = undefined;
-    for (0..targets.len) |i| {
-        targets[i] = try graph.addNode();
-        try graph.addEdge(src, targets[i], 0, 0);
+    for (0..targets.len) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(src, targets[target_idx], 0, 0);
     }
 
-    const fwd = (try graph.nodeAtConst(src)).publishedFwd();
+    const adj = try publish.ensureForwardBlockLayout(&graph, src);
+    const fwd: graph_mod.types_mod.SideAdj = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
     const tail = adjacency_mod.tailBlockIndexSide(&graph.graph, &fwd);
     try testing.expect(tail != null);
     try testing.expectEqual(fwd.first_block + fwd.block_count - 1, tail.?);
@@ -30,11 +37,17 @@ test "adjacency parity: tailBlockIndexSide returns the correct tail for grouped 
 
     const src = try graph.addNode();
     for (0..70) |_| {
-        const t = try graph.addNode();
-        try graph.addEdge(src, t, 0, 0);
+        const destination = try graph.addNode();
+        try graph.addEdge(src, destination, 0, 0);
     }
 
-    const fwd = (try graph.nodeAtConst(src)).publishedFwd();
+    const adj = try graph.publishedNodeAdj(src);
+    const fwd: graph_mod.types_mod.SideAdj = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
     if (fwd.group_count > 0) {
         const tail = adjacency_mod.tailBlockIndexSide(&graph.graph, &fwd);
         try testing.expect(tail != null);
@@ -46,7 +59,13 @@ test "adjacency parity: tailBlockIndexSide returns null for empty layout" {
     defer graph.deinit();
 
     _ = try graph.addNode();
-    const fwd = (try graph.nodeAtConst(.{ .index = 0 })).publishedFwd();
+    const adj = try graph.publishedNodeAdj(.{ .index = 0 });
+    const fwd: graph_mod.types_mod.SideAdj = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
     try testing.expectEqual(@as(?u32, null), adjacency_mod.tailBlockIndexSide(&graph.graph, &fwd));
 }
 
@@ -55,23 +74,28 @@ test "adjacency parity: hasEdgeInAdj vs hasEdgeInSideAdj agree on contiguous lay
     defer graph.deinit();
 
     const src = try graph.addNode();
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    try graph.addEdge(src, a, 0, 0);
-    try graph.addEdge(src, b, 0, 0);
-    try graph.addEdge(src, c, 0, 0);
+    const destination_one = try graph.addNode();
+    const destination_two = try graph.addNode();
+    const destination_three = try graph.addNode();
+    try graph.addEdge(src, destination_one, 0, 0);
+    try graph.addEdge(src, destination_two, 0, 0);
+    try graph.addEdge(src, destination_three, 0, 0);
 
-    const adj = (try graph.nodeAtConst(src)).publishedAdj();
-    const fwd = (try graph.nodeAtConst(src)).publishedFwd();
+    const adj = try graph.publishedNodeAdj(src);
+    const fwd: graph_mod.types_mod.SideAdj = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
 
     try testing.expectEqual(
-        adjacency_mod.hasEdgeInAdj(&graph.graph, adj, a.index),
-        adjacency_mod.hasEdgeInSideAdj(&graph.graph, fwd, a.index),
+        adjacency_mod.hasEdgeInAdj(&graph.graph, adj, destination_one.index),
+        adjacency_mod.hasEdgeInSideAdj(&graph.graph, fwd, destination_one.index),
     );
     try testing.expectEqual(
-        adjacency_mod.hasEdgeInAdj(&graph.graph, adj, b.index),
-        adjacency_mod.hasEdgeInSideAdj(&graph.graph, fwd, b.index),
+        adjacency_mod.hasEdgeInAdj(&graph.graph, adj, destination_two.index),
+        adjacency_mod.hasEdgeInSideAdj(&graph.graph, fwd, destination_two.index),
     );
     try testing.expectEqual(
         adjacency_mod.hasEdgeInAdj(&graph.graph, adj, 9999),
@@ -85,12 +109,17 @@ test "adjacency parity: hasEdgeInAdj vs hasEdgeInSideAdj agree on grouped layout
 
     const src = try graph.addNode();
     for (0..70) |_| {
-        const t = try graph.addNode();
-        try graph.addEdge(src, t, 0, 0);
+        const destination = try graph.addNode();
+        try graph.addEdge(src, destination, 0, 0);
     }
 
-    const adj = (try graph.nodeAtConst(src)).publishedAdj();
-    const fwd = (try graph.nodeAtConst(src)).publishedFwd();
+    const adj = try graph.publishedNodeAdj(src);
+    const fwd: graph_mod.types_mod.SideAdj = .{
+        .first_block = adj.first_block_fwd,
+        .block_count = adj.block_count_fwd,
+        .group_count = adj.group_count_fwd,
+        .first_group = adj.first_group_fwd,
+    };
 
     if (adj.group_count_fwd > 0) {
         // Check the first, last, and an absent dest.

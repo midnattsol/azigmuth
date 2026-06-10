@@ -33,6 +33,7 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, s
     publish.publishedRevSide(node_buffer).first_block = block_index;
     publish.publishedRevSide(node_buffer).block_count = 1;
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
+    try publish.syncToPublished(graph, destination_index);
 }
 
 fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
@@ -54,6 +55,7 @@ fn publishRepairCandidate(graph: *graph_mod.Graph, node: graph_mod.NodeId) !stru
     publish.publishedFwdSide(node_buffer).first_block = first_block;
     publish.publishedFwdSide(node_buffer).block_count = 2;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(40)));
+    try publish.syncToPublished(graph, node.index);
     graph.graph.edge_count.store(40, .release);
 
     return .{ .first_block = first_block, .second_block = second_block };

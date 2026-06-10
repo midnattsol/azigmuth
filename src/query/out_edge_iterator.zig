@@ -5,11 +5,14 @@
 
 const std = @import("std");
 const constants = @import("../core/constants.zig");
+const side_ops = @import("../adjacency/side_ops.zig");
 const graph_core = @import("../core/graph_core.zig");
-const iterator_common = @import("iterator_common.zig");
+const side_traversal = @import("side_traversal.zig");
 const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
+const node_published = @import("../storage/node/published.zig");
+const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
 
@@ -23,9 +26,14 @@ pub const OutEdgeIterator = struct {
     current_group_index: u32,
 
     current_mask: u64,
+    tiny_mode: bool = false,
+    tiny_slot: u32 = 0,
+    tiny_count: u16 = 0,
+    tiny_index: u16 = 0,
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const types.NodeBuffer = null,
     check_removed_destinations: bool,
@@ -38,43 +46,33 @@ pub const OutEdgeIterator = struct {
     group_count_bound: u16 = 0,
 
     fn advanceToNextGroup(self: *OutEdgeIterator) bool {
-        return iterator_common.advanceToNextGroup(self, self.core);
-    }
-
-    fn loadNextNonEmptyMask(self: *OutEdgeIterator) bool {
-        while (true) {
-            while (self.blocks_remaining == 0) {
-                if (!self.advanceToNextGroup()) return false;
-            }
-
-            const block_index = self.current_block_index;
-            self.current_block_index += 1;
-            self.blocks_remaining -= 1;
-
-            const block = page_ops.edgeBlockAtConst(self.core, block_index, .fwd);
-            if (block.mask == 0) continue;
-            self.current_mask = block.mask;
-            self.cached_fwd_block = block;
-            self.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(self.core, block_index);
-            return true;
-        }
+        return side_traversal.advanceToNextGroup(self, self.core);
     }
 
     fn destinationRemoved(self: *OutEdgeIterator, destination_index: u32) bool {
         if (!self.check_removed_destinations) return false;
-        return iterator_common.candidateRemoved(self, self.core, destination_index);
+        return live_read_common.candidateRemoved(self, self.core, destination_index);
     }
 
-    /// Returns the next outgoing edge with its identity, or null when exhausted.
-    pub fn next(self: *OutEdgeIterator) ?types.EdgeRef {
-        if (!self.reader_active) return null;
-        if (!rcu.readerTokenActive(self.reader_token)) {
-            self.reader_active = false;
-            return null;
+    fn nextTinyOutEdge(self: *OutEdgeIterator) ?types.EdgeRef {
+        while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
+            const entry = self.cached_tiny_fwd.?.entries[self.tiny_index];
+            if (self.destinationRemoved(entry.destination)) continue;
+            self.tiny_index += 1;
+            return types.EdgeRef{
+                .id = .{ .local = entry.edge_id },
+                .destination = entry.destination,
+                .relation = entry.relation,
+                .flags = entry.flags,
+            };
         }
+        return null;
+    }
+
+    fn nextBlockOutEdge(self: *OutEdgeIterator) ?types.EdgeRef {
         while (true) {
             while (self.current_mask == 0) {
-                if (!self.loadNextNonEmptyMask()) return null;
+                if (!side_traversal.loadNextOutEdgeMask(self, self.core)) return null;
             }
 
             const bit_index: u6 = @intCast(@ctz(self.current_mask));
@@ -91,13 +89,24 @@ pub const OutEdgeIterator = struct {
                 .id = .{ .local = fwd_ids.ids[bit_index] },
                 .destination = edge.destination,
                 .relation = edge.relation,
-                .flags = @bitCast(edge.flags), // Edge -> EdgeFlags: both packed struct(u16)
+                .flags = @bitCast(edge.flags),
             };
         }
     }
 
+    /// Returns the next outgoing edge with its identity, or null when exhausted.
+    pub fn next(self: *OutEdgeIterator) ?types.EdgeRef {
+        if (!self.reader_active) return null;
+        if (!rcu.readerTokenActive(self.core, self.reader_token)) {
+            self.reader_active = false;
+            return null;
+        }
+        if (self.tiny_mode) return self.nextTinyOutEdge();
+        return self.nextBlockOutEdge();
+    }
+
     pub fn deinit(self: *OutEdgeIterator) void {
-        iterator_common.deinitReader(self, self.core);
+        live_read_common.deinitReader(self, self.core);
     }
 };
 
@@ -109,24 +118,30 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
     const side_snapshot = live_read_common.sideAdj(.fwd, capture.node_adj_snapshot);
     try live_read_common.validateForwardSideQuick(graph, side_snapshot);
 
-    const initial = iterator_common.buildTraversalState(side_snapshot);
+    const cursor_init = side_traversal.buildCursorInit(side_snapshot);
 
     var iterator = OutEdgeIterator{
         .core = graph,
         .node_adj_snapshot = capture.node_adj_snapshot,
-        .contiguous_mode = initial.contiguous_mode,
-        .current_block_index = initial.current_block_index,
-        .blocks_remaining = initial.blocks_remaining,
-        .current_group_index = initial.current_group_index,
+        .contiguous_mode = cursor_init.traversal.contiguous_mode,
+        .current_block_index = cursor_init.traversal.current_block_index,
+        .blocks_remaining = cursor_init.traversal.blocks_remaining,
+        .current_group_index = cursor_init.traversal.current_group_index,
         .current_mask = 0,
+        .tiny_mode = cursor_init.tiny.tiny_mode,
+        .tiny_slot = cursor_init.tiny.tiny_slot,
+        .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_destinations = capture.node_adj_snapshot.flags.needs_repair_fwd,
         .reader_active = true,
         .reader_token = capture.reader_token,
         .groups_visited = 0,
-        .group_count_bound = capture.node_adj_snapshot.group_count_fwd,
+        .group_count_bound = cursor_init.group_count_bound,
     };
 
-    iterator_common.primeGroupedTraversal(&iterator, graph);
+    if (iterator.tiny_mode) {
+        iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(graph, iterator.tiny_slot);
+    }
+    side_traversal.primeGroupedTraversal(&iterator, graph);
 
     return iterator;
 }

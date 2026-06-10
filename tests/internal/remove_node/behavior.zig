@@ -144,7 +144,7 @@ test "removeNode: predecessor forward tombstone debt flag IS set immediately" {
     // After removeNode, the source's forward adjacency still contains
     // a tombstoned reference to target (structurally).  That is repair
     // debt and MUST be flagged immediately so repairBudgeted can find it.
-    const source_adj = (try graph.nodeAtConst(source)).publishedAdj();
+    const source_adj = try graph.publishedNodeAdj(source);
     try testing.expect(source_adj.flags.needs_repair_fwd);
 
     // The tombstoned edge is excluded from the public logical graph.
@@ -155,7 +155,7 @@ test "removeNode: predecessor forward tombstone debt flag IS set immediately" {
     _ = try graph.repairBudgeted(1);
     try graph.validate();
 
-    const after = (try graph.nodeAtConst(source)).publishedAdj();
+    const after = try graph.publishedNodeAdj(source);
     try testing.expect(!after.flags.needs_repair_fwd);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
 }

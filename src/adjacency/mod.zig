@@ -3,8 +3,12 @@
 const std = @import("std");
 const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
+const node_access = @import("../core/node_access.zig");
+const tiny_config = @import("../core/tiny_config.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
+const node_published = @import("../storage/node/published.zig");
+const node_tiny = @import("../storage/node/tiny.zig");
 const node_validity = @import("../core/node_validity.zig");
 
 pub const AdjSide = enum { fwd, rev };
@@ -21,6 +25,21 @@ pub fn validateSideAdjLayoutForSide(
     side_adj: types.SideAdj,
     comptime side: AdjSide,
 ) !void {
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        if (side_adj.group_count != 0 or side_adj.first_group != 0) return error.CorruptGraph;
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        const max_count: u16 = switch (side) {
+            .fwd => if (graph.multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE,
+            .rev => tiny_config.TINY_REV_CAP,
+        };
+        if (count > max_count) return error.CorruptGraph;
+        switch (side) {
+            .fwd => if (side_adj.first_block >= graph.tiny_fwd_count) return error.CorruptGraph,
+            .rev => if (side_adj.first_block >= graph.tiny_rev_count) return error.CorruptGraph,
+        }
+        return;
+    }
+
     const block_limit = allocatedBlockCount(graph, side);
     if (side_adj.block_count == 0) {
         if (side_adj.group_count != 0) return error.CorruptGraph;
@@ -52,6 +71,10 @@ pub fn validateSideAdjLayoutForSide(
 }
 
 pub fn validateSideAdjLayout(graph: *const graph_core.GraphCore, side_adj: types.SideAdj) !void {
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        if (side_adj.group_count != 0 or side_adj.first_group != 0) return error.CorruptGraph;
+        return;
+    }
     if (side_adj.block_count == 0) {
         if (side_adj.group_count != 0) return error.CorruptGraph;
         return;
@@ -97,6 +120,7 @@ pub fn validateNodeAdjLayout(graph: *const graph_core.GraphCore, node_adj: types
 
 pub fn tailBlockIndexSideChecked(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) !?u32 {
     if (side_adj.block_count == 0) return null;
+    if (node_published.NodePublished.isTiny(side_adj)) return null;
     if (side_adj.group_count == 0) return side_adj.first_block + side_adj.block_count - 1;
 
     try validateSideAdjLayout(graph, side_adj.*);
@@ -112,6 +136,14 @@ pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.S
 pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, target: u32) !bool {
     if (side_adj.block_count == 0) return false;
     try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        for (0..count) |entry_idx| {
+            if (slot.entries[entry_idx].destination == target) return true;
+        }
+        return false;
+    }
     if (side_adj.group_count == 0) {
         return hasEdgeInForwardRun(graph, side_adj.first_block, side_adj.block_count, target);
     }
@@ -154,7 +186,7 @@ pub fn searchInBlock(comptime BlockType: type, block: *const BlockType, target: 
     return null;
 }
 
-fn forwardRunRangesMonotonic(graph: *const graph_core.GraphCore, start: u32, count: u16) bool {
+fn forwardRunRangesMonotonic(graph: *const graph_core.GraphCore, start: u32, count: u32) bool {
     var prev_last: ?u32 = null;
     for (start..start + count) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
@@ -171,7 +203,7 @@ fn forwardRunRangesMonotonic(graph: *const graph_core.GraphCore, start: u32, cou
     return true;
 }
 
-fn hasEdgeInForwardRun(graph: *const graph_core.GraphCore, start: u32, count: u16, target: u32) bool {
+fn hasEdgeInForwardRun(graph: *const graph_core.GraphCore, start: u32, count: u32, target: u32) bool {
     var low: u32 = 0;
     var high: u32 = count;
     var hit_empty = false;
@@ -212,6 +244,16 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
     return hasEdgeInAdjChecked(graph, node_adj, target) catch false;
 }
 
+pub fn findTinyForwardSlotById(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, destination_index: u32, edge_id: u32) ?u7 {
+    const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+    const count = node_published.NodePublished.tinyCount(&side_adj);
+    for (0..count) |entry_idx| {
+        const entry = slot.entries[entry_idx];
+        if (entry.destination == destination_index and entry.edge_id == edge_id) return @intCast(entry_idx);
+    }
+    return null;
+}
+
 // ── Multigraph helpers ─────────────────────────────────────────────────
 
 /// Counts how many times `target` appears as a destination in forward blocks.
@@ -236,19 +278,30 @@ pub fn countForwardInBlock(block: *const types.EdgeBlockFwd, target: u32) u32 {
 pub fn countForwardDestinationMatchesChecked(
     graph: *const graph_core.GraphCore,
     first_block: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group: u32,
     destination_index: u32,
 ) !u32 {
     if (block_count == 0) return 0;
 
-    try validateSideAdjLayoutForSide(graph, .{
+    const side_adj: types.SideAdj = .{
         .first_block = first_block,
         .block_count = block_count,
         .group_count = group_count,
         .first_group = first_group,
-    }, .fwd);
+    };
+    try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
+
+    if (node_published.NodePublished.isTiny(&side_adj)) {
+        const slot = page_ops.tinyFwdAtConst(graph, first_block);
+        const count = node_published.NodePublished.tinyCount(&side_adj);
+        var total_tiny: u32 = 0;
+        for (0..count) |entry_idx| {
+            if (slot.entries[entry_idx].destination == destination_index) total_tiny += 1;
+        }
+        return total_tiny;
+    }
 
     var total: u32 = 0;
 
@@ -275,7 +328,7 @@ pub fn countForwardDestinationMatchesChecked(
 pub fn countForwardDestinationMatches(
     graph: *const graph_core.GraphCore,
     first_block: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group: u32,
     destination_index: u32,
@@ -359,7 +412,7 @@ fn searchForwardBlockSlotById(
 pub fn findForwardSlotByIdInRun(
     graph: *const graph_core.GraphCore,
     start: u32,
-    count: u16,
+    count: u32,
     destination_index: u32,
     edge_id: u32,
 ) ?ForwardBlockSlot {
@@ -439,6 +492,5 @@ pub fn findForwardSlotByIdInRun(
 
 pub fn publishedNodeAdj(graph: *const graph_core.GraphCore, node: types.NodeId) !types.NodeAdj {
     try node_validity.ensureLiveNode(graph, node);
-    const node_buffer = page_ops.nodeAtConst(graph, node);
-    return node_buffer.publishedAdj();
+    return node_access.publishedAdjAtConst(graph, node);
 }

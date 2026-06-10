@@ -45,6 +45,7 @@ fn publishForwardGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups:
         }
     }
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast((total))));
+    try publish.syncToPublished(graph, node.index);
 }
 
 fn publishReverseGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups: []const u32, block_count: u16) !void {
@@ -62,6 +63,7 @@ fn publishReverseGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups:
         }
     }
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast((total))));
+    try publish.syncToPublished(graph, node.index);
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.NodeId, source_index: u32) !void {
@@ -74,6 +76,7 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.No
     publish.publishedRevSide(node_buffer).first_block = block;
     publish.publishedRevSide(node_buffer).block_count = 1;
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
+    try publish.syncToPublished(graph, destination.index);
 }
 
 fn publishSingleForwardEdge(graph: *graph_mod.Graph, source: graph_mod.NodeId, destination_index: u32) !void {
@@ -86,6 +89,7 @@ fn publishSingleForwardEdge(graph: *graph_mod.Graph, source: graph_mod.NodeId, d
     publish.publishedFwdSide(node_buffer).first_block = block;
     publish.publishedFwdSide(node_buffer).block_count = 1;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(1)));
+    try publish.syncToPublished(graph, source.index);
 }
 
 fn buildGroupedForwardGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
@@ -190,6 +194,8 @@ test "mutation grouped: RepairRequired in grouped forward does not publish" {
     publish.publishedRevSide(reverse_node).block_count = 0;
     publish.publishedRevSide(reverse_node).first_block = 0;
     publish.setPublishedRevDegree(reverse_node, @as(u22, @intCast(0)));
+    try publish.syncToPublished(&graph, source.index);
+    try publish.syncToPublished(&graph, 49);
     graph.graph.edge_count.store(98, .release);
 
     try testing.expectError(error.RepairRequired, graph.removeEdge(source, .{ .index = 1 }));
@@ -212,6 +218,8 @@ test "mutation grouped: RepairRequired in grouped reverse does not publish" {
     publish.publishedFwdSide(forward_node).block_count = 0;
     publish.publishedFwdSide(forward_node).first_block = 0;
     publish.setPublishedFwdDegree(forward_node, @as(u22, @intCast(0)));
+    try publish.syncToPublished(&graph, destination.index);
+    try publish.syncToPublished(&graph, 49);
     graph.graph.edge_count.store(98, .release);
 
     try testing.expectError(error.RepairRequired, graph.removeEdge(.{ .index = 1 }, destination));
@@ -305,6 +313,7 @@ fn publishSingleBlockGroupedForward(
     publish.publishedFwdSide(node_buffer).first_group = group;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(1)));
     publish.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+    try publish.syncToPublished(graph, source.index);
     return .{ .block = block, .group = group };
 }
 
@@ -325,6 +334,7 @@ fn publishSingleBlockGroupedReverse(
     publish.publishedRevSide(node_buffer).first_group = group;
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
     publish.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = false, .needs_repair_rev = true, .removed = false });
+    try publish.syncToPublished(graph, destination.index);
     return .{ .block = block, .group = group };
 }
 
@@ -351,7 +361,7 @@ test "mutation grouped: addEdge COW on single-block grouped forward updates grou
     try testing.expectEqual(@as(u64, 2), graph.edgeCount());
     try testing.expectEqual(@as(usize, 2), try graph.outDegree(source));
 
-    const after = (try graph.nodeAtConst(source)).publishedAdj();
+    const after = page_ops.nodeAtConst(&graph.graph, source).publishedAdj();
     try testing.expectEqual(@as(u16, 0), after.group_count_fwd);
     try testing.expectEqual(@as(u16, 1), after.block_count_fwd);
     try neighbors.expectOutNeighbors(&graph, testing.allocator, source, &[_]u32{ old_dest.index, new_dest.index });
@@ -441,7 +451,7 @@ test "mutation grouped: addEdge COW on single-block grouped reverse updates grou
     try testing.expectEqual(@as(u64, 2), graph.edgeCount());
     try testing.expectEqual(@as(usize, 2), try graph.inDegree(dest));
 
-    const after = (try graph.nodeAtConst(dest)).publishedAdj();
+    const after = try graph.publishedNodeAdj(dest);
     try testing.expectEqual(@as(u16, 0), after.group_count_rev);
     try testing.expectEqual(@as(u16, 1), after.block_count_rev);
     try neighbors.expectInNeighbors(&graph, testing.allocator, dest, &[_]u32{ old_source.index, new_source.index });

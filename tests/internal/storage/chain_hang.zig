@@ -10,8 +10,10 @@ const publish = @import("publish");
 const testing = std.testing;
 
 fn makeAdjacencyGroupedWithInvalidDeclaredSpan(graph: *graph_mod.Graph, node: graph_mod.NodeId) !void {
-    const published_adj = (try graph.nodeAtConst(node)).publishedAdj();
+    var published_adj = (try graph.nodeAtConst(node)).publishedAdj();
     if (published_adj.block_count_fwd == 0) return error.SkipZigTest;
+
+    published_adj = try publish.ensureForwardBlockLayout(graph, node);
 
     const existing_blocks = published_adj.block_count_fwd;
     const existing_groups = published_adj.group_count_fwd;
@@ -30,6 +32,8 @@ fn makeAdjacencyGroupedWithInvalidDeclaredSpan(graph: *graph_mod.Graph, node: gr
         const buf = try graph.nodeAt(node);
         publish.publishedFwdSide(buf).group_count += 1;
     }
+
+    try publish.syncToPublished(graph, node.index);
 }
 
 test "group chain: validate detects cyclic forward group chain on contiguous adjacency" {
@@ -56,6 +60,7 @@ test "group chain: validate detects cyclic forward group chain on already-groupe
 
     const buf = try graph.nodeAt(src);
     publish.publishedFwdSide(buf).group_count += 1;
+    try publish.syncToPublished(&graph, src.index);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 }
@@ -103,6 +108,7 @@ test "contiguous layout: neighbors rejects first_block outside allocated range" 
     publish.publishedFwdSide(buf).first_block = graph.graph.block_fwd_count + 1;
     publish.publishedFwdSide(buf).block_count = 1;
     publish.setPublishedFwdDegree(buf, 1);
+    try publish.syncToPublished(&graph, src.index);
 
     try testing.expectError(error.CorruptGraph, graph.neighbors(src));
 }
@@ -151,6 +157,7 @@ test "group chain: repairNode on cyclic forward chain returns CorruptGraph" {
     {
         const buf = try graph.nodeAt(src);
         publish.setPublishedFlags(buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+        try publish.syncToPublished(&graph, src.index);
     }
 
     try testing.expectError(error.CorruptGraph, graph.repairNode(src));
@@ -167,6 +174,7 @@ test "group chain: repairBudgeted on cyclic chain returns CorruptGraph" {
     {
         const buf = try graph.nodeAt(src);
         publish.setPublishedFlags(buf, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
+        try publish.syncToPublished(&graph, src.index);
     }
     try graph.graph.repair_fwd.append(graph.graph.allocator, src.index);
 
@@ -231,7 +239,7 @@ test "group chain: validate does not hang on cyclic chain with forward tombstone
     _ = graph.validate() catch {};
 
     // debugValidate must also terminate.
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     // Must emit either forward_tombstone_missing_repair_flag or a cyclic chain violation.
     var found = false;
@@ -280,7 +288,7 @@ test "group chain: debugValidate terminates on cyclic chain with tombstone" {
     }
 
     // debugValidate must terminate quickly.
-    const violations = try graph.debugValidate(testing.allocator);
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(violations.len > 0);
 }

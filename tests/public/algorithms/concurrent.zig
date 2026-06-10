@@ -82,9 +82,9 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const order = try snapshot.bfs(setup.root, testing.allocator);
+    const order = try snapshot.bfs(setup.root, .{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
     stop.store(true, .release);
@@ -107,9 +107,9 @@ test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const order = try snapshot.dfs(setup.root, testing.allocator);
+    const order = try snapshot.dfs(setup.root, .{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
     stop.store(true, .release);
@@ -132,9 +132,9 @@ test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const has_cycle = try snapshot.hasCycle(testing.allocator);
+    const has_cycle = try snapshot.hasCycle(.{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     stop.store(true, .release);
 
@@ -155,9 +155,9 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const order = try snapshot.bfs(setup.root, testing.allocator);
+    const order = try snapshot.bfs(setup.root, .{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
 
@@ -179,9 +179,9 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const order = try snapshot.dfs(setup.root, testing.allocator);
+    const order = try snapshot.dfs(setup.root, .{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
 
@@ -203,9 +203,9 @@ test "algorithms concurrent: cycle tolerates node removed during traversal" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
-    var snapshot = try graph.snapshot(testing.allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
-    const has_cycle = try snapshot.hasCycle(testing.allocator);
+    const has_cycle = try snapshot.hasCycle(.{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
 
     while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();

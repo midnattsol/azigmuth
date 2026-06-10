@@ -1,0 +1,151 @@
+const std = @import("std");
+const graph_core = @import("../../../core/graph_core.zig");
+const node_validity = @import("../../../core/node_validity.zig");
+const types = @import("../../../core/types.zig");
+const page_ops = @import("../../../storage/page_ops.zig");
+const adjacency = @import("../../../adjacency/mod.zig");
+const side_ops = @import("../../../adjacency/side_ops.zig");
+const rebuild_heap = @import("heap.zig");
+
+pub const Scan = struct {
+    live_after: usize = 0,
+    block_count: usize = 0,
+};
+
+fn keepSlot(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    slot: u7,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+) bool {
+    const node_id = side_ops.readNodeIdAtSlot(graph, block_idx, slot, side);
+    switch (side) {
+        .fwd => return node_id < graph.publishedNodeCount() and !node_validity.isNodeRemovedIndex(graph, node_id),
+        .rev => {
+            if (skip_source) |source_idx| {
+                if (node_id == source_idx) return false;
+            }
+            return node_id < graph.publishedNodeCount() and !node_validity.isNodeRemovedIndex(graph, node_id);
+        },
+    }
+}
+
+fn blockKey(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    slot: u7,
+    comptime side: adjacency.AdjSide,
+) u32 {
+    return side_ops.readNodeIdAtSlot(graph, block_idx, slot, side);
+}
+
+fn blockId(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    slot: u7,
+    comptime side: adjacency.AdjSide,
+) u32 {
+    if (side == .rev or !graph.multigraph_enabled) return 0;
+    return side_ops.readForwardEntryAtSlot(graph, block_idx, slot).edge_id;
+}
+
+fn scanBlock(
+    graph: *const graph_core.GraphCore,
+    scan: *Scan,
+    block_idx: u32,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+) !void {
+    scan.block_count += 1;
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
+    const live: u7 = @intCast(@popCount(block.mask));
+    for (0..live) |slot_idx| {
+        if (keepSlot(graph, block_idx, @intCast(slot_idx), side, skip_source)) {
+            scan.live_after += 1;
+        }
+    }
+}
+
+fn firstPos(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    live: u7,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+) ?u7 {
+    var slot: u7 = 0;
+    while (slot < live) : (slot += 1) {
+        if (keepSlot(graph, block_idx, slot, side, skip_source)) return slot;
+    }
+    return null;
+}
+
+fn pushBlock(
+    graph: *const graph_core.GraphCore,
+    heap: *std.ArrayList(rebuild_heap.BlockIter),
+    block_idx: u32,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+) !void {
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
+    const live: u7 = @intCast(@popCount(block.mask));
+    const pos = firstPos(graph, block_idx, live, side, skip_source) orelse return;
+
+    rebuild_heap.heapPush(heap, .{
+        .block_idx = block_idx,
+        .live = live,
+        .pos = pos,
+        .current_key = blockKey(graph, block_idx, pos, side),
+        .current_id = blockId(graph, block_idx, pos, side),
+    });
+}
+
+pub fn advanceIter(
+    graph: *const graph_core.GraphCore,
+    iter: *rebuild_heap.BlockIter,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+) bool {
+    var pos = iter.pos + 1;
+    while (pos < iter.live) : (pos += 1) {
+        if (!keepSlot(graph, iter.block_idx, pos, side, skip_source)) continue;
+        iter.pos = pos;
+        iter.current_key = blockKey(graph, iter.block_idx, pos, side);
+        iter.current_id = blockId(graph, iter.block_idx, pos, side);
+        return true;
+    }
+    return false;
+}
+
+pub fn scanRebuildInput(
+    graph: *graph_core.GraphCore,
+    side_view: types.SideAdj,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+) !Scan {
+    var scan = Scan{};
+    var scan_cursor = side_ops.BlockCursor.init(side_view);
+    while (scan_cursor.next(graph)) |block_idx| {
+        try scanBlock(graph, &scan, block_idx, side, skip_source);
+    }
+    return scan;
+}
+
+pub fn initHeap(
+    graph: *graph_core.GraphCore,
+    side_view: types.SideAdj,
+    comptime side: adjacency.AdjSide,
+    skip_source: ?u32,
+    allocator: std.mem.Allocator,
+    block_count: usize,
+) !std.ArrayList(rebuild_heap.BlockIter) {
+    var heap = try std.ArrayList(rebuild_heap.BlockIter).initCapacity(allocator, @max(1, block_count));
+    errdefer heap.deinit(allocator);
+
+    var heap_cursor = side_ops.BlockCursor.init(side_view);
+    while (heap_cursor.next(graph)) |block_idx| {
+        try pushBlock(graph, &heap, block_idx, side, skip_source);
+    }
+    return heap;
+}

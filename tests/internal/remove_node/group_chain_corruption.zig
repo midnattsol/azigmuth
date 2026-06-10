@@ -29,6 +29,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     publish.publishedFwdSide(source_node).group_count = 2;
     publish.publishedFwdSide(source_node).first_group = g0;
     publish.setPublishedFwdDegree(source_node, 2);
+    try publish.syncToPublished(&graph, source.index);
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
@@ -38,6 +39,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
+        try publish.syncToPublished(&graph, dest_a.index);
     }
     {
         const block = try graph.allocBlockRev();
@@ -48,6 +50,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
+        try publish.syncToPublished(&graph, dest_b.index);
     }
 
     graph.graph.edge_count.store(2, .release);
@@ -68,6 +71,7 @@ test "removeNode corruption: invalid forward first_group is rejected before trav
     publish.publishedFwdSide(source_node).group_count = 1;
     publish.publishedFwdSide(source_node).first_group = graph.graph.group_count + 10;
     publish.setPublishedFwdDegree(source_node, 1);
+    try publish.syncToPublished(&graph, source.index);
 
     const reverse_block = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, reverse_block, .rev).sources[0] = source.index;
@@ -77,6 +81,7 @@ test "removeNode corruption: invalid forward first_group is rejected before trav
     publish.publishedRevSide(destination_node).first_block = reverse_block;
     publish.publishedRevSide(destination_node).block_count = 1;
     publish.setPublishedRevDegree(destination_node, 1);
+    try publish.syncToPublished(&graph, destination.index);
 
     graph.graph.edge_count.store(1, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(source));
@@ -107,6 +112,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     publish.publishedFwdSide(source_node).group_count = 2;
     publish.publishedFwdSide(source_node).first_group = g0;
     publish.setPublishedFwdDegree(source_node, 2);
+    try publish.syncToPublished(&graph, source.index);
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
@@ -116,6 +122,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
+        try publish.syncToPublished(&graph, dest_a.index);
     }
     {
         const block = try graph.allocBlockRev();
@@ -126,6 +133,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
+        try publish.syncToPublished(&graph, dest_b.index);
     }
 
     graph.graph.edge_count.store(2, .release);
@@ -151,6 +159,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
         publish.publishedFwdSide(node).first_block = block;
         publish.publishedFwdSide(node).block_count = 1;
         publish.setPublishedFwdDegree(node, 1);
+        try publish.syncToPublished(&graph, src_a.index);
     }
     {
         const block = try graph.allocBlockFwd();
@@ -161,6 +170,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
         publish.publishedFwdSide(node).first_block = block;
         publish.publishedFwdSide(node).block_count = 1;
         publish.setPublishedFwdDegree(node, 1);
+        try publish.syncToPublished(&graph, src_b.index);
     }
 
     const r0 = try graph.allocBlockRev();
@@ -179,6 +189,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
     publish.publishedRevSide(target_node).group_count = 2;
     publish.publishedRevSide(target_node).first_group = g0;
     publish.setPublishedRevDegree(target_node, 2);
+    try publish.syncToPublished(&graph, target.index);
     graph.graph.edge_count.store(2, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
     try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(src_a)).fwd);
@@ -201,6 +212,7 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
         publish.publishedFwdSide(node).first_block = block;
         publish.publishedFwdSide(node).block_count = 1;
         publish.setPublishedFwdDegree(node, 1);
+        try publish.syncToPublished(&graph, predecessor.index);
     }
 
     const r0 = try graph.allocBlockRev();
@@ -219,6 +231,7 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     publish.publishedRevSide(target_node).group_count = 2;
     publish.publishedRevSide(target_node).first_group = g0;
     publish.setPublishedRevDegree(target_node, 2);
+    try publish.syncToPublished(&graph, target.index);
     graph.graph.edge_count.store(1, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
 }
@@ -243,6 +256,7 @@ test "removeNode corruption: out-of-range destination via grouped chain is rejec
     publish.publishedFwdSide(source_node).group_count = 1;
     publish.publishedFwdSide(source_node).first_group = group;
     publish.setPublishedFwdDegree(source_node, 1);
+    try publish.syncToPublished(&graph, source.index);
 
     try testing.expectError(error.CorruptGraph, graph.removeNode(source));
 }

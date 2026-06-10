@@ -137,14 +137,11 @@ pub fn adjacencyContains(
     comptime side: common.Side,
 ) bool {
     var contains = ContainsContext{ .target = target };
-    forEachRunInAdj(graph, adjacency, side, &contains, struct {
-        fn callback(
-            inner_graph: *const graph_core.GraphCore,
-            inner_contains: *ContainsContext,
-            start: u32,
-            count: u16,
-        ) !void {
-            try containsRun(inner_graph, inner_contains, start, count, side);
+    common.forEachNodeIdInAdj(graph, adjacency, side, &contains, struct {
+        fn callback(_: *const graph_core.GraphCore, inner_contains: *ContainsContext, candidate: u32) !void {
+            if (candidate != inner_contains.target) return;
+            inner_contains.found = true;
+            return error.FoundTarget;
         }
     }.callback) catch |err| {
         if (err == error.FoundTarget) return true;
@@ -178,14 +175,9 @@ pub fn countTargetMatches(
     comptime side: common.Side,
 ) u32 {
     var count = CountContext{ .target = target };
-    forEachRunInAdj(graph, adjacency, side, &count, struct {
-        fn callback(
-            inner_graph: *const graph_core.GraphCore,
-            inner_count: *CountContext,
-            start: u32,
-            block_count: u16,
-        ) !void {
-            try countRunMatches(inner_graph, inner_count, start, block_count, side);
+    common.forEachNodeIdInAdj(graph, adjacency, side, &count, struct {
+        fn callback(_: *const graph_core.GraphCore, inner_count: *CountContext, candidate: u32) !void {
+            if (candidate == inner_count.target) inner_count.total += 1;
         }
     }.callback) catch return count.total;
     return count.total;

@@ -1,7 +1,6 @@
 const std = @import("std");
 const graph_mod = @import("graph_mod");
-const page_ops = graph_mod.page_ops_mod;
-const constants = graph_mod.constants_mod;
+const publish = @import("publish");
 const testing = std.testing;
 
 test "removeNode multigraph corruption: reverse multiplicity exceeding forward is rejected" {
@@ -13,15 +12,9 @@ test "removeNode multigraph corruption: reverse multiplicity exceeding forward i
     try graph.addEdge(source, target, 0, 0);
     try graph.addEdge(source, target, 1, 0);
 
-    const target_node = try graph.nodeAt(target);
-    const target_adj = target_node.publishedAdj();
+    const target_adj = try graph.publishedNodeAdj(target);
     if (target_adj.block_count_rev > 0 and target_adj.group_count_rev == 0) {
-        const block = page_ops.edgeBlockAt(&graph.graph, target_adj.first_block_rev, .rev);
-        const live = @popCount(block.mask);
-        if (live < 64) {
-            block.sources[live] = source.index;
-            block.mask = constants.denseMask(@intCast(live + 1));
-        }
+        try publish.appendReverseSource(&graph, target, target_adj, source.index);
     }
 
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
@@ -37,15 +30,10 @@ test "removeNode multigraph corruption: reverse multiplicity below forward is re
     try graph.addEdge(source, target, 0, 0);
     try graph.addEdge(source, target, 1, 0);
 
-    const target_node = try graph.nodeAt(target);
-    const target_adj = target_node.publishedAdj();
+    const target_adj = try graph.publishedNodeAdj(target);
     if (target_adj.block_count_rev > 0 and target_adj.group_count_rev == 0) {
-        const block = page_ops.edgeBlockAt(&graph.graph, target_adj.first_block_rev, .rev);
-        const live = @popCount(block.mask);
-        if (live > 0) {
-            block.sources[0] = graph.graph.publishedNodeCount() + 10;
-            block.mask = constants.denseMask(@intCast(live - 1));
-        }
+        try publish.writeReverseSource(&graph, target_adj, 0, graph.graph.publishedNodeCount() + 10);
+        try publish.truncateReverseByOne(&graph, target, target_adj);
     }
 
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
@@ -60,15 +48,9 @@ test "removeNode multigraph corruption: corrupt self-edge multiplicity is reject
     try graph.addEdge(node, node, 0, 0);
     try graph.addEdge(node, node, 1, 0);
 
-    const node_buffer = try graph.nodeAt(node);
-    const adj = node_buffer.publishedAdj();
+    const adj = try graph.publishedNodeAdj(node);
     if (adj.block_count_rev > 0 and adj.group_count_rev == 0) {
-        const block = page_ops.edgeBlockAt(&graph.graph, adj.first_block_rev, .rev);
-        const live = @popCount(block.mask);
-        if (live < 64) {
-            block.sources[live] = node.index;
-            block.mask = constants.denseMask(@intCast(live + 1));
-        }
+        try publish.appendReverseSource(&graph, node, adj, node.index);
     }
 
     try testing.expectError(error.CorruptGraph, graph.removeNode(node));

@@ -3,9 +3,9 @@ const graphz = @import("graphz");
 const testing = std.testing;
 
 fn expectNoViolations(graph: *graphz.Graph, allocator: std.mem.Allocator) !void {
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     if (violations.len != 0) {
         std.debug.print("unexpected violations: {any}\n", .{violations});
@@ -75,9 +75,9 @@ test "mixed sequence: alternating addNode and addEdge with periodic repair stays
         try expectNoViolations(graph, allocator);
     }
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
@@ -111,9 +111,9 @@ test "mixed sequence: addEdge, removeEdge, removeNode, addNode with the recycled
     try graph.addEdge(d, fresh, 0, .{});
     try expectNoViolations(graph, allocator);
 
-    var snapshot = try graph.snapshot(allocator);
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
-    const violations = try snapshot.debugValidate(allocator);
+    const violations = try snapshot.debugValidate(.{ .allocator = allocator });
     defer allocator.free(violations);
     try testing.expectEqual(@as(usize, 0), violations.len);
     try testing.expectEqual(@as(u64, 4), graph.edgeCount());

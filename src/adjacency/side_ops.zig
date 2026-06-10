@@ -1,18 +1,32 @@
 const std = @import("std");
 const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
+const node_access = @import("../core/node_access.zig");
+const node_meta_mod = @import("../storage/node/meta.zig");
+const node_published_mod = @import("../storage/node/published.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const adjacency = @import("mod.zig");
 const rcu = @import("../concurrency/rcu.zig");
+const publish_mod = @import("../mutation/publish.zig");
 const scratch_mod = @import("../mutation/scratch.zig");
-const claims_mod = @import("../mutation/claims.zig");
 const side_runs = @import("runs.zig");
 
 pub const AdjSlot = struct {
     block_idx: u32,
     slot: u7,
 };
+
+pub const ForwardEntryView = struct {
+    block_idx: u32,
+    slot: u7,
+    destination: u32,
+    relation: u16,
+    flags: types.EdgeFlags,
+    edge_id: u32,
+};
+
+pub const TINY_SLOT_TAG: u32 = 0x8000_0000;
 
 pub const RunDesc = side_runs.RunDesc;
 pub const BlockCursor = side_runs.BlockCursor;
@@ -71,6 +85,14 @@ pub fn forEachSlotInSide(
 
     try adjacency.validateSideAdjLayoutForSide(graph, side_adj, side);
 
+    if (node_published_mod.NodePublished.isTiny(&side_adj)) {
+        const count = node_published_mod.NodePublished.tinyCount(&side_adj);
+        for (0..count) |slot| {
+            try callback(graph, context, TINY_SLOT_TAG | side_adj.first_block, @as(u7, @intCast(slot)));
+        }
+        return;
+    }
+
     var cursor = BlockCursor.init(side_adj);
     while (cursor.next(graph)) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
@@ -81,12 +103,116 @@ pub fn forEachSlotInSide(
     }
 }
 
+pub fn readNodeIdAtSlot(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    slot: u7,
+    comptime side: adjacency.AdjSide,
+) u32 {
+    if ((block_idx & TINY_SLOT_TAG) != 0) {
+        const tiny_slot_idx = block_idx & ~TINY_SLOT_TAG;
+        return switch (side) {
+            .fwd => page_ops.tinyFwdAtConst(graph, tiny_slot_idx).entries[slot].destination,
+            .rev => page_ops.tinyRevAtConst(graph, tiny_slot_idx).sources[slot],
+        };
+    }
+
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
+    return switch (side) {
+        .fwd => block.edges[slot].destination,
+        .rev => block.sources[slot],
+    };
+}
+
+pub fn readNodeIdAtSlotDynamic(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    slot: u7,
+    side: adjacency.AdjSide,
+) u32 {
+    return switch (side) {
+        .fwd => readNodeIdAtSlot(graph, block_idx, slot, .fwd),
+        .rev => readNodeIdAtSlot(graph, block_idx, slot, .rev),
+    };
+}
+
+pub fn readForwardEntryAtSlot(
+    graph: *const graph_core.GraphCore,
+    block_idx: u32,
+    slot: u7,
+) ForwardEntryView {
+    if ((block_idx & TINY_SLOT_TAG) != 0) {
+        const tagged_block_idx = block_idx;
+        const entry = page_ops.tinyFwdAtConst(graph, block_idx & ~TINY_SLOT_TAG).entries[slot];
+        return .{
+            .block_idx = tagged_block_idx,
+            .slot = slot,
+            .destination = entry.destination,
+            .relation = entry.relation,
+            .flags = entry.flags,
+            .edge_id = entry.edge_id,
+        };
+    }
+
+    const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+    const edge = block.edges[slot];
+    return .{
+        .block_idx = block_idx,
+        .slot = slot,
+        .destination = edge.destination,
+        .relation = edge.relation,
+        .flags = edge.flags,
+        .edge_id = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx).ids[slot] else 0,
+    };
+}
+
+pub fn forEachNodeIdInSide(
+    graph: *const graph_core.GraphCore,
+    side_adj: types.SideAdj,
+    comptime side: adjacency.AdjSide,
+    context: anytype,
+    comptime callback: anytype,
+) !void {
+    try forEachSlotInSide(graph, side_adj, side, context, struct {
+        fn run(
+            inner_graph: *const graph_core.GraphCore,
+            inner_context: @TypeOf(context),
+            block_idx: u32,
+            slot: u7,
+        ) !void {
+            try callback(inner_graph, inner_context, readNodeIdAtSlot(inner_graph, block_idx, slot, side));
+        }
+    }.run);
+}
+
+pub fn forEachForwardEntryInSide(
+    graph: *const graph_core.GraphCore,
+    side_adj: types.SideAdj,
+    context: anytype,
+    comptime callback: anytype,
+) !void {
+    try forEachSlotInSide(graph, side_adj, .fwd, context, struct {
+        fn run(
+            inner_graph: *const graph_core.GraphCore,
+            inner_context: @TypeOf(context),
+            block_idx: u32,
+            slot: u7,
+        ) !void {
+            try callback(inner_graph, inner_context, readForwardEntryAtSlot(inner_graph, block_idx, slot));
+        }
+    }.run);
+}
+
 fn countLiveSlotsInBlock(
     graph: *const graph_core.GraphCore,
     total: *usize,
     block_idx: u32,
     comptime side: adjacency.AdjSide,
 ) !void {
+    if ((block_idx & TINY_SLOT_TAG) != 0) {
+        total.* += 1;
+        return;
+    }
     total.* += @popCount(page_ops.edgeBlockAtConst(graph, block_idx, side).mask);
 }
 
@@ -95,6 +221,10 @@ pub fn countLiveInSide(
     side_adj: types.SideAdj,
     comptime side: adjacency.AdjSide,
 ) !usize {
+    if (node_published_mod.NodePublished.isTiny(&side_adj)) {
+        return node_published_mod.NodePublished.tinyCount(&side_adj);
+    }
+
     var total: usize = 0;
     try forEachBlockInSide(graph, side_adj, side, &total, struct {
         fn callback(
@@ -136,45 +266,58 @@ pub fn retireSide(
     adj_before: types.NodeAdj,
     comptime side: adjacency.AdjSide,
 ) !void {
-    try side_runs.retireSide(graph, sideAdjOfNode(adj_before, side), side);
+    const side_view = sideAdjOfNode(adj_before, side);
+    if (node_published_mod.NodePublished.isTiny(&side_view)) {
+        rcu.retireTinySlot(graph, side_view.first_block, side);
+        return;
+    }
+    try side_runs.retireSide(graph, side_view, side);
 }
 
 pub fn publishBothAdj(
+    graph: *graph_core.GraphCore,
+    node_id: types.NodeId,
+    node_meta: *node_meta_mod.NodeMeta,
+    node_published: *node_published_mod.NodePublished,
     node: *types.NodeBuffer,
     adj: types.NodeAdj,
-    fwd_degree: u22,
-    rev_degree: u22,
+    fwd_degree: u32,
+    rev_degree: u32,
 ) void {
-    const meta = node.loadPublishedMeta();
-    node.stagingFwd(meta).* = .{
+    const meta = node_access.loadPublishedMeta(node);
+    node_access.writeStagingFwd(graph, node_id, meta, .{
         .first_block = adj.first_block_fwd,
         .block_count = adj.block_count_fwd,
         .group_count = adj.group_count_fwd,
         .first_group = adj.first_group_fwd,
-    };
-    node.stagingRev(meta).* = .{
+    });
+    node_access.writeStagingRev(graph, node_id, meta, .{
         .first_block = adj.first_block_rev,
         .block_count = adj.block_count_rev,
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
-    };
-    _ = claims_mod.publishStagedBoth(node, meta, adj.flags, fwd_degree, rev_degree);
+    });
+    _ = publish_mod.publishStagedBoth(node_meta, node_published, node, meta, adj.flags, fwd_degree, rev_degree);
 }
 
 pub fn publishRevAdj(
+    graph: *graph_core.GraphCore,
+    node_id: types.NodeId,
+    node_meta: *node_meta_mod.NodeMeta,
+    node_published: *node_published_mod.NodePublished,
     node: *types.NodeBuffer,
     adj: types.NodeAdj,
-    new_rev_degree: u22,
+    new_rev_degree: u32,
 ) void {
-    const meta = node.loadPublishedMeta();
-    const rev_delta: i23 = @intCast(@as(i64, @intCast(new_rev_degree)) - @as(i64, @intCast(meta.degree_rev)));
-    node.stagingRev(meta).* = .{
+    const meta = node_access.loadPublishedMeta(node);
+    const rev_delta: i23 = @intCast(@as(i64, @intCast(new_rev_degree)) - @as(i64, @intCast(node_access.publishedRevDegreeFromMetaAtConst(graph, node_id, meta))));
+    node_access.writeStagingRev(graph, node_id, meta, .{
         .first_block = adj.first_block_rev,
         .block_count = adj.block_count_rev,
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
-    };
-    _ = claims_mod.publishStagedRev(node, meta, adj.flags.needs_repair_rev, rev_delta);
+    });
+    _ = publish_mod.publishStagedRev(node_meta, node_published, node, meta, adj.flags.needs_repair_rev, rev_delta);
 }
 
 pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
@@ -186,7 +329,7 @@ pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group_idx: u32, grou
 pub fn findSlotInAdjById(
     graph: *const graph_core.GraphCore,
     first_block_idx: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group_idx: u32,
     destination_idx: u32,
@@ -195,12 +338,19 @@ pub fn findSlotInAdjById(
     if (!graph.multigraph_enabled) return null;
     if (block_count == 0) return null;
 
-    adjacency.validateSideAdjLayoutForSide(graph, .{
+    const side_view: types.SideAdj = .{
         .first_block = first_block_idx,
         .block_count = block_count,
         .group_count = group_count,
         .first_group = first_group_idx,
-    }, .fwd) catch return null;
+    };
+
+    adjacency.validateSideAdjLayoutForSide(graph, side_view, .fwd) catch return null;
+
+    if (node_published_mod.NodePublished.isTiny(&side_view)) {
+        const slot = adjacency.findTinyForwardSlotById(graph, side_view, destination_idx, edge_id) orelse return null;
+        return .{ .block_idx = first_block_idx, .slot = slot };
+    }
 
     if (group_count == 0) {
         const slot = adjacency.findForwardSlotByIdInRun(graph, first_block_idx, block_count, destination_idx, edge_id) orelse return null;
@@ -221,13 +371,44 @@ pub fn findSlotInAdjById(
 pub fn findSlotInAdj(
     graph: *const graph_core.GraphCore,
     first_block_idx: u32,
-    block_count: u16,
+    block_count: u32,
     group_count: u16,
     first_group_idx: u32,
     target: u32,
     comptime side: adjacency.AdjSide,
 ) ?AdjSlot {
     if (block_count == 0) return null;
+
+    const side_view: types.SideAdj = .{
+        .first_block = first_block_idx,
+        .block_count = block_count,
+        .group_count = group_count,
+        .first_group = first_group_idx,
+    };
+
+    if (node_published_mod.NodePublished.isTiny(&side_view)) {
+        switch (side) {
+            .fwd => {
+                const slot = page_ops.tinyFwdAtConst(graph, first_block_idx);
+                const count = node_published_mod.NodePublished.tinyCount(&side_view);
+                for (0..count) |entry_idx| {
+                    if (slot.entries[entry_idx].destination == target) {
+                        return .{ .block_idx = first_block_idx, .slot = @intCast(entry_idx) };
+                    }
+                }
+            },
+            .rev => {
+                const slot = page_ops.tinyRevAtConst(graph, first_block_idx);
+                const count = node_published_mod.NodePublished.tinyCount(&side_view);
+                for (0..count) |entry_idx| {
+                    if (slot.sources[entry_idx] == target) {
+                        return .{ .block_idx = first_block_idx, .slot = @intCast(entry_idx) };
+                    }
+                }
+            },
+        }
+        return null;
+    }
 
     if (group_count == 0) {
         return findSlotInBlockRun(graph, first_block_idx, block_count, target, side);
@@ -245,7 +426,7 @@ pub fn findSlotInAdj(
 fn findSlotInBlockRunLinear(
     graph: *const graph_core.GraphCore,
     start: u32,
-    count: u16,
+    count: u32,
     target: u32,
     comptime side: adjacency.AdjSide,
 ) ?AdjSlot {
@@ -264,7 +445,7 @@ fn findSlotInBlockRunLinear(
 fn findSlotInBlockRun(
     graph: *const graph_core.GraphCore,
     start: u32,
-    count: u16,
+    count: u32,
     target: u32,
     comptime side: adjacency.AdjSide,
 ) ?AdjSlot {
