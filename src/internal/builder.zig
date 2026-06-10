@@ -220,11 +220,9 @@ pub const GraphBuilder = struct {
             const live = @min(remaining, 64);
             for (0..live) |slot| {
                 const edge = run[edge_index + slot];
-                block.edges[slot] = .{
-                    .destination = edge.destination,
-                    .relation = edge.relation,
-                    .flags = @bitCast(edge.flags),
-                };
+                block.destinations[slot] = edge.destination;
+                block.relations[slot] = edge.relation;
+                block.flags[slot] = edge.flags;
                 if (id_block) |fwd_ids| {
                     fwd_ids.ids[slot] = next_edge_id;
                     next_edge_id += 1;

@@ -13,6 +13,7 @@ fn findReverseMatchForSingleRemoval(
     graph: *graph_core.GraphCore,
     remove_state: *const remove_common.RemoveState,
     source: types.NodeId,
+    reverse_sorted: bool,
 ) !common.AdjSlot {
     if (node_published.NodePublished.isTiny(&remove_state.destination_pub)) {
         const slot = page_ops.tinyRevAtConst(graph, remove_state.destination_pub.first_block);
@@ -44,6 +45,7 @@ fn findReverseMatchForSingleRemoval(
         remove_state.destination_pub.first_group,
         source.index,
         .rev,
+        reverse_sorted,
     ) orelse error.CorruptGraph;
 }
 
@@ -56,7 +58,7 @@ pub fn removeSingleLocated(
     forward_found: common.AdjSlot,
     allow_structural_rebuild: bool,
 ) !bool {
-    const reverse_found = try findReverseMatchForSingleRemoval(graph, &remove_state, source);
+    const reverse_found = try findReverseMatchForSingleRemoval(graph, &remove_state, source, endpoints.destination_published.publishedRevSortedFromMeta(endpoints.destination_meta));
     const plans = try remove_fast_path.planSingleRemoval(graph, &remove_state.source_pub, &remove_state.destination_pub, forward_found, reverse_found);
     try remove_fast_path.ensureSingleRemovalLocality(graph, &remove_state.source_pub, &remove_state.destination_pub, forward_found, reverse_found, allow_structural_rebuild);
 

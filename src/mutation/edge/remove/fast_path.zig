@@ -157,7 +157,9 @@ fn copyForwardBlockWithoutSlot(
     const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block) else undefined;
     var shift: u7 = slot;
     while (shift < live_before - 1) : (shift += 1) {
-        block.edges[shift] = block.edges[shift + 1];
+        block.destinations[shift] = block.destinations[shift + 1];
+        block.relations[shift] = block.relations[shift + 1];
+        block.flags[shift] = block.flags[shift + 1];
         if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift + 1];
     }
 

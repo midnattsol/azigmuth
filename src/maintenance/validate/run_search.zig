@@ -102,11 +102,11 @@ pub fn findSlotInRun(
         const live = @as(u7, @intCast(@popCount(block.mask)));
         if (live == 0) break;
         const first_key = switch (side) {
-            .fwd => block.edges[0].destination,
+            .fwd => block.destinations[0],
             .rev => block.sources[0],
         };
         const last_key = switch (side) {
-            .fwd => block.edges[live - 1].destination,
+            .fwd => block.destinations[live - 1],
             .rev => block.sources[live - 1],
         };
         if (target < first_key) {

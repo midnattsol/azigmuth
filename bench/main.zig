@@ -5,8 +5,9 @@ const read_cases = @import("cases/read.zig");
 const mutation_cases = @import("cases/mutation.zig");
 const maintenance_cases = @import("cases/maintenance.zig");
 const algorithm_cases = @import("cases/algorithms.zig");
+const workload_cases = @import("cases/workloads.zig");
 
-const all_cases = read_cases.cases ++ mutation_cases.cases ++ maintenance_cases.cases ++ algorithm_cases.cases;
+const all_cases = read_cases.cases ++ mutation_cases.cases ++ maintenance_cases.cases ++ algorithm_cases.cases ++ workload_cases.cases;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;

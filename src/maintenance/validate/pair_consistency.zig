@@ -90,7 +90,7 @@ pub fn appendForwardConsistencyViolations(graph: *const graph_core.GraphCore, al
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .fwd);
         const live_count = @popCount(block.mask);
         for (0..live_count) |slot| {
-            try appendForwardPairViolations(graph, allocator, violations, source_node, source_adjacency, block.edges[slot].destination);
+            try appendForwardPairViolations(graph, allocator, violations, source_node, source_adjacency, block.destinations[slot]);
         }
     }
 }
@@ -112,7 +112,7 @@ fn validateForwardMultiplicityInContiguousBlocks(graph: *const graph_core.GraphC
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
         const live_count = @popCount(block.mask);
         for (0..live_count) |slot| {
-            try checkForwardPair(graph, source_node, source_adjacency, block.edges[slot].destination);
+            try checkForwardPair(graph, source_node, source_adjacency, block.destinations[slot]);
         }
     }
 }
@@ -142,7 +142,7 @@ pub fn validateForwardConsistencyInContiguousBlocks(graph: *const graph_core.Gra
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_index), .fwd);
         const live_count = @popCount(block.mask);
         for (0..live_count) |slot| {
-            try checkForwardPair(graph, source_node, source_adjacency, block.edges[slot].destination);
+            try checkForwardPair(graph, source_node, source_adjacency, block.destinations[slot]);
         }
     }
 }

@@ -150,7 +150,7 @@ fn scanForwardTombstone(
     block_idx: u32,
     slot: usize,
 ) !void {
-    const destination_idx = page_ops.edgeBlockAtConst(graph, block_idx, .fwd).edges[slot].destination;
+    const destination_idx = page_ops.edgeBlockAtConst(graph, block_idx, .fwd).destinations[slot];
     if (destination_idx < graph.publishedNodeCount() and node_validity.isNodeRemovedIndex(graph, destination_idx)) {
         scan.found = true;
         return error.TombstoneFound;
@@ -287,7 +287,7 @@ pub fn blockMask(graph: *const graph_core.GraphCore, block_index: u32, comptime 
 
 pub fn blockKey(graph: *const graph_core.GraphCore, block_index: u32, slot: usize, comptime side: Side) u32 {
     return switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd).edges[slot].destination,
+        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd).destinations[slot],
         .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev).sources[slot],
     };
 }

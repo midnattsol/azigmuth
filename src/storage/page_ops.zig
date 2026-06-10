@@ -269,6 +269,19 @@ pub fn nodePageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []co
     return loadPage(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
 }
 
+/// Returns one node-meta page as a read-only slice.
+pub fn nodeMetaPageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []const node_meta.NodeMeta {
+    return loadPage(node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
+}
+
+/// Returns one published-descriptor page, or null when the page was never
+/// allocated (every node in it has provably empty published sides).
+pub fn nodePublishedPageAtConst(graph: *const graph_core.GraphCore, page_index: u32) ?[]const node_published.NodePublished {
+    const raw = graph.node_published_pages.load(page_index);
+    if (raw == 0) return null;
+    return ptrFromRawConst(node_published.NodePublished, raw, constants.NODES_PER_PAGE);
+}
+
 fn ptrFromRaw(comptime T: type, raw: usize, comptime len: usize) []T {
     const page_ptr: [*]T = @ptrFromInt(raw);
     return page_ptr[0..len];

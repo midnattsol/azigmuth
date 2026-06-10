@@ -31,12 +31,38 @@ pub const NodeRemovalSummary = struct {
     left_repair_debt: bool,
 };
 
+/// Visible outcome of an explicit `repairNode` call. `repaired_*` reports
+/// whether the side was rebuilt; `preventive_*` marks rebuilds performed
+/// without flagged debt (layout hardening so a blocked mutation can retry);
+/// `left_repair_debt_*` reports the flag state after the call.
+pub const RepairNodeSummary = struct {
+    repaired_fwd: bool = false,
+    repaired_rev: bool = false,
+    preventive_fwd: bool = false,
+    preventive_rev: bool = false,
+    had_flagged_debt_fwd: bool = false,
+    had_flagged_debt_rev: bool = false,
+    left_repair_debt_fwd: bool = false,
+    left_repair_debt_rev: bool = false,
+};
+
 pub const RepairFlushSummary = struct {
     repaired_nodes: usize,
     pass_count: usize,
     remaining_repair_fwd: usize,
     remaining_repair_rev: usize,
     remaining_structural_debt: bool,
+};
+
+/// O(1) allocation counters for benchmarking and capacity observability.
+/// Counts are monotonic totals of storage ever allocated from fresh space;
+/// reuse through the free stacks keeps them flat.
+pub const StorageStats = struct {
+    blocks_fwd_allocated: u32,
+    blocks_rev_allocated: u32,
+    groups_allocated: u32,
+    tiny_fwd_allocated: u32,
+    tiny_rev_allocated: u32,
 };
 
 pub const DebtStats = struct {
@@ -351,13 +377,17 @@ pub const NodeBuffer = extern struct {
 
 // ── Edge blocks ──────────────────────────────────────────────────────
 
-/// 64 outgoing edges (520 bytes). Dense storage: live entries occupy
-/// slots [0, live_count) with no holes. `mask = denseMask(live_count)`.
-/// Sorted by destination for binary-search lookup. Iteration via `@ctz(mask)` +
-/// `mask &= mask - 1` with zero branches.
-pub const EdgeBlockFwd = struct {
+/// 64 outgoing edges (520 bytes), stored as struct-of-arrays: the 256-byte
+/// destination array is contiguous, so neighbor scans touch 4 cache lines of
+/// payload instead of striding through interleaved metadata, and in-block
+/// search/iteration loops are vectorizable. Dense storage: live entries occupy
+/// slots [0, live_count) with no holes and `mask = denseMask(live_count)`,
+/// sorted by destination. Access goes through `storage/edge_blocks.zig`.
+pub const EdgeBlockFwd = extern struct {
     mask: u64,
-    edges: [64]Edge,
+    destinations: [64]u32,
+    relations: [64]u16,
+    flags: [64]u16,
 };
 
 /// 64 incoming source node IDs (264 bytes). Same mask logic as
@@ -423,6 +453,7 @@ pub const Violation = union(enum) {
     repair_debt_invalid_node: struct { entry: u32 },
     removed_node_has_outgoing: struct { node: u32 },
     removed_node_has_reverse_residual: struct { node: u32, degree_rev: u32 },
+    removed_node_has_reverse_storage: struct { node: u32, block_count_rev: u32, group_count_rev: u16 },
     removed_node_marked_for_repair: struct { node: u32 },
     forward_tombstone_missing_repair_flag: struct { node: u32 },
     reverse_tombstone_missing_repair_flag: struct { node: u32 },

@@ -89,5 +89,5 @@ pub fn rebuildReverseRemoveCount(
     var context = ReverseRemovalContext{ .source_idx = source_idx, .remaining = remove_count, .scratch = scratch, .block_list = &block_list };
     try common.forEachBlockInSide(graph, published_side.*, .rev, &context, collectReverseRemovalBlock);
     if (context.remaining > 0) return error.CorruptGraph;
-    return try rebuild_common.buildSideFromBlockList(graph, scratch, block_list.items);
+    return try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .rev);
 }

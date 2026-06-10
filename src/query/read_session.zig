@@ -2,6 +2,8 @@ const std = @import("std");
 const graph_core = @import("../core/graph_core.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const snapshot_view = @import("snapshot/view.zig");
+const neighbor_iterator = @import("neighbor_iterator.zig");
+const types = @import("../core/types.zig");
 
 pub const ReadSession = struct {
     core: *graph_core.GraphCore,
@@ -21,6 +23,25 @@ pub const ReadSession = struct {
 
     pub fn nodeCount(self: *const ReadSession) u32 {
         return self.core.publishedNodeCount();
+    }
+
+    /// Point reads over the live published state, without the O(node_count)
+    /// capture a `ReadSnapshot` performs. The session's call guard keeps the
+    /// graph open; each iterator additionally pins its own reader epoch.
+    pub fn neighbors(self: *const ReadSession, node: types.NodeId) types.GraphError!neighbor_iterator.NeighborIterator {
+        return neighbor_iterator.neighbors(self.core, node);
+    }
+
+    pub fn inNeighbors(self: *const ReadSession, node: types.NodeId) types.GraphError!neighbor_iterator.NeighborIterator {
+        return neighbor_iterator.inNeighbors(self.core, node);
+    }
+
+    pub fn outDegree(self: *const ReadSession, node: types.NodeId) types.GraphError!usize {
+        return neighbor_iterator.outDegree(self.core, node);
+    }
+
+    pub fn inDegree(self: *const ReadSession, node: types.NodeId) types.GraphError!usize {
+        return neighbor_iterator.inDegree(self.core, node);
     }
 
     /// Captures a sealed in-memory graph view.

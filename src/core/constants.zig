@@ -3,7 +3,7 @@ const types = @import("types.zig");
 
 /// Entries per page — chosen to fit in common cache sizes.
 pub const NODES_PER_PAGE: u32 = 256; // 256 × 64 B = 16 KB.
-pub const EDGE_BLOCKS_PER_PAGE: u32 = 64; // 64 × 520 B ≈ 33 KB — fits in L1 cache.
+pub const EDGE_BLOCKS_PER_PAGE: u32 = 64; // 64 × 520 B ≈ 33 KB — fits in L2; traversal locality is per-block (~9 cache lines).
 pub const EDGE_GROUPS_PER_PAGE: u32 = 128; // 128 × 12 B = 1536 B.
 
 /// Sentinel value marking the end of an EdgeBlockGroup chain.

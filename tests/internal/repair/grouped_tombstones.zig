@@ -27,7 +27,7 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
     source_adj = try graph.publishedNodeAdj(source);
     try testing.expect(source_adj.flags.needs_repair_fwd);
 
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
     try graph.validate();
 
     // Tombstones must be absent from iteration after repair.

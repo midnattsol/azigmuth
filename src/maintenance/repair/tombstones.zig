@@ -58,7 +58,7 @@ fn collectForwardTombstoneDestination(
     }
     const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     if (!edgePointsToRemoved(graph, block, slot, .fwd)) return;
-    try appendUniqueDestination(graph.allocator, destinations, block.edges[slot].destination);
+    try appendUniqueDestination(graph.allocator, destinations, block.destinations[slot]);
 }
 pub fn edgePointsToRemoved(
     graph: *const graph_core.GraphCore,
@@ -67,7 +67,7 @@ pub fn edgePointsToRemoved(
     comptime side: adjacency.AdjSide,
 ) bool {
     const node_id = switch (side) {
-        .fwd => block.edges[slot].destination,
+        .fwd => block.destinations[slot],
         .rev => block.sources[slot],
     };
     if (node_id >= graph.publishedNodeCount()) return false;

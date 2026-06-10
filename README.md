@@ -124,12 +124,39 @@ if (summary.left_repair_debt) {
 }
 ```
 
-When you want to return memory from retired blocks/groups to the reusable pools,
-call `reclaimRetired()` explicitly:
+## RepairRequired And Explicit Repair
+
+A mutation that cannot preserve the hard read bounds without a wider rewrite
+fails fast with `error.RepairRequired` and leaves the graph unchanged. The
+resolution is always the same explicit action: repair the node, then retry.
+
+```zig
+const removed = g.removeEdge(a, b) catch |err| switch (err) {
+    error.RepairRequired => blk: {
+        const summary = try g.repairNode(a);
+        _ = summary; // reports flagged vs preventive work per side
+        break :blk try g.removeEdge(a, b);
+    },
+    else => return err,
+};
+```
+
+`repairNode()` returns a `RepairNodeSummary`: `repaired_*` says a side was
+rebuilt, `preventive_*` marks rebuilds done without flagged debt (layout
+hardening so the retry succeeds), and `left_repair_debt_*` reports the flag
+state after the call. `repairBudgeted()`/`flushRepairs()` never do preventive
+work — they only pay debt the graph has already published.
+
+When you want to return memory from retired blocks/groups/tiny slots to the
+reusable pools, call `reclaimRetired()` explicitly:
 
 ```zig
 g.reclaimRetired();
 ```
+
+The single exception to "no hidden reclaim": if an internal allocation would
+otherwise fail while epoch-safe retired storage exists, the engine runs one
+last-resort reclaim pass before surfacing `error.OutOfMemory`.
 
 When you want debt observability or an explicit repair flush that drains only
 published repair debt sources:
@@ -140,6 +167,24 @@ _ = stats;
 
 const flush = try g.flushRepairs();
 _ = flush;
+```
+
+## Point Reads Without Capture
+
+`readSession()` is the cheap counterpart to `snapshot()`: it opens in O(1) and
+reads the live published state under RCU, instead of capturing the whole graph
+up front. Reads are per-node coherent but not a fixed view.
+
+```zig
+var session = try g.readSession(allocator);
+defer session.deinit();
+
+const degree = try session.outDegree(node);
+var it = try session.neighbors(node);
+defer it.deinit();
+while (it.next()) |neighbor| {
+    _ = neighbor;
+}
 ```
 
 ## Snapshot Read Path

@@ -13,6 +13,7 @@ const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const node_published = @import("../storage/node/published.zig");
+const node_meta_mod = @import("../storage/node/meta.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
@@ -40,7 +41,7 @@ pub const NeighborIterator = struct {
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
-    cached_node_page: ?[]const types.NodeBuffer = null,
+    cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
 
     degree_snapshot: usize,
     check_removed_candidates: bool,
@@ -84,7 +85,7 @@ pub const NeighborIterator = struct {
             const bit_index: u6 = @intCast(@ctz(self.current_mask));
             self.current_mask &= self.current_mask - 1;
             const candidate = switch (self.direction) {
-                .fwd => types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination },
+                .fwd => types.NodeId{ .index = self.cached_fwd_block.?.destinations[bit_index] },
                 .rev => types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] },
             };
             if (self.candidateRemoved(candidate.index)) continue;

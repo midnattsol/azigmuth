@@ -51,7 +51,7 @@ test "removeNode: repairNode compacts tombstoned incoming edges" {
     _ = try graph.removeNode(a);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
 
-    try graph.repairNode(b);
+    _ = try graph.repairNode(b);
     try graph.validate();
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());

@@ -33,11 +33,6 @@ pub fn nodePublishedAtConst(graph: *const graph_core.GraphCore, node: types.Node
     return page_ops.nodePublishedAtConst(graph, node);
 }
 
-fn hasPublishedPage(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
-    const page_index = page_ops.pageOf(node.index, constants.NODES_PER_PAGE);
-    return graph.node_published_pages.load(page_index) != 0;
-}
-
 pub fn loadPublishedMeta(node_buffer: *const types.NodeBuffer) types.PublishedMeta {
     return nodeMetaOf(node_buffer).loadPublishedMeta();
 }
@@ -84,12 +79,12 @@ pub fn publishedAdjFromMetaAtConst(graph: *const graph_core.GraphCore, node: typ
 }
 
 pub fn publishedFwdFromMeta(graph: *const graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) types.SideAdj {
-    if (!hasPublishedPage(graph, node)) return nodeAtConst(graph, node).publishedFwdFromMeta(meta);
+    // addNode guarantees the published page exists for every published node,
+    // so reads go straight to the canonical pool with no compat branch.
     return page_ops.nodePublishedAtConst(graph, node).publishedFwdFromMeta(meta);
 }
 
 pub fn publishedRevFromMeta(graph: *const graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) types.SideAdj {
-    if (!hasPublishedPage(graph, node)) return nodeAtConst(graph, node).publishedRevFromMeta(meta);
     return page_ops.nodePublishedAtConst(graph, node).publishedRevFromMeta(meta);
 }
 
@@ -167,6 +162,8 @@ pub fn resetPublishedSides(graph: *graph_core.GraphCore, node: types.NodeId) voi
     published.rev[1] = .{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 };
     published.fwd_degrees = [_]u32{0} ** 2;
     published.rev_degrees = [_]u32{0} ** 2;
+    published.fwd_sorted = [_]u8{ 1, 1 };
+    published.rev_sorted = [_]u8{ 1, 1 };
     const node_buffer = nodeAt(graph, node);
     node_buffer.fwd_buffers[0] = published.fwd[0];
     node_buffer.fwd_buffers[1] = published.fwd[1];
@@ -176,13 +173,16 @@ pub fn resetPublishedSides(graph: *graph_core.GraphCore, node: types.NodeId) voi
 
 pub fn setInitialPublishedFwdSide(graph: *graph_core.GraphCore, node: types.NodeId, side_adj: types.SideAdj) void {
     _ = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
+    // Builder freeze emits globally sorted sides into the initial slot.
     page_ops.nodePublishedAt(graph, node).fwd[0] = side_adj;
+    page_ops.nodePublishedAt(graph, node).fwd_sorted[0] = 1;
     nodeAt(graph, node).fwd_buffers[0] = side_adj;
 }
 
 pub fn setInitialPublishedRevSide(graph: *graph_core.GraphCore, node: types.NodeId, side_adj: types.SideAdj) void {
     _ = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
     page_ops.nodePublishedAt(graph, node).rev[0] = side_adj;
+    page_ops.nodePublishedAt(graph, node).rev_sorted[0] = 1;
     nodeAt(graph, node).rev_buffers[0] = side_adj;
 }
 

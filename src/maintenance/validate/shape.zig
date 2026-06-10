@@ -70,7 +70,7 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
         var prev: u32 = 0;
         var prev_id: u32 = 0;
         for (0..live_count) |slot| {
-            const key = block.edges[slot].destination;
+            const key = block.destinations[slot];
             if (key >= node_count) return error.CorruptGraph;
             if (graph.multigraph_enabled) {
                 const edge_id = id_block.?.ids[slot];

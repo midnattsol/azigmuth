@@ -90,7 +90,8 @@ fn addEdgeImpl(
     const destination_staging = node_access.stagingRev(graph, destination, endpoints.destination_meta);
 
     if (!graph.multigraph_enabled) {
-        if (try adjacency.hasEdgeInSideAdjChecked(graph, source_pub, destination.index)) {
+        const source_sorted = endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta);
+        if (try adjacency.hasEdgeInSideAdjChecked(graph, source_pub, destination.index, source_sorted)) {
             return error.EdgeAlreadyExists;
         }
     }

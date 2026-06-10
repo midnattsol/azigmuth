@@ -17,7 +17,9 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
 fn setForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
     for (0..count) |edge_index| {
-        block.edges[edge_index] = .{ .destination = first_destination + @as(u32, @intCast(edge_index)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        block.destinations[edge_index] = first_destination + @as(u32, @intCast(edge_index));
+        block.relations[edge_index] = 0;
+        block.flags[edge_index] = 0;
     }
     block.mask = constants.denseMask(count);
 }
@@ -82,7 +84,9 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.No
 fn publishSingleForwardEdge(graph: *graph_mod.Graph, source: graph_mod.NodeId, destination_index: u32) !void {
     const block = try graph.allocBlockFwd();
     var forward_block = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    forward_block.edges[0] = .{ .destination = destination_index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    forward_block.destinations[0] = destination_index;
+    forward_block.relations[0] = 0;
+    forward_block.flags[0] = 0;
     forward_block.mask = constants.denseMask(1);
 
     const node_buffer = try graph.nodeAt(source);
@@ -144,36 +148,38 @@ fn buildGroupedReverseGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
     return destination;
 }
 
-test "mutation grouped: non-tail remove returns RepairRequired while tail remove succeeds" {
+test "mutation grouped: non-tail and tail removes succeed while occupancy holds" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try buildGroupedForwardGraph(&graph);
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, .{ .index = 1 }));
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, .{ .index = 50 }));
+    // Non-tail blocks hold 49 live edges: one removal keeps them at the hard
+    // occupancy bound, so the structural rebuild path completes the removal.
+    try testing.expect(try graph.removeEdge(source, .{ .index = 1 }));
+    try testing.expect(try graph.removeEdge(source, .{ .index = 50 }));
     try testing.expect(try graph.removeEdge(source, .{ .index = 99 }));
 
-    try testing.expectEqual(@as(u64, 98), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 98), try graph.outDegree(source));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = 1 }));
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(.{ .index = 50 }));
+    try testing.expectEqual(@as(u64, 96), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 96), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(.{ .index = 1 }));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(.{ .index = 50 }));
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(.{ .index = 99 }));
     try graph.validate();
 }
 
-test "mutation grouped: non-tail reverse remove returns RepairRequired while tail succeeds" {
+test "mutation grouped: non-tail and tail reverse removes succeed while occupancy holds" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const destination = try buildGroupedReverseGraph(&graph);
-    try testing.expectError(error.RepairRequired, graph.removeEdge(.{ .index = 1 }, destination));
-    try testing.expectError(error.RepairRequired, graph.removeEdge(.{ .index = 50 }, destination));
+    try testing.expect(try graph.removeEdge(.{ .index = 1 }, destination));
+    try testing.expect(try graph.removeEdge(.{ .index = 50 }, destination));
     try testing.expect(try graph.removeEdge(.{ .index = 99 }, destination));
 
-    try testing.expectEqual(@as(u64, 98), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 98), try graph.inDegree(destination));
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(.{ .index = 1 }));
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(.{ .index = 50 }));
+    try testing.expectEqual(@as(u64, 96), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 96), try graph.inDegree(destination));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(.{ .index = 1 }));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(.{ .index = 50 }));
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(.{ .index = 99 }));
     try graph.validate();
 }

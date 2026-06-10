@@ -52,7 +52,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // (RFC Phase 2 §concurrency note).
     const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
 
-    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), source_node, source_staging_adj, 0, 0);
+    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), source_node, source_staging_adj, 0, 0, true, true);
 
     try remove_publish.retireRemovedNodeStorage(graph, source_adj_before);
     _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);

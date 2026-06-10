@@ -18,7 +18,7 @@ test "oom: init reports OutOfMemory when the first node page cannot be allocated
 }
 
 test "oom: addNode failure while adding a new page leaves node count unchanged" {
-    var buffer: [32 * 1024]u8 = undefined;
+    var buffer: [64 * 1024]u8 = undefined;
     var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
 
     var graph = try graph_mod.Graph.init(fixed_buffer.allocator());
@@ -49,7 +49,7 @@ test "oom: direct block allocation failure leaves counters unchanged" {
 }
 
 test "oom: addEdge failure before forward block allocation does not publish an edge" {
-    var buffer: [32 * 1024]u8 = undefined;
+    var buffer: [64 * 1024]u8 = undefined;
     var fixed_buffer = std.heap.FixedBufferAllocator.init(&buffer);
 
     var graph = try graph_mod.Graph.init(fixed_buffer.allocator());

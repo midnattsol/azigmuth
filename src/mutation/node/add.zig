@@ -12,6 +12,7 @@ pub fn addNode(graph: *graph_core.GraphCore) !types.NodeId {
         _ = try page_ops.ensureNodePage(graph, page_idx);
         _ = try page_ops.ensureNodeMetaPage(graph, page_idx);
         _ = try page_ops.ensureNodeHotPage(graph, page_idx);
+        _ = try page_ops.ensureNodePublishedPage(graph, page_idx);
         page_ops.nodeHotAt(graph, .{ .index = node_idx }).storeNextLocalEdgeId(1);
         node_access.nodeAt(graph, .{ .index = node_idx }).next_local_edge_id.store(1, .monotonic);
 

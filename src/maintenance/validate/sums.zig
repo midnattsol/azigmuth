@@ -57,7 +57,7 @@ pub fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_inde
     var total: u64 = 0;
     for (0..live) |slot| {
         const candidate_index = switch (side) {
-            .fwd => block.edges[slot].destination,
+            .fwd => block.destinations[slot],
             .rev => block.sources[slot],
         };
         if (node_validity.isNodeLiveIndex(graph, candidate_index)) total += 1;

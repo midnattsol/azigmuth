@@ -34,7 +34,7 @@ test "mixed sequence: add, remove, repair, removeNode, add leaves a clean graph"
     _ = try graph.removeEdge(nodes[2], nodes[5]);
     try expectNoViolations(graph, allocator);
 
-    try graph.repairNode(nodes[5]);
+    _ = try graph.repairNode(nodes[5]);
     try expectNoViolations(graph, allocator);
 
     _ = try graph.removeNode(nodes[5]);
@@ -70,7 +70,7 @@ test "mixed sequence: alternating addNode and addEdge with periodic repair stays
             }
         }
         for (0..6) |node_index| {
-            try graph.repairNode(nodes[node_index]);
+            _ = try graph.repairNode(nodes[node_index]);
         }
         try expectNoViolations(graph, allocator);
     }

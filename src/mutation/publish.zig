@@ -8,8 +8,9 @@ fn mirrorPublishedMeta(node: *types.NodeBuffer, meta: types.PublishedMeta) void 
     node.storePublishedMeta(meta);
 }
 
-pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23) types.PublishedMeta {
+pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23, fwd_sorted: bool) types.PublishedMeta {
     node_published.stagingFwd(expected_meta).* = node.stagingFwd(expected_meta).*;
+    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
     var expected = expected_meta;
     while (true) {
         const new_degree: u32 = @intCast(@as(i64, @intCast(node_published.publishedFwdDegreeFromMeta(expected))) + delta);
@@ -23,8 +24,9 @@ pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
     }
 }
 
-pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: i23) types.PublishedMeta {
+pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: i23, rev_sorted: bool) types.PublishedMeta {
     node_published.stagingRev(expected_meta).* = node.stagingRev(expected_meta).*;
+    node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
     var expected = expected_meta;
     while (true) {
         const new_degree: u32 = @intCast(@as(i64, @intCast(node_published.publishedRevDegreeFromMeta(expected))) + delta);
@@ -38,9 +40,11 @@ pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
     }
 }
 
-pub fn publishStagedBoth(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32) types.PublishedMeta {
+pub fn publishStagedBoth(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32, fwd_sorted: bool, rev_sorted: bool) types.PublishedMeta {
     node_published.stagingFwd(expected_meta).* = node.stagingFwd(expected_meta).*;
     node_published.stagingRev(expected_meta).* = node.stagingRev(expected_meta).*;
+    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
+    node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
     node_published.stagingFwdDegree(expected_meta).* = fwd_degree;
     node_published.stagingRevDegree(expected_meta).* = rev_degree;
     var expected = expected_meta;
@@ -54,9 +58,11 @@ pub fn publishStagedBoth(node_meta: *node_meta_mod.NodeMeta, node_published: *no
     }
 }
 
-pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23) types.PublishedMeta {
+pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23, fwd_sorted: bool, rev_sorted: bool) types.PublishedMeta {
     node_published.stagingFwd(expected_meta).* = node.stagingFwd(expected_meta).*;
     node_published.stagingRev(expected_meta).* = node.stagingRev(expected_meta).*;
+    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
+    node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
     var expected = expected_meta;
     while (true) {
         const new_fwd: u32 = @intCast(@as(i64, @intCast(node_published.publishedFwdDegreeFromMeta(expected))) + fwd_delta);
@@ -82,16 +88,16 @@ pub fn publishMetaFwdUpdated(graph: *graph_core.GraphCore, node_id: types.NodeId
 
 pub fn publishMetaFwdDeltaUpdated(graph: *graph_core.GraphCore, node_id: types.NodeId, node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: u22) types.PublishedMeta {
     node_access.copyPublishedToStagingFwd(graph, node_id, expected_meta);
-    return publishStagedFwd(node_meta, node_published, node, expected_meta, needs_repair_fwd, -@as(i23, @intCast(delta)));
+    return publishStagedFwd(node_meta, node_published, node, expected_meta, needs_repair_fwd, -@as(i23, @intCast(delta)), node_published.publishedFwdSortedFromMeta(expected_meta));
 }
 
 pub fn publishMetaRevDeltaUpdated(graph: *graph_core.GraphCore, node_id: types.NodeId, node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: u22) types.PublishedMeta {
     node_access.copyPublishedToStagingRev(graph, node_id, expected_meta);
-    return publishStagedRev(node_meta, node_published, node, expected_meta, needs_repair_rev, -@as(i23, @intCast(delta)));
+    return publishStagedRev(node_meta, node_published, node, expected_meta, needs_repair_rev, -@as(i23, @intCast(delta)), node_published.publishedRevSortedFromMeta(expected_meta));
 }
 
 pub fn publishMetaBothDeltaUpdated(graph: *graph_core.GraphCore, node_id: types.NodeId, node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, node: *types.NodeBuffer, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: u22, rev_delta: u22) types.PublishedMeta {
     node_access.copyPublishedToStagingFwd(graph, node_id, expected_meta);
     node_access.copyPublishedToStagingRev(graph, node_id, expected_meta);
-    return publishBothDelta(node_meta, node_published, node, expected_meta, flags, -@as(i23, @intCast(fwd_delta)), -@as(i23, @intCast(rev_delta)));
+    return publishBothDelta(node_meta, node_published, node, expected_meta, flags, -@as(i23, @intCast(fwd_delta)), -@as(i23, @intCast(rev_delta)), node_published.publishedFwdSortedFromMeta(expected_meta), node_published.publishedRevSortedFromMeta(expected_meta));
 }

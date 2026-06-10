@@ -23,7 +23,7 @@ fn appendForwardDestination(
     const destination_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
         page_ops.tinyFwdAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot].destination
     else
-        page_ops.edgeBlockAtConst(graph, block_idx, .fwd).edges[slot].destination;
+        page_ops.edgeBlockAtConst(graph, block_idx, .fwd).destinations[slot];
     if (destination_idx >= collection.node_count) return error.CorruptGraph;
     try collection.scan.forward_destinations.append(graph.allocator, destination_idx);
     if (node_validity.isNodeLiveIndex(graph, destination_idx)) {

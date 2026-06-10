@@ -12,6 +12,7 @@ const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const node_published = @import("../storage/node/published.zig");
+const node_meta_mod = @import("../storage/node/meta.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
@@ -35,7 +36,7 @@ pub const OutEdgeIterator = struct {
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
-    cached_node_page: ?[]const types.NodeBuffer = null,
+    cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
     check_removed_destinations: bool,
 
     reader_active: bool,

@@ -124,7 +124,7 @@ pub const SnapshotNeighborIterator = struct {
         return null;
     }
 
-    fn nextBlockNeighbor(self: *SnapshotNeighborIterator) ?types.NodeId {
+    fn nextBlockNeighborImpl(self: *SnapshotNeighborIterator, comptime check_removed: bool) ?types.NodeId {
         while (true) {
             while (self.current_mask == 0) {
                 if (!self.loadNextNonEmptyMask()) return null;
@@ -132,23 +132,64 @@ pub const SnapshotNeighborIterator = struct {
 
             const bit_index: u6 = @intCast(@ctz(self.current_mask));
             self.current_mask &= self.current_mask - 1;
-            const candidate = switch (self.direction) {
-                .fwd => types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination },
-                .rev => types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] },
+            const candidate_idx = switch (self.direction) {
+                .fwd => self.cached_fwd_block.?.destinations[bit_index],
+                .rev => self.cached_rev_block.?.sources[bit_index],
             };
-            if (self.candidateExcluded(candidate.index)) continue;
-            return candidate;
+            if (candidate_idx >= self.view.node_state.len) continue;
+            if (check_removed and !self.view.isLiveIndex(candidate_idx)) continue;
+            return types.NodeId{ .index = candidate_idx };
         }
     }
 
     pub fn next(self: *SnapshotNeighborIterator) ?types.NodeId {
         if (self.tiny_mode) return self.nextTinyNeighbor();
-        return self.nextBlockNeighbor();
+        if (self.check_removed_candidates) return self.nextBlockNeighborImpl(true);
+        return self.nextBlockNeighborImpl(false);
     }
 
     pub fn materialize(self: *SnapshotNeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
         var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.degree_hint);
         defer out.deinit(allocator);
+
+        // Clean block sides drain block-by-block: a tight counted append loop
+        // per cached block instead of the per-element iterator state machine.
+        if (!self.tiny_mode and !self.check_removed_candidates) {
+            const len_bound = self.view.node_state.len;
+
+            // Drain a partially consumed block element-wise first.
+            while (self.current_mask != 0) {
+                const bit_index: u6 = @intCast(@ctz(self.current_mask));
+                self.current_mask &= self.current_mask - 1;
+                const candidate_idx = switch (self.direction) {
+                    .fwd => self.cached_fwd_block.?.destinations[bit_index],
+                    .rev => self.cached_rev_block.?.sources[bit_index],
+                };
+                if (candidate_idx < len_bound) try out.append(allocator, .{ .index = candidate_idx });
+            }
+
+            while (self.loadNextNonEmptyMask()) {
+                const live: usize = @popCount(self.current_mask);
+                try out.ensureUnusedCapacity(allocator, live);
+                switch (self.direction) {
+                    .fwd => {
+                        const destinations = self.cached_fwd_block.?.destinations[0..live];
+                        for (destinations) |destination_idx| {
+                            if (destination_idx < len_bound) out.appendAssumeCapacity(.{ .index = destination_idx });
+                        }
+                    },
+                    .rev => {
+                        const sources = self.cached_rev_block.?.sources[0..live];
+                        for (sources) |source_idx| {
+                            if (source_idx < len_bound) out.appendAssumeCapacity(.{ .index = source_idx });
+                        }
+                    },
+                }
+                self.current_mask = 0;
+            }
+            return out.toOwnedSlice(allocator);
+        }
+
         while (self.next()) |neighbor| {
             try out.append(allocator, neighbor);
         }
@@ -212,10 +253,10 @@ pub const SnapshotOutEdgeIterator = struct {
 
             const fwd_block = self.cached_fwd_block.?;
             const fwd_ids = self.cached_fwd_ids.?;
-            const edge = fwd_block.edges[bit_index];
-            if (self.destinationExcluded(edge.destination)) continue;
+            const destination_idx = fwd_block.destinations[bit_index];
+            if (self.destinationExcluded(destination_idx)) continue;
 
-            return .{ .id = .{ .local = fwd_ids.ids[bit_index] }, .destination = edge.destination, .relation = edge.relation, .flags = @bitCast(edge.flags) };
+            return .{ .id = .{ .local = fwd_ids.ids[bit_index] }, .destination = destination_idx, .relation = fwd_block.relations[bit_index], .flags = @bitCast(fwd_block.flags[bit_index]) };
         }
     }
 

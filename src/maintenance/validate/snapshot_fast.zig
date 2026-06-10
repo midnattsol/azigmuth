@@ -22,7 +22,7 @@ fn countVisibleEntriesInBlockSnapshot(
     var total: u64 = 0;
     for (0..live) |slot| {
         const candidate_idx = switch (side) {
-            .fwd => block.edges[slot].destination,
+            .fwd => block.destinations[slot],
             .rev => block.sources[slot],
         };
         if (candidate_idx < view.nodeCount() and view.isLiveIndex(candidate_idx)) total += 1;
@@ -124,7 +124,7 @@ fn hasTombstoneSnapshot(
                 const live = @popCount(block.mask);
                 for (0..live) |slot| {
                     const candidate_idx = switch (side) {
-                        .fwd => block.edges[slot].destination,
+                        .fwd => block.destinations[slot],
                         .rev => block.sources[slot],
                     };
                     if (candidate_idx < inner_context.view.nodeCount() and !inner_context.view.isLiveIndex(candidate_idx)) return error.TombstoneFound;
@@ -256,7 +256,7 @@ fn validateForwardConsistencySnapshot(
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .fwd);
                 const live = @popCount(block.mask);
                 for (0..live) |slot| {
-                    const destination_idx = block.edges[slot].destination;
+                    const destination_idx = block.destinations[slot];
                     if (destination_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
 
                     const destination_adjacency = inner_context.view.adjacency(destination_idx);

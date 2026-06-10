@@ -42,12 +42,12 @@ pub fn publishRemoved(
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishBothDelta(endpoints.source_node_meta, endpoints.source_published, endpoints.source_node, endpoints.source_meta, merged_flags, -1, -1);
+        _ = common.publishBothDelta(endpoints.source_node_meta, endpoints.source_published, endpoints.source_node, endpoints.source_meta, merged_flags, -1, -1, endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta), endpoints.source_published.publishedRevSortedFromMeta(endpoints.source_meta));
         return;
     }
 
-    _ = common.publishStagedRev(endpoints.destination_node_meta, endpoints.destination_published, endpoints.destination_node, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, -1);
-    _ = common.publishStagedFwd(endpoints.source_node_meta, endpoints.source_published, endpoints.source_node, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, -1);
+    _ = common.publishStagedRev(endpoints.destination_node_meta, endpoints.destination_published, endpoints.destination_node, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, -1, endpoints.destination_published.publishedRevSortedFromMeta(endpoints.destination_meta));
+    _ = common.publishStagedFwd(endpoints.source_node_meta, endpoints.source_published, endpoints.source_node, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, -1, endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta));
 }
 
 fn publishBulkRemoved(
@@ -69,6 +69,8 @@ fn publishBulkRemoved(
             merged_flags,
             -@as(i23, @intCast(removed)),
             -@as(i23, @intCast(removed)),
+            endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta),
+            endpoints.source_published.publishedRevSortedFromMeta(endpoints.source_meta),
         );
         return;
     }
@@ -80,6 +82,7 @@ fn publishBulkRemoved(
         endpoints.destination_meta,
         publish_adj.destination_publish_adj.flags.needs_repair_rev,
         -@as(i23, @intCast(removed)),
+        endpoints.destination_published.publishedRevSortedFromMeta(endpoints.destination_meta),
     );
     _ = common.publishStagedFwd(
         endpoints.source_node_meta,
@@ -88,6 +91,7 @@ fn publishBulkRemoved(
         endpoints.source_meta,
         publish_adj.source_publish_adj.flags.needs_repair_fwd,
         -@as(i23, @intCast(removed)),
+        endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta),
     );
 }
 

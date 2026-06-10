@@ -87,6 +87,19 @@ pub const MutationScratch = struct {
         for (self.retire_rev_blocks.items()) |block_idx| try rcu.retireBlockRev(graph, block_idx);
     }
 
+    /// Returns whether this mutation allocated `block_idx` (vs sharing a
+    /// published block).
+    pub fn isTrackedBlock(self: *const MutationScratch, comptime side: adjacency.AdjSide, block_idx: u32) bool {
+        const list = switch (side) {
+            .fwd => &self.fwd_blocks,
+            .rev => &self.rev_blocks,
+        };
+        for (list.items()) |tracked_block_idx| {
+            if (tracked_block_idx == block_idx) return true;
+        }
+        return false;
+    }
+
     /// Allocates one tiny slot and tracks it for cleanup if the mutation fails
     /// before publishing. Never-published slots go straight back to the free
     /// stack on cleanup — no epoch wait is needed.

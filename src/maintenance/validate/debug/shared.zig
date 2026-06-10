@@ -141,6 +141,13 @@ fn appendDegreeAndTombstoneViolations(
     if (degree_rev != 0) {
         try list.append(allocator, .{ .removed_node_has_reverse_residual = .{ .node = node_id, .degree_rev = @intCast(degree_rev) } });
     }
+    if (adjacency.block_count_rev != 0 or adjacency.group_count_rev != 0) {
+        try list.append(allocator, .{ .removed_node_has_reverse_storage = .{
+            .node = node_id,
+            .block_count_rev = adjacency.block_count_rev,
+            .group_count_rev = adjacency.group_count_rev,
+        } });
+    }
     if (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev) {
         try list.append(allocator, .{ .removed_node_marked_for_repair = .{ .node = node_id } });
     }

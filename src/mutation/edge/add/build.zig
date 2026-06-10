@@ -22,9 +22,9 @@ pub fn insertForwardEdge(
     var search_end: u7 = @intCast(live);
     while (insertion_point < search_end) {
         const probe: u7 = insertion_point + (search_end - insertion_point) / 2;
-        if (forward_block.edges[probe].destination < destination.index) {
+        if (forward_block.destinations[probe] < destination.index) {
             insertion_point = probe + 1;
-        } else if (forward_block.edges[probe].destination == destination.index) {
+        } else if (forward_block.destinations[probe] == destination.index) {
             if (!graph.multigraph_enabled) return error.EdgeAlreadyExists;
             if (graph.multigraph_enabled and id_block.ids[probe] < edge_id) {
                 insertion_point = probe + 1;
@@ -37,11 +37,15 @@ pub fn insertForwardEdge(
     }
     var shift: u7 = @intCast(live);
     while (shift > insertion_point) {
-        forward_block.edges[shift] = forward_block.edges[shift - 1];
+        forward_block.destinations[shift] = forward_block.destinations[shift - 1];
+        forward_block.relations[shift] = forward_block.relations[shift - 1];
+        forward_block.flags[shift] = forward_block.flags[shift - 1];
         if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift - 1];
         shift -= 1;
     }
-    forward_block.edges[insertion_point] = types.Edge{ .destination = destination.index, .relation = relation, .flags = @bitCast(flags) };
+    forward_block.destinations[insertion_point] = destination.index;
+    forward_block.relations[insertion_point] = relation;
+    forward_block.flags[insertion_point] = @bitCast((flags));
     if (graph.multigraph_enabled) id_block.ids[insertion_point] = edge_id;
     forward_block.mask = @import("../../../core/constants.zig").denseMask(@intCast(live + 1));
 }
@@ -121,7 +125,9 @@ pub fn buildForwardTinyOrPromoted(
     const slot = page_ops.tinyFwdAtConst(graph, source_side.first_block);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
-        block.edges[entry_idx] = .{ .destination = entry.destination, .relation = entry.relation, .flags = entry.flags };
+        block.destinations[entry_idx] = entry.destination;
+        block.relations[entry_idx] = entry.relation;
+        block.flags[entry_idx] = @bitCast(entry.flags);
         if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx).ids[entry_idx] = entry.edge_id;
     }
     block.mask = @import("../../../core/constants.zig").denseMask(@intCast(count));

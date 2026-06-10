@@ -214,7 +214,7 @@ test "validation: debugValidate catches group_count longer than actual chain eve
     const node = try graph.addNode();
     const b0 = try graph.allocBlockFwd();
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).edges[0].destination = 0;
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = 0;
 
     const g0 = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };

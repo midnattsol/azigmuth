@@ -147,7 +147,7 @@ test "edge metadata: forward adjacency still finds specific destination after a 
     for (remove_indices) |idx| {
         _ = try graph.removeEdge(source, targets[idx]);
     }
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
 
     const snapshot = try graph.publishedNodeAdj(source);
     for (0..target_count) |idx| {

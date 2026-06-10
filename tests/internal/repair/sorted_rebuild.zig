@@ -17,7 +17,9 @@ test "sorted rebuild forward: removes tombstones and packs sorted edges" {
     const block = try graph.allocBlockFwd();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
     for (0..8) |i| {
-        blk.edges[i] = .{ .destination = nodes[i].index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        blk.destinations[i] = nodes[i].index;
+        blk.relations[i] = 0;
+        blk.flags[i] = 0;
     }
     blk.mask = constants.denseMask(8);
 
@@ -40,7 +42,7 @@ test "sorted rebuild forward: removes tombstones and packs sorted edges" {
     const out_blk = page_ops.edgeBlockAt(&graph.graph, result.new_blocks.items[0], .fwd);
     const expected_indices = [_]u32{ 0, 1, 3, 4, 6, 7 };
     for (expected_indices, 0..) |expected_idx, i| {
-        try testing.expectEqual(expected_idx, out_blk.edges[i].destination);
+        try testing.expectEqual(expected_idx, out_blk.destinations[i]);
     }
     try testing.expectEqual(constants.denseMask(6), out_blk.mask);
 }
@@ -55,7 +57,9 @@ test "sorted rebuild forward: all tombstones returns empty" {
     const block = try graph.allocBlockFwd();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
     for (0..3) |i| {
-        blk.edges[i] = .{ .destination = nodes[i].index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        blk.destinations[i] = nodes[i].index;
+        blk.relations[i] = 0;
+        blk.flags[i] = 0;
     }
     blk.mask = constants.denseMask(3);
 
@@ -191,14 +195,18 @@ test "sorted rebuild forward: two blocks with mixed tombstones produce packed ou
     const block0 = try graph.allocBlockFwd();
     var blk0 = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
     for (0..6) |i| {
-        blk0.edges[i] = .{ .destination = nodes[i].index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        blk0.destinations[i] = nodes[i].index;
+        blk0.relations[i] = 0;
+        blk0.flags[i] = 0;
     }
     blk0.mask = constants.denseMask(6);
 
     const block1 = try graph.allocBlockFwd();
     var blk1 = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
     for (6..12) |i| {
-        blk1.edges[i - 6] = .{ .destination = nodes[i].index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        blk1.destinations[i - 6] = nodes[i].index;
+        blk1.relations[i - 6] = 0;
+        blk1.flags[i - 6] = 0;
     }
     blk1.mask = constants.denseMask(6);
 
@@ -228,7 +236,7 @@ test "sorted rebuild forward: two blocks with mixed tombstones produce packed ou
     const out_blk = page_ops.edgeBlockAt(&graph.graph, result.new_blocks.items[0], .fwd);
     const expected_indices = [_]u32{ 0, 1, 2, 4, 5, 6, 7, 9, 10, 11 };
     for (expected_indices, 0..) |expected_idx, i| {
-        try testing.expectEqual(expected_idx, out_blk.edges[i].destination);
+        try testing.expectEqual(expected_idx, out_blk.destinations[i]);
     }
     try testing.expectEqual(constants.denseMask(10), out_blk.mask);
 }

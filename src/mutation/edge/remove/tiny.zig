@@ -1,4 +1,5 @@
 const graph_core = @import("../../../core/graph_core.zig");
+const node_published_mod = @import("../../../storage/node/published.zig");
 const types = @import("../../../core/types.zig");
 const common = @import("../../common.zig");
 const remove_common = @import("common.zig");
@@ -44,7 +45,7 @@ pub fn removeSingleTinyCompatible(
     destination: types.NodeId,
     forward_found: ?common.AdjSlot,
 ) !bool {
-    try remove_fast_path.ensureForwardFastPathAllowedIfBlock(graph, &remove_state.source_pub, forward_found);
+    if (!node_published_mod.NodePublished.isTiny(&remove_state.source_pub) and forward_found == null) return error.CorruptGraph;
 
     var scratch = remove_common.beginRemovalScratch();
     defer scratch.deinit(graph.allocator);
@@ -66,7 +67,7 @@ pub fn removeByIdTinyCompatible(
     edge_id: types.EdgeId,
     forward_found: ?common.AdjSlot,
 ) !bool {
-    try remove_fast_path.ensureForwardFastPathAllowedIfBlock(graph, &remove_state.source_pub, forward_found);
+    _ = forward_found;
 
     var scratch = remove_common.beginRemovalScratch();
     defer scratch.deinit(graph.allocator);

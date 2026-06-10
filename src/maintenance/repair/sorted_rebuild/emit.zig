@@ -60,11 +60,10 @@ fn writeItem(
     switch (side) {
         .fwd => {
             const entry = side_ops.readForwardEntryAtSlot(graph, iter.block_idx, iter.pos);
-            page_ops.edgeBlockAt(graph, out_block_idx, .fwd).edges[out_slot] = .{
-                .destination = entry.destination,
-                .relation = entry.relation,
-                .flags = entry.flags,
-            };
+            const out_block = page_ops.edgeBlockAt(graph, out_block_idx, .fwd);
+            out_block.destinations[out_slot] = entry.destination;
+            out_block.relations[out_slot] = entry.relation;
+            out_block.flags[out_slot] = @bitCast(entry.flags);
             if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, out_block_idx).ids[out_slot] = entry.edge_id;
         },
         .rev => {

@@ -41,7 +41,10 @@ pub fn compactForwardTombstones(
 
     const preserved_rev = node_access.publishedRevDegreeAtConst(graph, node);
     const new_fwd: u32 = @intCast(source_result.live_after);
-    side_adj.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), node_mut, source_result.staging_adj, new_fwd, preserved_rev);
+    const node_published = try page_ops.ensureNodePublishedAt(graph, node);
+    // The forward side was rebuilt sorted; the reverse side is untouched.
+    const rev_sorted = node_published.publishedRevSortedFromMeta(node_access.loadPublishedMeta(node_mut));
+    side_adj.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), node_published, node_mut, source_result.staging_adj, new_fwd, preserved_rev, true, rev_sorted);
     try side_adj.retireSide(graph, source_adj_before, .fwd);
 
     return 1;

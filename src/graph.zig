@@ -37,8 +37,10 @@ pub const EdgeId = types.EdgeId;
 pub const EdgeRef = types.EdgeRef;
 pub const GraphOptions = types.GraphOptions;
 pub const NodeRemovalSummary = types.NodeRemovalSummary;
+pub const RepairNodeSummary = types.RepairNodeSummary;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
+pub const StorageStats = types.StorageStats;
 pub const Context = algorithm_context.Context;
 pub const ReadSession = graph_snapshot_api.ReadSession;
 pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
@@ -360,7 +362,7 @@ pub const Graph = struct {
 
     // ── Repair API ────────────────────────────────────────────────────
 
-    pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
+    pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!types.RepairNodeSummary {
         const core = try self.beginMutCall();
         defer endCall(core);
         return repair.repairNode(core, node);
@@ -382,6 +384,18 @@ pub const Graph = struct {
         const core = try self.beginConstCall();
         defer endCall(core);
         return stats_mod.debtStats(core);
+    }
+
+    pub fn storageStats(self: *const Graph) GraphError!types.StorageStats {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return .{
+            .blocks_fwd_allocated = @atomicLoad(u32, @constCast(&core.block_fwd_count), .acquire),
+            .blocks_rev_allocated = @atomicLoad(u32, @constCast(&core.block_rev_count), .acquire),
+            .groups_allocated = @atomicLoad(u32, @constCast(&core.group_count), .acquire),
+            .tiny_fwd_allocated = @atomicLoad(u32, @constCast(&core.tiny_fwd_count), .acquire),
+            .tiny_rev_allocated = @atomicLoad(u32, @constCast(&core.tiny_rev_count), .acquire),
+        };
     }
 
     // ── Mutation ──────────────────────────────────────────────────────

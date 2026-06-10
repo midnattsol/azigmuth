@@ -51,8 +51,12 @@ test "validation: detects non-dense masks" {
     const target = try graph.addNode();
     const block = try graph.allocBlockFwd();
     var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    edges.edges[0] = .{ .destination = target.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.edges[2] = .{ .destination = target.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    edges.destinations[0] = target.index;
+    edges.relations[0] = 0;
+    edges.flags[0] = 0;
+    edges.destinations[2] = target.index;
+    edges.relations[2] = 0;
+    edges.flags[2] = 0;
     edges.mask = 0b101;
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(2, .release);
@@ -70,7 +74,9 @@ test "validation: detects invalid destinations" {
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
     var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    edges.edges[0] = .{ .destination = 999, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    edges.destinations[0] = 999;
+    edges.relations[0] = 0;
+    edges.flags[0] = 0;
     edges.mask = constants.denseMask(1);
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(1, .release);
@@ -88,8 +94,12 @@ test "validation: detects unsorted blocks" {
     try addNodeCount(&graph, 3);
     const block = try graph.allocBlockFwd();
     var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    edges.edges[0] = .{ .destination = 2, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.edges[1] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    edges.destinations[0] = 2;
+    edges.relations[0] = 0;
+    edges.flags[0] = 0;
+    edges.destinations[1] = 1;
+    edges.relations[1] = 0;
+    edges.flags[1] = 0;
     edges.mask = constants.denseMask(2);
     try publishForwardBlock(&graph, .{ .index = 0 }, block, 1);
     graph.graph.edge_count.store(2, .release);
@@ -218,12 +228,16 @@ test "validation: detects underfull non-tail blocks" {
 
     var first_edges = page_ops.edgeBlockAt(&graph.graph, first_block, .fwd);
     for (0..47) |edge_index| {
-        first_edges.edges[edge_index] = .{ .destination = @intCast(edge_index + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        first_edges.destinations[edge_index] = @intCast(edge_index + 1);
+        first_edges.relations[edge_index] = 0;
+        first_edges.flags[edge_index] = 0;
     }
     first_edges.mask = constants.denseMask(47);
 
     var second_edges = page_ops.edgeBlockAt(&graph.graph, second_block, .fwd);
-    second_edges.edges[0] = .{ .destination = 48, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    second_edges.destinations[0] = 48;
+    second_edges.relations[0] = 0;
+    second_edges.flags[0] = 0;
     second_edges.mask = constants.denseMask(1);
 
     try publishForwardBlock(&graph, .{ .index = 0 }, first_block, 2);
@@ -390,7 +404,9 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
 fn fillBlockWithDst(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
     for (0..count) |i| {
-        block.edges[i] = .{ .destination = first_dst + @as(u32, @intCast(i)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        block.destinations[i] = first_dst + @as(u32, @intCast(i));
+        block.relations[i] = 0;
+        block.flags[i] = 0;
     }
     block.mask = constants.denseMask(count);
 }
@@ -560,7 +576,9 @@ test "validation: debugValidate survives invalid first_group" {
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     try publishForwardGroups(&graph, node, 0xFF_FFFF, 1, 1);
     graph.graph.edge_count.store(1, .release);
 
@@ -577,7 +595,9 @@ test "validation: debugValidate continues after malformed group.next with later 
     const node = graph_mod.NodeId{ .index = 0 };
     const block = try graph.allocBlockFwd();
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     const group = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = 0xFF_FFFF };
     try publishForwardGroups(&graph, node, group, 1, 2);
@@ -598,9 +618,57 @@ test "validation: validate returns CorruptGraph for invalid first_group" {
     _ = try graph.addNode();
     const block = try graph.allocBlockFwd();
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     try publishForwardGroups(&graph, node, 0xFF_FFFF, 1, 1);
     graph.graph.edge_count.store(1, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
+}
+
+test "validation: removed node with reverse structural storage is corruption" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const removed_target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, removed_target, 0, 0);
+    _ = try graph.removeNode(removed_target);
+    try graph.validate();
+
+    // Corrupt: re-inject a structural reverse block on the removed node while
+    // its published reverse degree stays zero. removeNode guarantees both
+    // descriptors are cleared synchronously, so this must be flagged.
+    const block = try graph.allocBlockRev();
+    const node_buffer = page_ops.nodeAt(&graph.graph, removed_target);
+    publish.publishedRevSide(node_buffer).first_block = block;
+    publish.publishedRevSide(node_buffer).block_count = 1;
+    try publish.syncToPublished(&graph, removed_target.index);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .removed_node_has_reverse_storage));
+}
+
+test "validation: snapshot capture does not elide zero-degree side headers" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const node = try graph.addNode();
+    _ = try graph.addNode();
+
+    // Corrupt: forward side header points at one block while the published
+    // degree stays zero. The capture must surface the header so snapshot
+    // validation can see the inconsistency instead of an invented empty side.
+    const block = try graph.allocBlockFwd();
+    try publishForwardBlock(&graph, node, block, 1);
+
+    var view = try graph_mod.snapshot_view_mod.captureGraphView(&graph.graph, testing.allocator);
+    defer view.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 1), view.fwd_block_count[node.index]);
+    try testing.expectEqual(@as(u32, 0), view.degree_fwd[node.index]);
 }

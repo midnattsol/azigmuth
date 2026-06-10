@@ -18,7 +18,9 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
 fn fillForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
     for (0..count) |edge_index| {
-        block.edges[edge_index] = .{ .destination = first_destination + @as(u32, @intCast(edge_index)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        block.destinations[edge_index] = first_destination + @as(u32, @intCast(edge_index));
+        block.relations[edge_index] = 0;
+        block.flags[edge_index] = 0;
     }
     block.mask = constants.denseMask(count);
 }

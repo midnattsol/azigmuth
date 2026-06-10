@@ -34,6 +34,7 @@ const graph = @import("graph.zig");
 const public_graph = @import("api/public_graph.zig");
 const public_snapshot = @import("api/public_snapshot.zig");
 const public_builder = @import("api/public_builder.zig");
+const public_session = @import("api/public_session.zig");
 
 // ── Core types ────────────────────────────────────────────────────────
 pub const NodeId = graph.NodeId;
@@ -47,11 +48,15 @@ pub const EdgeRef = graph.EdgeRef;
 pub const GraphOptions = graph.GraphOptions;
 pub const NodeRemovalSummary = graph.NodeRemovalSummary;
 pub const RepairFlushSummary = graph.RepairFlushSummary;
+pub const RepairNodeSummary = graph.RepairNodeSummary;
 pub const DebtStats = graph.DebtStats;
+pub const StorageStats = graph.StorageStats;
 
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;
 pub const ReadSnapshot = public_snapshot.ReadSnapshot;
+pub const ReadSession = public_session.ReadSession;
+pub const NeighborIterator = graph.NeighborIterator;
 pub const GraphBuilder = public_builder.GraphBuilder;
 pub const SnapshotNeighborIterator = graph.SnapshotNeighborIterator;
 pub const SnapshotOutEdgeIterator = graph.SnapshotOutEdgeIterator;

@@ -71,12 +71,11 @@ pub fn readForwardEntry(graph: *const graph_mod.Graph, adjacency: types.NodeAdj,
     }
 
     const block = page_ops.edgeBlockAtConst(&graph.graph, slot_ref.block_idx, .fwd);
-    const edge = block.edges[slot_ref.slot];
     const edge_id = if (graph.graph.multigraph_enabled)
         page_ops.edgeBlockFwdIdsAtConst(&graph.graph, slot_ref.block_idx).ids[slot_ref.slot]
     else
         0;
-    return .{ .destination = edge.destination, .relation = edge.relation, .flags = edge.flags, .edge_id = edge_id };
+    return .{ .destination = block.destinations[slot_ref.slot], .relation = block.relations[slot_ref.slot], .flags = @bitCast(block.flags[slot_ref.slot]), .edge_id = edge_id };
 }
 
 pub fn writeForwardDestination(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize, destination: u32) !void {
@@ -85,7 +84,7 @@ pub fn writeForwardDestination(graph: *graph_mod.Graph, adjacency: types.NodeAdj
         page_ops.tinyFwdAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot_ref.slot].destination = destination;
         return;
     }
-    page_ops.edgeBlockAt(&graph.graph, slot_ref.block_idx, .fwd).edges[slot_ref.slot].destination = destination;
+    page_ops.edgeBlockAt(&graph.graph, slot_ref.block_idx, .fwd).destinations[slot_ref.slot] = destination;
 }
 
 pub fn writeForwardEdgeId(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize, edge_id: u32) !void {
@@ -134,7 +133,9 @@ pub fn appendForwardEntry(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, ad
 
     const side = page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .fwd);
     const live = @popCount(side.mask);
-    side.edges[live] = .{ .destination = entry.destination, .relation = entry.relation, .flags = entry.flags };
+    side.destinations[live] = entry.destination;
+    side.relations[live] = entry.relation;
+    side.flags[live] = @bitCast(entry.flags);
     if (graph.graph.multigraph_enabled) {
         page_ops.edgeBlockFwdIdsAt(&graph.graph, side_adj.first_block).ids[live] = entry.edge_id;
     }
@@ -187,7 +188,9 @@ pub fn ensureForwardBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
     const count = node_published.NodePublished.tinyCount(&side_adj);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
-        block.edges[entry_idx] = .{ .destination = entry.destination, .relation = entry.relation, .flags = entry.flags };
+        block.destinations[entry_idx] = entry.destination;
+        block.relations[entry_idx] = entry.relation;
+        block.flags[entry_idx] = @bitCast(entry.flags);
         if (graph.graph.multigraph_enabled) {
             page_ops.edgeBlockFwdIdsAt(&graph.graph, block_idx).ids[entry_idx] = entry.edge_id;
         }

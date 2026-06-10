@@ -70,16 +70,16 @@ test "graph structure: removeEdge from first block in multi-block node" {
     }
     try graph.validate();
     try testing.expectEqual(@as(usize, target_count), try graph.outDegree(source));
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
+    try testing.expect(try graph.removeEdge(source, targets[0]));
     try graph.validate();
-    try testing.expectEqual(@as(usize, target_count), try graph.outDegree(source));
-    try testing.expectEqual(@as(u64, target_count), graph.edgeCount());
+    try testing.expectEqual(@as(usize, target_count - 1), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, target_count - 1), graph.edgeCount());
     var iterator = try graph.neighbors(source);
     defer iterator.deinit();
     const slice = try graph_mod.materializeConsuming(&iterator, testing.allocator);
     defer testing.allocator.free(slice);
-    try testing.expectEqual(@as(usize, target_count), slice.len);
-    try testing.expectEqual(targets[0].index, slice[0].index);
+    try testing.expectEqual(@as(usize, target_count - 1), slice.len);
+    try testing.expectEqual(targets[1].index, slice[0].index);
 }
 
 test "graph structure: removeEdge multiple edges from multi-block node" {
@@ -94,19 +94,19 @@ test "graph structure: removeEdge multiple edges from multi-block node" {
         try graph.addEdge(source, targets[target_idx], 0, 0);
     }
     try graph.validate();
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
+    try testing.expect(try graph.removeEdge(source, targets[0]));
     try graph.validate();
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[34]));
+    try testing.expect(try graph.removeEdge(source, targets[34]));
     try graph.validate();
     try testing.expect(try graph.removeEdge(source, targets[69]));
     try graph.validate();
-    try testing.expectEqual(@as(usize, target_count - 1), try graph.outDegree(source));
-    try testing.expectEqual(@as(u64, target_count - 1), graph.edgeCount());
+    try testing.expectEqual(@as(usize, target_count - 3), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, target_count - 3), graph.edgeCount());
     var iterator = try graph.neighbors(source);
     defer iterator.deinit();
     const slice = try graph_mod.materializeConsuming(&iterator, testing.allocator);
     defer testing.allocator.free(slice);
-    try testing.expectEqual(@as(usize, target_count - 1), slice.len);
+    try testing.expectEqual(@as(usize, target_count - 3), slice.len);
     for (1..slice.len) |target_idx| {
         try testing.expect(slice[target_idx - 1].index < slice[target_idx].index);
     }
@@ -224,7 +224,7 @@ test "graph structure: removeEdge preserves self-edge and unrelated incoming edg
     try testing.expectEqual(y.index, rev_node[1].index);
 }
 
-test "graph structure: removeEdge rejects non-tail simple remove without publishing" {
+test "graph structure: non-tail simple remove completes and stays consistent" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -237,10 +237,10 @@ test "graph structure: removeEdge rejects non-tail simple remove without publish
     try graph.validate();
     try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
 
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
+    try testing.expect(try graph.removeEdge(source, targets[0]));
     try graph.validate();
-    try testing.expectEqual(@as(usize, 65), try graph.outDegree(source));
-    try testing.expectEqual(@as(u64, 65), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 64), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 64), graph.edgeCount());
 }
 
 test "graph structure: copy-on-write tail replacement preserves grouped adjacency" {
@@ -284,7 +284,7 @@ test "graph structure: copy-on-write tail replacement preserves grouped adjacenc
     try testing.expectEqual(@as(usize, 100), try graph.outDegree(source));
 }
 
-test "graph structure: rejected non-tail removal does not allocate or retire blocks" {
+test "graph structure: non-tail removal allocates only bounded fresh blocks" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -296,12 +296,12 @@ test "graph structure: rejected non-tail removal does not allocate or retire blo
     }
 
     const fwd_blocks_before = graph.graph.block_fwd_count;
-    const rev_blocks_before = graph.graph.block_rev_count;
 
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, targets[0]));
+    try testing.expect(try graph.removeEdge(source, targets[0]));
 
-    try testing.expectEqual(fwd_blocks_before, graph.graph.block_fwd_count);
-    try testing.expectEqual(rev_blocks_before, graph.graph.block_rev_count);
+    // The structural rebuild shares unchanged blocks: a single removal may
+    // COW the affected block but never clones the whole side.
+    try testing.expect(graph.graph.block_fwd_count <= fwd_blocks_before + 2);
     try graph.validate();
 }
 
