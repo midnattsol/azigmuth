@@ -27,7 +27,9 @@ fn appendReverseBlockRemovingSourceCount(
     const live = @popCount(old_block.mask);
     if (live == 0) return remove_count;
     if (remove_count == 0) {
-        try block_list.append(graph.allocator, try rebuild_common.cloneReverseBlock(graph, scratch, block_idx));
+        // Published blocks are immutable under RCU: unchanged blocks are
+        // shared between the old and the rebuilt side instead of cloned.
+        try block_list.append(graph.allocator, block_idx);
         return 0;
     }
 
@@ -36,13 +38,16 @@ fn appendReverseBlockRemovingSourceCount(
         if (old_block.sources[slot] == source_idx) in_block += 1;
     }
     if (in_block == 0) {
-        try block_list.append(graph.allocator, try rebuild_common.cloneReverseBlock(graph, scratch, block_idx));
+        try block_list.append(graph.allocator, block_idx);
         return remove_count;
     }
 
     const take = @min(in_block, remove_count);
     const new_live: u7 = @intCast(live - take);
-    if (new_live == 0) return remove_count - take;
+    if (new_live == 0) {
+        try scratch.markRetireBlock(graph.allocator, .rev, block_idx);
+        return remove_count - take;
+    }
 
     const new_block_idx = try scratch.allocBlock(graph, .rev);
     const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .rev);
@@ -58,6 +63,7 @@ fn appendReverseBlockRemovingSourceCount(
     }
     new_block.mask = constants.denseMask(write);
     try block_list.append(graph.allocator, new_block_idx);
+    try scratch.markRetireBlock(graph.allocator, .rev, block_idx);
     return remove_count - take;
 }
 
@@ -76,7 +82,7 @@ pub fn rebuildReverseRemoveCount(
     remove_count: u32,
     scratch: *common.MutationScratch,
 ) !types.SideAdj {
-    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyReverseRemoveCount(graph, published_side, source_idx, remove_count);
+    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyReverseRemoveCount(graph, published_side, source_idx, remove_count, scratch);
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);

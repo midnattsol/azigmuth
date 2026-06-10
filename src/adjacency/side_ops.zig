@@ -266,8 +266,12 @@ pub fn retireSide(
     adj_before: types.NodeAdj,
     comptime side: adjacency.AdjSide,
 ) !void {
-    if (node_published_mod.NodePublished.isTiny(&sideAdjOfNode(adj_before, side))) return;
-    try side_runs.retireSide(graph, sideAdjOfNode(adj_before, side), side);
+    const side_view = sideAdjOfNode(adj_before, side);
+    if (node_published_mod.NodePublished.isTiny(&side_view)) {
+        rcu.retireTinySlot(graph, side_view.first_block, side);
+        return;
+    }
+    try side_runs.retireSide(graph, side_view, side);
 }
 
 pub fn publishBothAdj(

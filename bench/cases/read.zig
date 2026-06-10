@@ -4,6 +4,19 @@ const harness = @import("../harness.zig");
 
 const scan_iterations: usize = 32;
 const destination_count: usize = 4096;
+const sparse_node_count: usize = 131072;
+const sparse_edge_count: usize = 1024;
+
+fn buildSparseGraph(graph: *graphz.Graph) !void {
+    var previous: ?graphz.NodeId = null;
+    for (0..sparse_node_count) |node_idx| {
+        const node = try graph.addNode();
+        if (node_idx < sparse_edge_count) {
+            if (previous) |source| try graph.addEdge(source, node, 0, .{});
+            previous = node;
+        }
+    }
+}
 
 fn benchSnapshotNeighborsScanClean(allocator: std.mem.Allocator) !harness.Result {
     var graph = try graphz.Graph.init(allocator);
@@ -86,8 +99,58 @@ fn benchSnapshotOutDegree(allocator: std.mem.Allocator) !harness.Result {
     return .{ .ops = scan_iterations, .elapsed_ns = elapsed_ns };
 }
 
+fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.init(allocator);
+    defer graph.deinit();
+
+    try buildSparseGraph(graph);
+
+    const iterations: usize = 8;
+    const start_ns = harness.nowNs();
+    for (0..iterations) |_| {
+        var snapshot = try graph.snapshot(.{ .allocator = allocator });
+        snapshot.deinit();
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    return .{ .ops = sparse_node_count * iterations, .elapsed_ns = elapsed_ns };
+}
+
+fn benchSnapshotOutEdgesMultigraph(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.initWithOptions(allocator, .{ .multigraph = true });
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const duplicate_count: usize = 1024;
+    const destination_count_local: usize = 256;
+    const destinations = try allocator.alloc(graphz.NodeId, destination_count_local);
+    defer allocator.free(destinations);
+    for (destinations) |*destination| destination.* = try graph.addNode();
+
+    for (0..duplicate_count) |edge_idx| {
+        const destination = destinations[edge_idx % destination_count_local];
+        _ = try graph.addEdgeWithId(source, destination, 0, .{});
+    }
+
+    var snapshot = try graph.snapshot(.{ .allocator = allocator });
+    defer snapshot.deinit();
+
+    const iterations: usize = 16;
+    var seen: usize = 0;
+    const start_ns = harness.nowNs();
+    for (0..iterations) |_| {
+        var it = try snapshot.outEdges(source);
+        while (it.next() != null) seen += 1;
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    if (seen != duplicate_count * iterations) return error.CorruptGraph;
+    return .{ .ops = duplicate_count * iterations, .elapsed_ns = elapsed_ns };
+}
+
 pub const cases = [_]harness.Case{
     .{ .name = "snapshot.neighbors_scan_clean", .run = benchSnapshotNeighborsScanClean },
     .{ .name = "snapshot.neighbors_scan_tombstones", .run = benchSnapshotNeighborsScanTombstones },
     .{ .name = "snapshot.outdegree", .run = benchSnapshotOutDegree },
+    .{ .name = "snapshot.outedges_multigraph", .run = benchSnapshotOutEdgesMultigraph },
 };

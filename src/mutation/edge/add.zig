@@ -1,6 +1,7 @@
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const node_access = @import("../../core/node_access.zig");
+const node_published_mod = @import("../../storage/node/published.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency/mod.zig");
@@ -152,6 +153,14 @@ fn addEdgeImpl(
         old_forward_groups,
         old_reverse_groups,
     );
+    // Tiny sides COW into a fresh slot on every mutation; once the new side is
+    // published the superseded slot must enter the retired stack or it leaks.
+    if (node_published_mod.NodePublished.isTiny(&source_pub)) {
+        rcu.retireTinySlot(graph, source_pub.first_block, .fwd);
+    }
+    if (node_published_mod.NodePublished.isTiny(&destination_pub)) {
+        rcu.retireTinySlot(graph, destination_pub.first_block, .rev);
+    }
     rcu.bumpEpoch(graph);
     writer_guard.end();
 

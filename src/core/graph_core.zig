@@ -4,6 +4,16 @@ const radix_directory = @import("../storage/radix_directory.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const types = @import("types.zig");
 
+/// Tracks liveness of one reader token. Stored per graph instance so that
+/// independent graphs never contend for (or exhaust) each other's tokens.
+pub const TokenLivenessSlot = struct {
+    id: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+};
+
+pub const MAX_TRACKED_OVERFLOW_READERS: usize = 256;
+pub const MAX_TOKEN_LIVENESS_SLOTS: usize = constants.MAX_READER_SLOTS + MAX_TRACKED_OVERFLOW_READERS;
+
 /// Concrete internal state of the graph engine.
 ///
 /// Core implementation modules use this type directly so they get explicit
@@ -27,6 +37,10 @@ pub const GraphCore = struct {
     node_hot_pages: NodePageDirectory = .{},
     tiny_fwd_pages: NodePageDirectory = .{},
     tiny_rev_pages: NodePageDirectory = .{},
+
+    /// Per-tiny-slot metadata pages for lock-free retired/free stacks.
+    tiny_fwd_meta_pages: NodePageDirectory = .{},
+    tiny_rev_meta_pages: NodePageDirectory = .{},
 
     /// Per-node repair queue membership bitmaps to avoid duplicate queue entries.
     repair_queued_fwd_pages: NodePageDirectory = .{},
@@ -54,6 +68,13 @@ pub const GraphCore = struct {
     free_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+
+    /// Tagged stack heads for tiny-slot reuse — same retire/reclaim discipline
+    /// as edge blocks so superseded tiny slots return to circulation.
+    free_tiny_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    free_tiny_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    retired_tiny_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    retired_tiny_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
 
     /// Tagged stack heads for grouped-run retirement/reuse, indexed by
     /// (span_len - 1). Published grouped sides own a contiguous span of up to
@@ -113,6 +134,11 @@ pub const GraphCore = struct {
     /// Readers that could not acquire an epoch slot. Any overflow reader makes
     /// reclamation conservative until it exits.
     reader_epoch_overflow: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// Per-instance reader token liveness pool plus its id counter.
+    token_liveness_slots: [MAX_TOKEN_LIVENESS_SLOTS]TokenLivenessSlot =
+        [_]TokenLivenessSlot{.{}} ** MAX_TOKEN_LIVENESS_SLOTS,
+    next_reader_token_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1),
 
     /// Most recent safe_epoch for which reclaim already ran. Avoids O(M²)
     /// re-pushing of the retired stack under a long-running reader.

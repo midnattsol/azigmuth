@@ -85,6 +85,8 @@ pub fn removeBulkDestinationMatches(
         endpoints,
         remove_state.source_pub,
         remove_state.destination_pub,
+        remove_state.old_source_groups,
+        remove_state.old_destination_groups,
         source,
         destination,
         result,

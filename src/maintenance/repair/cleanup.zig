@@ -93,6 +93,7 @@ fn rebuildTinyForwardLive(
     graph: *graph_core.GraphCore,
     node_idx: u32,
     published_adj: types.NodeAdj,
+    allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
     const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
     const live_after = try countLiveTinyForwardEntries(graph, published_side);
@@ -105,7 +106,7 @@ fn rebuildTinyForwardLive(
         return .{ .staging_adj = staging_adj, .live_after = 0, .removed_count = original_count };
     }
 
-    const new_slot_idx = try page_ops.allocTinyFwdSlot(graph);
+    const new_slot_idx = try allocs.allocTinySlot(graph, .fwd);
     const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
     new_slot.* = std.mem.zeroes(node_tiny.TinyFwdSlot);
     const copied_live_count = try fillLiveTinyForwardEntries(graph, published_side, new_slot);
@@ -122,7 +123,7 @@ pub fn rebuildForwardLive(
     allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
     const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
-    if (node_published.NodePublished.isTiny(&published_side)) return rebuildTinyForwardLive(graph, node_idx, published_adj);
+    if (node_published.NodePublished.isTiny(&published_side)) return rebuildTinyForwardLive(graph, node_idx, published_adj, allocs);
 
     var result = try sorted_rebuild.sortedRebuildForward(
         graph,

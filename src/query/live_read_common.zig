@@ -61,7 +61,7 @@ pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, c
 pub fn deinitReader(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (!iterator.reader_active) return;
 
-    switch (rcu.beginCloseReaderToken(iterator.reader_token)) {
+    switch (rcu.beginCloseReaderToken(graph, iterator.reader_token)) {
         .inactive => {},
         .pending => {},
         .finalize => rcu.finalizeReaderExit(@constCast(graph), iterator.reader_token),

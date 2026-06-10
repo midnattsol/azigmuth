@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const harness = @import("harness.zig");
 const read_cases = @import("cases/read.zig");
 const mutation_cases = @import("cases/mutation.zig");
@@ -26,8 +27,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print(
-        "graphz bench v2 (ReleaseFast recommended) reps={} warmup={}\n\n",
-        .{ options.reps, options.warmup },
+        "graphz bench v2 optimize={s} reps={} warmup={}\n\n",
+        .{ @tagName(builtin.mode), options.reps, options.warmup },
     );
 
     var ran_any = false;

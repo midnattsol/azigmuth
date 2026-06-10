@@ -1,6 +1,7 @@
 //! RCU-style reader/writer synchronization and block retirement.
 
 const std = @import("std");
+const adjacency = @import("../adjacency/mod.zig");
 const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
@@ -8,18 +9,10 @@ const page_ops = @import("../storage/page_ops.zig");
 
 pub const NO_READER_SLOT: u32 = std.math.maxInt(u32);
 
-const MAX_TRACKED_OVERFLOW_READERS: usize = 256;
-const MAX_TOKEN_LIVENESS_SLOTS: usize = constants.MAX_READER_SLOTS + MAX_TRACKED_OVERFLOW_READERS;
+const builtin = @import("builtin");
+
 const TOKEN_CLOSING_BIT: u32 = 0x8000_0000;
 const TOKEN_ACTIVE_MASK: u32 = 0x7FFF_FFFF;
-
-const TokenLivenessSlot = struct {
-    id: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-};
-
-var token_liveness_slots: [MAX_TOKEN_LIVENESS_SLOTS]TokenLivenessSlot = [_]TokenLivenessSlot{.{}} ** MAX_TOKEN_LIVENESS_SLOTS;
-var next_reader_token_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
 
 pub const ReaderToken = struct {
     slot: u32,
@@ -28,16 +21,32 @@ pub const ReaderToken = struct {
     id: u64,
 };
 
-fn nextReaderId() u64 {
+/// Start slot-scan probes at a per-thread offset so concurrent readers do not
+/// all fight over the CAS on the first slots (and their shared cache lines).
+fn slotScanOffset(comptime slot_count: usize) usize {
+    if (builtin.single_threaded) return 0;
+    const thread_id: u64 = @intCast(std.Thread.getCurrentId());
+    return @intCast((thread_id *% 0x9E37_79B9_7F4A_7C15) >> 32 & (slot_count - 1));
+}
+
+comptime {
+    std.debug.assert(std.math.isPowerOfTwo(constants.MAX_READER_SLOTS));
+    std.debug.assert(std.math.isPowerOfTwo(graph_core.MAX_TOKEN_LIVENESS_SLOTS));
+}
+
+fn nextReaderId(graph: *graph_core.GraphCore) u64 {
     while (true) {
-        const reader_id = next_reader_token_id.fetchAdd(1, .acq_rel);
+        const reader_id = graph.next_reader_token_id.fetchAdd(1, .acq_rel);
         if (reader_id != 0) return reader_id;
     }
 }
 
-fn allocTrackedToken(slot: u32, epoch: u64) !ReaderToken {
-    const reader_id = nextReaderId();
-    for (&token_liveness_slots, 0..) |*token_slot, token_slot_index| {
+fn allocTrackedToken(graph: *graph_core.GraphCore, slot: u32, epoch: u64) !ReaderToken {
+    const reader_id = nextReaderId(graph);
+    const offset = slotScanOffset(graph_core.MAX_TOKEN_LIVENESS_SLOTS);
+    for (0..graph_core.MAX_TOKEN_LIVENESS_SLOTS) |probe| {
+        const token_slot_index = (offset + probe) & (graph_core.MAX_TOKEN_LIVENESS_SLOTS - 1);
+        const token_slot = &graph.token_liveness_slots[token_slot_index];
         if (token_slot.id.cmpxchgWeak(0, reader_id, .acq_rel, .acquire) == null) {
             token_slot.state.store(0, .release);
             return .{ .slot = slot, .liveness_slot = @intCast(token_slot_index), .epoch = epoch, .id = reader_id };
@@ -46,8 +55,8 @@ fn allocTrackedToken(slot: u32, epoch: u64) !ReaderToken {
     return error.GraphBusy;
 }
 
-fn releaseTrackedToken(token: ReaderToken) void {
-    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+fn releaseTrackedToken(graph: *graph_core.GraphCore, token: ReaderToken) void {
+    const token_slot = &graph.token_liveness_slots[@intCast(token.liveness_slot)];
     token_slot.state.store(0, .release);
     token_slot.id.store(0, .release);
 }
@@ -58,8 +67,8 @@ const CloseTokenResult = enum {
     finalize,
 };
 
-pub fn beginCloseReaderToken(token: ReaderToken) CloseTokenResult {
-    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+pub fn beginCloseReaderToken(graph: *const graph_core.GraphCore, token: ReaderToken) CloseTokenResult {
+    const token_slot = @constCast(&graph.token_liveness_slots[@intCast(token.liveness_slot)]);
     while (true) {
         if (token_slot.id.load(.acquire) != token.id) return .inactive;
         const state = token_slot.state.load(.acquire);
@@ -71,8 +80,8 @@ pub fn beginCloseReaderToken(token: ReaderToken) CloseTokenResult {
     }
 }
 
-pub fn tryRetainReaderToken(token: ReaderToken) bool {
-    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+pub fn tryRetainReaderToken(graph: *const graph_core.GraphCore, token: ReaderToken) bool {
+    const token_slot = @constCast(&graph.token_liveness_slots[@intCast(token.liveness_slot)]);
     while (true) {
         if (token_slot.id.load(.acquire) != token.id) return false;
         const state = token_slot.state.load(.acquire);
@@ -93,8 +102,8 @@ const ReleaseTokenResult = enum {
     finalize,
 };
 
-pub fn releaseRetainedReaderToken(token: ReaderToken) ReleaseTokenResult {
-    const token_slot = &token_liveness_slots[@intCast(token.liveness_slot)];
+pub fn releaseRetainedReaderToken(graph: *const graph_core.GraphCore, token: ReaderToken) ReleaseTokenResult {
+    const token_slot = @constCast(&graph.token_liveness_slots[@intCast(token.liveness_slot)]);
     while (true) {
         if (token_slot.id.load(.acquire) != token.id) return .closed;
         const state = token_slot.state.load(.acquire);
@@ -110,11 +119,14 @@ pub fn releaseRetainedReaderToken(token: ReaderToken) ReleaseTokenResult {
 
 pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
     if (graph.isClosing()) return error.GraphBusy;
+    const offset = slotScanOffset(constants.MAX_READER_SLOTS);
     while (true) {
         const entry_epoch = graph.epoch.load(.acquire);
         const encoded_epoch = entry_epoch +% 1;
 
-        for (&graph.reader_epochs, 0..) |*slot, slot_index| {
+        for (0..constants.MAX_READER_SLOTS) |probe| {
+            const slot_index = (offset + probe) & (constants.MAX_READER_SLOTS - 1);
+            const slot = &graph.reader_epochs[slot_index];
             if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
                 if (graph.epoch.load(.acquire) != entry_epoch) {
                     slot.store(0, .release);
@@ -125,7 +137,7 @@ pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
                     slot.store(0, .release);
                     return error.GraphBusy;
                 }
-                const token = allocTrackedToken(@intCast(slot_index), entry_epoch) catch |err| {
+                const token = allocTrackedToken(graph, @intCast(slot_index), entry_epoch) catch |err| {
                     slot.store(0, .release);
                     return err;
                 };
@@ -134,7 +146,7 @@ pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
             }
         } else {
             if (graph.isClosing()) return error.GraphBusy;
-            const token = try allocTrackedToken(NO_READER_SLOT, entry_epoch);
+            const token = try allocTrackedToken(graph, NO_READER_SLOT, entry_epoch);
             _ = graph.reader_epoch_overflow.fetchAdd(1, .acq_rel);
             _ = graph.active_readers.fetchAdd(1, .monotonic);
             return token;
@@ -143,7 +155,7 @@ pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
 }
 
 pub fn readerExit(graph: *graph_core.GraphCore, token: ReaderToken) void {
-    switch (beginCloseReaderToken(token)) {
+    switch (beginCloseReaderToken(graph, token)) {
         .inactive => {},
         .pending => {},
         .finalize => finalizeReaderExit(graph, token),
@@ -157,11 +169,11 @@ pub fn finalizeReaderExit(graph: *graph_core.GraphCore, token: ReaderToken) void
         graph.reader_epochs[@intCast(token.slot)].store(0, .release);
     }
     _ = graph.active_readers.fetchSub(1, .monotonic);
-    releaseTrackedToken(token);
+    releaseTrackedToken(graph, token);
 }
 
-pub fn readerTokenActive(token: ReaderToken) bool {
-    return token_liveness_slots[@intCast(token.liveness_slot)].id.load(.acquire) == token.id;
+pub fn readerTokenActive(graph: *const graph_core.GraphCore, token: ReaderToken) bool {
+    return graph.token_liveness_slots[@intCast(token.liveness_slot)].id.load(.acquire) == token.id;
 }
 
 pub fn retireBlockFwd(graph: *graph_core.GraphCore, block_idx: u32) !void {
@@ -177,6 +189,11 @@ pub fn retireBlockRev(graph: *graph_core.GraphCore, block_idx: u32) !void {
 pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
     const current_epoch = graph.epoch.load(.acquire);
     page_ops.retireGroup(graph, group_idx, current_epoch);
+}
+
+pub fn retireTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) void {
+    const current_epoch = graph.epoch.load(.acquire);
+    page_ops.retireTinySlot(graph, slot_idx, current_epoch, side);
 }
 
 pub fn retireGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
@@ -212,4 +229,6 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     page_ops.reclaimRetired(graph, safe_epoch, .fwd);
     page_ops.reclaimRetired(graph, safe_epoch, .rev);
     page_ops.reclaimRetiredGroups(graph, safe_epoch);
+    page_ops.reclaimRetiredTinySlots(graph, safe_epoch, .fwd);
+    page_ops.reclaimRetiredTinySlots(graph, safe_epoch, .rev);
 }

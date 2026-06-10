@@ -178,6 +178,8 @@ pub const Graph = struct {
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_fwd_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_rev_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_block_group_meta_pages, constants.EDGE_GROUPS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_fwd_meta_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_rev_meta_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
 
         self.graph.repair_fwd.deinit(alloc);
         self.graph.repair_rev.deinit(alloc);

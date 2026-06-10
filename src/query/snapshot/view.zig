@@ -12,16 +12,28 @@ pub const SnapshotSide = snapshot_capture.SnapshotSide;
 pub const CapturedGraphView = struct {
     core: *const graph_core.GraphCore,
     node_state: []u32,
-    fwd_side: []SnapshotSide,
-    rev_side: []SnapshotSide,
+    fwd_first_block: []u32,
+    fwd_block_count: []u32,
+    fwd_group_count: []u16,
+    fwd_first_group: []u32,
+    rev_first_block: []u32,
+    rev_block_count: []u32,
+    rev_group_count: []u16,
+    rev_first_group: []u32,
     degree_fwd: []u32,
     degree_rev: []u32,
     live_node_count: usize,
 
     pub fn deinit(self: *CapturedGraphView, allocator: std.mem.Allocator) void {
         allocator.free(self.node_state);
-        allocator.free(self.fwd_side);
-        allocator.free(self.rev_side);
+        allocator.free(self.fwd_first_block);
+        allocator.free(self.fwd_block_count);
+        allocator.free(self.fwd_group_count);
+        allocator.free(self.fwd_first_group);
+        allocator.free(self.rev_first_block);
+        allocator.free(self.rev_block_count);
+        allocator.free(self.rev_group_count);
+        allocator.free(self.rev_first_group);
         allocator.free(self.degree_fwd);
         allocator.free(self.degree_rev);
     }
@@ -38,10 +50,28 @@ pub const CapturedGraphView = struct {
         return (self.node_state[node_idx] & state_live_bit) != 0;
     }
 
+    pub fn fwdSide(self: *const CapturedGraphView, node_idx: u32) SnapshotSide {
+        return .{
+            .first_block = self.fwd_first_block[node_idx],
+            .block_count = self.fwd_block_count[node_idx],
+            .group_count = self.fwd_group_count[node_idx],
+            .first_group = self.fwd_first_group[node_idx],
+        };
+    }
+
+    pub fn revSide(self: *const CapturedGraphView, node_idx: u32) SnapshotSide {
+        return .{
+            .first_block = self.rev_first_block[node_idx],
+            .block_count = self.rev_block_count[node_idx],
+            .group_count = self.rev_group_count[node_idx],
+            .first_group = self.rev_first_group[node_idx],
+        };
+    }
+
     pub fn adjacency(self: *const CapturedGraphView, node_idx: u32) types.NodeAdj {
         const node_state = self.node_state[node_idx];
-        const fwd_side = self.fwd_side[node_idx];
-        const rev_side = self.rev_side[node_idx];
+        const fwd_side = self.fwdSide(node_idx);
+        const rev_side = self.revSide(node_idx);
         return .{
             .first_block_fwd = fwd_side.first_block,
             .block_count_fwd = fwd_side.block_count,
@@ -89,8 +119,14 @@ pub fn captureGraphView(core: *const graph_core.GraphCore, allocator: std.mem.Al
     return .{
         .core = core,
         .node_state = captured.node_state,
-        .fwd_side = captured.fwd_side,
-        .rev_side = captured.rev_side,
+        .fwd_first_block = captured.fwd_first_block,
+        .fwd_block_count = captured.fwd_block_count,
+        .fwd_group_count = captured.fwd_group_count,
+        .fwd_first_group = captured.fwd_first_group,
+        .rev_first_block = captured.rev_first_block,
+        .rev_block_count = captured.rev_block_count,
+        .rev_group_count = captured.rev_group_count,
+        .rev_first_group = captured.rev_first_group,
         .degree_fwd = captured.degree_fwd,
         .degree_rev = captured.degree_rev,
         .live_node_count = captured.live_node_count,

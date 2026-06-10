@@ -334,9 +334,12 @@ test "multigraph: repair preserves multiblock duplicate EdgeIds" {
     try graph.repairNode(source);
     try graph.validate();
 
-    try testing.expectError(error.RepairRequired, graph.removeEdgeWithId(source, destination, ids[65]));
-    try testing.expectEqual(@as(usize, 70), try snapshot_support.outDegree(graph, source, testing.allocator));
-    try testing.expectEqual(@as(usize, 70), try snapshot_support.inDegree(graph, destination, testing.allocator));
+    // ids[65] lives in the tail block after repair, and the reverse match is
+    // also resolved against the tail block, so the single-removal fast path
+    // applies directly instead of demanding another repair round.
+    try testing.expect(try graph.removeEdgeWithId(source, destination, ids[65]));
+    try testing.expectEqual(@as(usize, 69), try snapshot_support.outDegree(graph, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 69), try snapshot_support.inDegree(graph, destination, testing.allocator));
     try graph.validate();
 }
 

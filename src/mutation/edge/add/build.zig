@@ -77,14 +77,14 @@ pub fn canUseTinyRevSide(destination_side: types.SideAdj) bool {
     return destination_side.block_count == 0 or node_published.NodePublished.isTiny(&destination_side);
 }
 
-fn cloneTinyFwdIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj) !u32 {
-    const new_slot_idx = try page_ops.allocTinyFwdSlot(graph);
+fn cloneTinyFwdIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj, scratch: *common.MutationScratch) !u32 {
+    const new_slot_idx = try scratch.allocTinySlot(graph, .fwd);
     page_ops.tinyFwdAt(graph, new_slot_idx).* = page_ops.tinyFwdAtConst(graph, side_adj.first_block).*;
     return new_slot_idx;
 }
 
-fn cloneTinyRevIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj) !u32 {
-    const new_slot_idx = try page_ops.allocTinyRevSlot(graph);
+fn cloneTinyRevIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj, scratch: *common.MutationScratch) !u32 {
+    const new_slot_idx = try scratch.allocTinySlot(graph, .rev);
     page_ops.tinyRevAt(graph, new_slot_idx).* = page_ops.tinyRevAtConst(graph, side_adj.first_block).*;
     return new_slot_idx;
 }
@@ -100,7 +100,7 @@ pub fn buildForwardTinyOrPromoted(
 ) !types.SideAdj {
     const cap: u16 = if (graph.multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE;
     if (source_side.block_count == 0) {
-        const slot_idx = try page_ops.allocTinyFwdSlot(graph);
+        const slot_idx = try scratch.allocTinySlot(graph, .fwd);
         const slot = page_ops.tinyFwdAt(graph, slot_idx);
         _ = try node_tiny.insertFwd(slot, 0, destination.index, relation, @bitCast(raw_flags), edge_id, graph.multigraph_enabled);
         return node_published.NodePublished.makeTiny(slot_idx, 1);
@@ -108,7 +108,7 @@ pub fn buildForwardTinyOrPromoted(
 
     const count = node_published.NodePublished.tinyCount(&source_side);
     if (count < cap) {
-        const slot_idx = try cloneTinyFwdIntoNewSlot(graph, source_side);
+        const slot_idx = try cloneTinyFwdIntoNewSlot(graph, source_side, scratch);
         const slot = page_ops.tinyFwdAt(graph, slot_idx);
         const new_count = try node_tiny.insertFwd(slot, count, destination.index, relation, @bitCast(raw_flags), edge_id, graph.multigraph_enabled);
         return node_published.NodePublished.makeTiny(slot_idx, new_count);
@@ -137,7 +137,7 @@ pub fn buildReverseTinyOrPromoted(
 ) !types.SideAdj {
     const cap: u16 = tiny_config.TINY_REV_CAP;
     if (destination_side.block_count == 0) {
-        const slot_idx = try page_ops.allocTinyRevSlot(graph);
+        const slot_idx = try scratch.allocTinySlot(graph, .rev);
         const slot = page_ops.tinyRevAt(graph, slot_idx);
         _ = node_tiny.insertRev(slot, 0, source.index);
         return node_published.NodePublished.makeTiny(slot_idx, 1);
@@ -145,7 +145,7 @@ pub fn buildReverseTinyOrPromoted(
 
     const count = node_published.NodePublished.tinyCount(&destination_side);
     if (count < cap) {
-        const slot_idx = try cloneTinyRevIntoNewSlot(graph, destination_side);
+        const slot_idx = try cloneTinyRevIntoNewSlot(graph, destination_side, scratch);
         const slot = page_ops.tinyRevAt(graph, slot_idx);
         const new_count = node_tiny.insertRev(slot, count, source.index);
         return node_published.NodePublished.makeTiny(slot_idx, new_count);

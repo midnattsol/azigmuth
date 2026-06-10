@@ -1,5 +1,6 @@
 const std = @import("std");
 const graph_core = @import("../../../core/graph_core.zig");
+const node_published = @import("../../../storage/node/published.zig");
 const types = @import("../../../core/types.zig");
 const rcu = @import("../../../concurrency/rcu.zig");
 const common = @import("../../common.zig");
@@ -105,14 +106,30 @@ fn retireRemoved(
     destination_old_groups.retire(graph);
 }
 
+/// Retires the storage superseded by a rebuilt removal: blocks marked during
+/// the rebuild, the old grouped-run metadata, and old tiny slots. Unchanged
+/// blocks are shared with the published rebuilt side and MUST stay live.
 pub fn retireBulkRemovedSides(
     graph: *graph_core.GraphCore,
+    scratch: *common.MutationScratch,
     source_pub: types.SideAdj,
     destination_pub: types.SideAdj,
-    endpoints: *const shared.EndpointState,
+    old_source_groups: shared.OldGroupChain,
+    old_destination_groups: shared.OldGroupChain,
 ) !void {
-    try common.retireSide(graph, common.nodeAdjForSide(source_pub, endpoints.source_flags, .fwd), .fwd);
-    try common.retireSide(graph, common.nodeAdjForSide(destination_pub, endpoints.destination_flags, .rev), .rev);
+    try scratch.retireMarked(graph);
+
+    if (node_published.NodePublished.isTiny(&source_pub)) {
+        rcu.retireTinySlot(graph, source_pub.first_block, .fwd);
+    } else {
+        old_source_groups.retire(graph);
+    }
+
+    if (node_published.NodePublished.isTiny(&destination_pub)) {
+        rcu.retireTinySlot(graph, destination_pub.first_block, .rev);
+    } else {
+        old_destination_groups.retire(graph);
+    }
 }
 
 pub fn finalizeSingleRemoval(
@@ -139,13 +156,15 @@ pub fn finalizeBulkRemoval(
     endpoints: *const shared.EndpointState,
     source_pub: types.SideAdj,
     destination_pub: types.SideAdj,
+    old_source_groups: shared.OldGroupChain,
+    old_destination_groups: shared.OldGroupChain,
     source: types.NodeId,
     destination: types.NodeId,
     result: BulkRemovalResult,
 ) !bool {
     scratch.disarm();
     publishBulkRemoved(endpoints, source, destination, result.removed, result.publish_adj);
-    try retireBulkRemovedSides(graph, source_pub, destination_pub, endpoints);
+    try retireBulkRemovedSides(graph, scratch, source_pub, destination_pub, old_source_groups, old_destination_groups);
     _ = graph.edge_count.fetchSub(result.removed, .release);
     return true;
 }

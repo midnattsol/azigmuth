@@ -24,7 +24,14 @@ fn finalizeTinyCompatibleSingleRemoval(
 
     scratch.disarm();
     try remove_finalize.publishRemoved(endpoints, source, destination, publish_adj.source_publish_adj, publish_adj.destination_publish_adj);
-    try remove_finalize.retireBulkRemovedSides(graph, remove_state.source_pub, remove_state.destination_pub, endpoints);
+    try remove_finalize.retireBulkRemovedSides(
+        graph,
+        scratch,
+        remove_state.source_pub,
+        remove_state.destination_pub,
+        remove_state.old_source_groups,
+        remove_state.old_destination_groups,
+    );
     _ = graph.edge_count.fetchSub(1, .release);
     return true;
 }

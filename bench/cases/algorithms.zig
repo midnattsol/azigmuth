@@ -100,6 +100,7 @@ fn runBfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context)
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
         const order = try snapshot.bfs(nodes[0], arena_ctx);
         if (order.len != nodes.len) return error.CorruptGraph;
     }
@@ -121,6 +122,7 @@ fn runDfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context)
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
         const order = try snapshot.dfs(nodes[0], arena_ctx);
         if (order.len != nodes.len) return error.CorruptGraph;
     }
@@ -245,6 +247,7 @@ fn benchAlgorithmsHasCycleAcyclic(allocator: std.mem.Allocator) !harness.Result 
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
         const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (has_cycle) return error.CorruptGraph;
     }
@@ -271,6 +274,7 @@ fn benchAlgorithmsHasCycleCyclic(allocator: std.mem.Allocator) !harness.Result {
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
         const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (!has_cycle) return error.CorruptGraph;
     }
@@ -297,6 +301,7 @@ fn benchAlgorithmsHasCycleCyclicEarly(allocator: std.mem.Allocator) !harness.Res
     const iterations: usize = 20;
     const start_ns = harness.nowNs();
     for (0..iterations) |_| {
+        _ = arena.reset(.retain_capacity);
         const has_cycle = try snapshot.hasCycle(.{ .allocator = arena_allocator });
         if (!has_cycle) return error.CorruptGraph;
     }
@@ -321,6 +326,36 @@ fn benchSnapshotCapture(allocator: std.mem.Allocator) !harness.Result {
     const elapsed_ns = harness.nowNs() - start_ns;
 
     return .{ .ops = iterations, .elapsed_ns = elapsed_ns };
+}
+
+fn benchSnapshotCaptureDenseBinary(allocator: std.mem.Allocator) !harness.Result {
+    return benchSnapshotCapture(allocator);
+}
+
+fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.init(allocator);
+    defer graph.deinit();
+
+    var previous: ?graphz.NodeId = null;
+    const node_count: usize = 131072;
+    const linked_prefix: usize = 1024;
+    for (0..node_count) |node_idx| {
+        const node = try graph.addNode();
+        if (node_idx < linked_prefix) {
+            if (previous) |source| try graph.addEdge(source, node, 0, .{});
+            previous = node;
+        }
+    }
+
+    const iterations: usize = 8;
+    const start_ns = harness.nowNs();
+    for (0..iterations) |_| {
+        var snapshot = try graph.snapshot(.{ .allocator = allocator });
+        snapshot.deinit();
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    return .{ .ops = node_count * iterations, .elapsed_ns = elapsed_ns };
 }
 
 fn benchSnapshotBundleForwardQueries(allocator: std.mem.Allocator) !harness.Result {
@@ -371,6 +406,7 @@ pub const cases = [_]harness.Case{
     .{ .name = "algorithms.hascycle_acyclic", .run = benchAlgorithmsHasCycleAcyclic },
     .{ .name = "algorithms.hascycle_cyclic", .run = benchAlgorithmsHasCycleCyclic },
     .{ .name = "algorithms.hascycle_cyclic_early", .run = benchAlgorithmsHasCycleCyclicEarly },
-    .{ .name = "snapshot.capture", .run = benchSnapshotCapture },
+    .{ .name = "snapshot.capture_dense_binary", .run = benchSnapshotCaptureDenseBinary },
+    .{ .name = "snapshot.capture_sparse_emptyheavy", .run = benchSnapshotCaptureSparseEmptyHeavy },
     .{ .name = "snapshot.bundle_forward_queries", .run = benchSnapshotBundleForwardQueries },
 };

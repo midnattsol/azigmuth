@@ -13,6 +13,7 @@ const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const node_published = @import("../storage/node/published.zig");
+const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
 
@@ -36,6 +37,8 @@ pub const NeighborIterator = struct {
     /// Cached from loadNextNonEmptyMask so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const types.NodeBuffer = null,
 
@@ -61,13 +64,13 @@ pub const NeighborIterator = struct {
 
     fn nextTinyNeighbor(self: *NeighborIterator) ?types.NodeId {
         while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
-            const candidate = types.NodeId{ .index = side_ops.readNodeIdAtSlotDynamic(self.core, side_ops.TINY_SLOT_TAG | self.tiny_slot, @intCast(self.tiny_index), switch (self.direction) {
-                .fwd => .fwd,
-                .rev => .rev,
-            }) };
-            if (self.candidateRemoved(candidate.index)) continue;
+            const candidate_idx = switch (self.direction) {
+                .fwd => self.cached_tiny_fwd.?.entries[self.tiny_index].destination,
+                .rev => self.cached_tiny_rev.?.sources[self.tiny_index],
+            };
+            if (self.candidateRemoved(candidate_idx)) continue;
             self.tiny_index += 1;
-            return candidate;
+            return types.NodeId{ .index = candidate_idx };
         }
         return null;
     }
@@ -91,7 +94,7 @@ pub const NeighborIterator = struct {
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
         if (!self.reader_active) return null;
-        if (!rcu.readerTokenActive(self.reader_token)) {
+        if (!rcu.readerTokenActive(self.core, self.reader_token)) {
             self.reader_active = false;
             return null;
         }
@@ -115,7 +118,7 @@ pub const NeighborIterator = struct {
 
 pub fn snapshotDegree(iterator: *const NeighborIterator) usize {
     if (!iterator.reader_active) return 0;
-    if (!rcu.readerTokenActive(iterator.reader_token)) {
+    if (!rcu.readerTokenActive(iterator.core, iterator.reader_token)) {
         @constCast(iterator).reader_active = false;
         return 0;
     }
@@ -183,6 +186,12 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .group_count_bound = cursor_init.group_count_bound,
     };
 
+    if (iterator.tiny_mode) {
+        switch (direction) {
+            .fwd => iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(graph, iterator.tiny_slot),
+            .rev => iterator.cached_tiny_rev = page_ops.tinyRevAtConst(graph, iterator.tiny_slot),
+        }
+    }
     side_traversal.primeGroupedTraversal(&iterator, graph);
 
     return iterator;

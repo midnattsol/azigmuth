@@ -4,5 +4,6 @@ comptime {
     _ = @import("rcu.zig");
     _ = @import("reclaim_bounded.zig");
     _ = @import("reclaim_safety.zig");
+    _ = @import("tiny_reclaim.zig");
     _ = @import("snapshot_coherence.zig");
 }

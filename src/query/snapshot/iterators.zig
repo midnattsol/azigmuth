@@ -5,6 +5,8 @@ const side_ops = @import("../../adjacency/side_ops.zig");
 const side_traversal = @import("../side_traversal.zig");
 const snapshot_capture = @import("capture.zig");
 const snapshot_view = @import("view.zig");
+const node_tiny = @import("../../storage/node/tiny.zig");
+const page_ops = @import("../../storage/page_ops.zig");
 
 fn ensureLiveSnapshotNode(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) ?u32 {
     if (node.index >= view.node_state.len) return null;
@@ -17,6 +19,7 @@ fn initNeighborCursor(
     direction: adjacency.AdjSide,
     side_snapshot: types.SideAdj,
     check_removed_candidates: bool,
+    degree_hint: u32,
 ) SnapshotNeighborIterator {
     const cursor_init = side_traversal.buildCursorInit(side_snapshot);
     var cursor = SnapshotNeighborIterator{
@@ -32,7 +35,14 @@ fn initNeighborCursor(
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_candidates = check_removed_candidates,
         .group_count_bound = cursor_init.group_count_bound,
+        .degree_hint = degree_hint,
     };
+    if (cursor.tiny_mode) {
+        switch (direction) {
+            .fwd => cursor.cached_tiny_fwd = page_ops.tinyFwdAtConst(view.core, cursor.tiny_slot),
+            .rev => cursor.cached_tiny_rev = page_ops.tinyRevAtConst(view.core, cursor.tiny_slot),
+        }
+    }
     side_traversal.primeGroupedTraversal(&cursor, view.core);
     return cursor;
 }
@@ -56,6 +66,9 @@ fn initOutEdgeCursor(
         .check_removed_destinations = check_removed_destinations,
         .group_count_bound = cursor_init.group_count_bound,
     };
+    if (iterator.tiny_mode) {
+        iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(view.core, iterator.tiny_slot);
+    }
     side_traversal.primeGroupedTraversal(&iterator, view.core);
     return iterator;
 }
@@ -76,10 +89,13 @@ pub const SnapshotNeighborIterator = struct {
     tiny_index: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
 
     check_removed_candidates: bool,
     groups_visited: u16 = 0,
     group_count_bound: u16 = 0,
+    degree_hint: u32 = 0,
 
     fn advanceToNextGroup(self: *SnapshotNeighborIterator) bool {
         return side_traversal.advanceToNextGroup(self, self.view.core);
@@ -97,10 +113,13 @@ pub const SnapshotNeighborIterator = struct {
 
     fn nextTinyNeighbor(self: *SnapshotNeighborIterator) ?types.NodeId {
         while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
-            const candidate = types.NodeId{ .index = side_ops.readNodeIdAtSlotDynamic(self.view.core, side_ops.TINY_SLOT_TAG | self.tiny_slot, @intCast(self.tiny_index), self.direction) };
-            if (self.candidateExcluded(candidate.index)) continue;
+            const candidate_idx = switch (self.direction) {
+                .fwd => self.cached_tiny_fwd.?.entries[self.tiny_index].destination,
+                .rev => self.cached_tiny_rev.?.sources[self.tiny_index],
+            };
+            if (self.candidateExcluded(candidate_idx)) continue;
             self.tiny_index += 1;
-            return candidate;
+            return types.NodeId{ .index = candidate_idx };
         }
         return null;
     }
@@ -128,7 +147,7 @@ pub const SnapshotNeighborIterator = struct {
     }
 
     pub fn materialize(self: *SnapshotNeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
-        var out = try std.ArrayList(types.NodeId).initCapacity(allocator, 0);
+        var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.degree_hint);
         defer out.deinit(allocator);
         while (self.next()) |neighbor| {
             try out.append(allocator, neighbor);
@@ -152,6 +171,7 @@ pub const SnapshotOutEdgeIterator = struct {
     tiny_index: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
 
     check_removed_destinations: bool,
     groups_visited: u16 = 0,
@@ -173,10 +193,10 @@ pub const SnapshotOutEdgeIterator = struct {
 
     fn nextTinyOutEdge(self: *SnapshotOutEdgeIterator) ?types.EdgeRef {
         while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
-            const entry = side_ops.readForwardEntryAtSlot(self.view.core, side_ops.TINY_SLOT_TAG | self.tiny_slot, @intCast(self.tiny_index));
+            const entry = self.cached_tiny_fwd.?.entries[self.tiny_index];
             if (self.destinationExcluded(entry.destination)) continue;
             self.tiny_index += 1;
-            return .{ .id = .{ .local = entry.edge_id }, .destination = entry.destination, .relation = entry.relation, .flags = @bitCast(entry.flags) };
+            return .{ .id = .{ .local = entry.edge_id }, .destination = entry.destination, .relation = entry.relation, .flags = entry.flags };
         }
         return null;
     }
@@ -207,19 +227,19 @@ pub const SnapshotOutEdgeIterator = struct {
 
 pub fn neighborsCursor(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) !?SnapshotNeighborIterator {
     const node_idx = ensureLiveSnapshotNode(view, node) orelse return null;
-    const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.fwd_side[node_idx]);
-    return initNeighborCursor(view, .fwd, side_snapshot, view.needsRepairFwd(node_idx));
+    const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.fwdSide(node_idx));
+    return initNeighborCursor(view, .fwd, side_snapshot, view.needsRepairFwd(node_idx), view.degree_fwd[node_idx]);
 }
 
 pub fn inNeighborsCursor(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) !?SnapshotNeighborIterator {
     const node_idx = ensureLiveSnapshotNode(view, node) orelse return null;
-    const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.rev_side[node_idx]);
-    return initNeighborCursor(view, .rev, side_snapshot, view.needsRepairRev(node_idx));
+    const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.revSide(node_idx));
+    return initNeighborCursor(view, .rev, side_snapshot, view.needsRepairRev(node_idx), view.degree_rev[node_idx]);
 }
 
 pub fn outEdges(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) !?SnapshotOutEdgeIterator {
     if (!view.core.multigraph_enabled) return error.UnsupportedOperation;
     const node_idx = ensureLiveSnapshotNode(view, node) orelse return null;
-    const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.fwd_side[node_idx]);
+    const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.fwdSide(node_idx));
     return initOutEdgeCursor(view, side_snapshot, view.needsRepairFwd(node_idx));
 }

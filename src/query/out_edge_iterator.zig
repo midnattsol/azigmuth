@@ -12,6 +12,7 @@ const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const node_published = @import("../storage/node/published.zig");
+const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
 
@@ -32,6 +33,7 @@ pub const OutEdgeIterator = struct {
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const types.NodeBuffer = null,
     check_removed_destinations: bool,
@@ -54,14 +56,14 @@ pub const OutEdgeIterator = struct {
 
     fn nextTinyOutEdge(self: *OutEdgeIterator) ?types.EdgeRef {
         while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
-            const entry = side_ops.readForwardEntryAtSlot(self.core, side_ops.TINY_SLOT_TAG | self.tiny_slot, @intCast(self.tiny_index));
+            const entry = self.cached_tiny_fwd.?.entries[self.tiny_index];
             if (self.destinationRemoved(entry.destination)) continue;
             self.tiny_index += 1;
             return types.EdgeRef{
                 .id = .{ .local = entry.edge_id },
                 .destination = entry.destination,
                 .relation = entry.relation,
-                .flags = @bitCast(entry.flags),
+                .flags = entry.flags,
             };
         }
         return null;
@@ -95,7 +97,7 @@ pub const OutEdgeIterator = struct {
     /// Returns the next outgoing edge with its identity, or null when exhausted.
     pub fn next(self: *OutEdgeIterator) ?types.EdgeRef {
         if (!self.reader_active) return null;
-        if (!rcu.readerTokenActive(self.reader_token)) {
+        if (!rcu.readerTokenActive(self.core, self.reader_token)) {
             self.reader_active = false;
             return null;
         }
@@ -136,6 +138,9 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .group_count_bound = cursor_init.group_count_bound,
     };
 
+    if (iterator.tiny_mode) {
+        iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(graph, iterator.tiny_slot);
+    }
     side_traversal.primeGroupedTraversal(&iterator, graph);
 
     return iterator;

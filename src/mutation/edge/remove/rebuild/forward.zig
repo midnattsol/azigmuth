@@ -32,10 +32,15 @@ fn appendForwardBlockWithoutDestination(
         if (old_block.edges[slot].destination == destination_idx) removed += 1;
     }
     if (removed == 0) {
-        try block_list.append(graph.allocator, try rebuild_common.cloneForwardBlock(graph, scratch, block_idx));
+        // Published blocks are immutable under RCU, so the rebuilt side may
+        // reference unchanged blocks directly instead of cloning them.
+        try block_list.append(graph.allocator, block_idx);
         return 0;
     }
-    if (removed == live) return removed;
+    if (removed == live) {
+        try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
+        return removed;
+    }
 
     const new_block_idx = try scratch.allocBlock(graph, .fwd);
     const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .fwd);
@@ -50,6 +55,7 @@ fn appendForwardBlockWithoutDestination(
     }
     new_block.mask = constants.denseMask(write);
     try block_list.append(graph.allocator, new_block_idx);
+    try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
     return removed;
 }
 
@@ -61,13 +67,12 @@ fn collectForwardRemovalBlock(
     context.removed += try appendForwardBlockWithoutDestination(@constCast(graph), context.scratch, context.block_list, block_idx, context.destination_idx);
 }
 
-fn appendClonedForwardBlock(
+fn appendSharedForwardBlock(
     graph: *graph_core.GraphCore,
-    scratch: *common.MutationScratch,
     block_list: *std.ArrayList(u32),
     block_idx: u32,
 ) !void {
-    try block_list.append(graph.allocator, try rebuild_common.cloneForwardBlock(graph, scratch, block_idx));
+    try block_list.append(graph.allocator, block_idx);
 }
 
 fn appendForwardBlockRemovingOneById(
@@ -84,7 +89,10 @@ fn appendForwardBlockRemovingOneById(
 
     for (0..live) |slot| {
         if (old_block.edges[slot].destination != destination_idx or old_ids.ids[slot] != edge_id) continue;
-        if (live == 1) return true;
+        if (live == 1) {
+            try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
+            return true;
+        }
 
         const new_block_idx = try scratch.allocBlock(graph, .fwd);
         const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .fwd);
@@ -98,10 +106,11 @@ fn appendForwardBlockRemovingOneById(
         }
         new_block.mask = constants.denseMask(write);
         try block_list.append(graph.allocator, new_block_idx);
+        try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
         return true;
     }
 
-    try appendClonedForwardBlock(graph, scratch, block_list, block_idx);
+    try appendSharedForwardBlock(graph, block_list, block_idx);
     return false;
 }
 
@@ -111,7 +120,7 @@ pub fn rebuildForwardRemoveAll(
     destination_idx: u32,
     scratch: *common.MutationScratch,
 ) !rebuild_common.ForwardRemovalResult {
-    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveAll(graph, published_side, destination_idx);
+    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveAll(graph, published_side, destination_idx, scratch);
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
@@ -127,7 +136,7 @@ pub fn rebuildForwardRemoveOneById(
     edge_id: u32,
     scratch: *common.MutationScratch,
 ) !?types.SideAdj {
-    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveOneById(graph, published_side, destination_idx, edge_id);
+    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveOneById(graph, published_side, destination_idx, edge_id, scratch);
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
@@ -146,7 +155,7 @@ pub fn rebuildForwardRemoveOneById(
                 ctx.removed_target_edge.* = try appendForwardBlockRemovingOneById(@constCast(inner_graph), ctx.scratch, ctx.block_list, block_idx, ctx.destination_idx, ctx.edge_id);
                 return;
             }
-            try appendClonedForwardBlock(@constCast(inner_graph), ctx.scratch, ctx.block_list, block_idx);
+            try appendSharedForwardBlock(@constCast(inner_graph), ctx.block_list, block_idx);
         }
     }.callback);
 

@@ -1,3 +1,4 @@
+const adjacency = @import("../../../adjacency/mod.zig");
 const graph_core = @import("../../../core/graph_core.zig");
 const types = @import("../../../core/types.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
@@ -22,6 +23,17 @@ fn findReverseMatchForSingleRemoval(
             }
         }
         return error.CorruptGraph;
+    }
+
+    // Reverse entries are bare source ids, so any matching entry is
+    // interchangeable. Prefer a match in the tail block: recently added
+    // edges live there and the single-removal fast path requires tail
+    // locality on multi-block sides.
+    if (adjacency.tailBlockIndexSide(graph, &remove_state.destination_pub)) |tail_block_idx| {
+        const tail_block = page_ops.edgeBlockAtConst(graph, tail_block_idx, .rev);
+        if (adjacency.searchInBlock(types.EdgeBlockRev, tail_block, source.index)) |slot| {
+            return .{ .block_idx = tail_block_idx, .slot = slot };
+        }
     }
 
     return common.findSlotInAdj(

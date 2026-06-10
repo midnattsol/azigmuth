@@ -190,9 +190,10 @@ pub const NodeAdj = extern struct {
 
 /// RCU double-buffer for adjacency headers, per side, with a single atomic
 /// publication word that selects both published side buffers and carries the
-/// public node flags plus exact logical degree per side.  Readers load one
+/// public node flags plus exact logical degree per side. Readers load one
 /// coherent node snapshot from `published_meta`, while writers on disjoint
-/// logical sides still publish with per-side claims and CAS.  Exactly 64 bytes.
+/// logical sides still publish with per-side claims and CAS. The current
+/// compatibility/staging layout measures 80 bytes.
 pub const NodeBuffer = extern struct {
     published_meta: std.atomic.Value(u64) = std.atomic.Value(u64).init(@bitCast(PublishedMeta{})),
 
