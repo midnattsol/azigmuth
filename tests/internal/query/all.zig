@@ -5,5 +5,6 @@ comptime {
     _ = @import("edge_metadata.zig");
     _ = @import("iterator_lifecycle.zig");
     _ = @import("iterator_materialize.zig");
+    _ = @import("wayfind.zig");
     _ = @import("tombstones.zig");
 }

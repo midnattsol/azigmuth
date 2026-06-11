@@ -47,7 +47,7 @@ pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.Side
 /// moment one publish flips the side index. The seqlock-style re-read of
 /// `published_meta` below is therefore mandatory: it guarantees the slots
 /// were not overwritten while being read, so the snapshot is never a torn
-/// mix of two published versions (RFC §2.5 reader rule).
+/// mix of two published versions (the seqlock reader rule).
 pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!LiveReadSnapshot {
     return captureNodeSnapshotImpl(graph, node, null);
 }

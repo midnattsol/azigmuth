@@ -1,9 +1,9 @@
 //! Batched edge insertion: one claim cycle, one source-side rebuild, and one
-//! publish per touched node instead of per edge. Follows RFC §5.2 discipline
-//! scaled to a batch: every fallible step (claims, duplicate checks, storage
-//! allocation, side construction) happens before the first publish; the
-//! publish loop itself cannot fail, so a mid-batch error never leaves the
-//! forward/reverse bijection broken.
+//! publish per touched node instead of per edge. Follows the single-edge
+//! discipline (mutation/edge/add.zig) scaled to a batch: every fallible step
+//! (claims, duplicate checks, storage allocation, side construction) happens
+//! before the first publish; the publish loop itself cannot fail, so a
+//! mid-batch error never leaves the forward/reverse bijection broken.
 
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
@@ -217,7 +217,7 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
 
-    // ── Phase A: everything fallible ─────────────────────────────────
+    // ── Everything fallible: allocate, validate, build ───────────────
 
     const batch = try graph.allocator.alloc(SortedInput, edges.len);
     defer graph.allocator.free(batch);
@@ -299,7 +299,7 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
         plan.new_side = try buildReverseSide(graph, source, plan.old_side, plan.added, &scratch);
     }
 
-    // ── Phase B: publish (infallible) ────────────────────────────────
+    // ── Publish (infallible from here on) ────────────────────────────
 
     scratch.disarm();
 

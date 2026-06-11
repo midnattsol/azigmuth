@@ -43,7 +43,7 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
     // allocated blocks, but fresh blocks from the retired/free stack
     // are not guaranteed contiguous.  Non-contiguous fresh blocks
     // create EdgeBlockGroup chains, which trigger needs_repair via the
-    // run fragmentation bound (RFC §3.2).
+    // run fragmentation bound (constants.MAX_GROUPS_PER_NODE).
     // This is a genuine design limitation: repair rebuilds do not
     // (currently) compact blocks into a physically contiguous range.
 }

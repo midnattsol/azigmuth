@@ -178,7 +178,7 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
             continue;
         }
 
-        // Seqlock compose (RFC §2.5 reader rule).
+        // Seqlock compose — same reader rule as live_read_common.captureNodeSnapshot.
         var side: types.SideAdj = undefined;
         var removed: bool = undefined;
         var check_removed: bool = undefined;

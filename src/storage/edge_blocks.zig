@@ -1,4 +1,4 @@
-//! Accessor layer for edge-block payloads (DESIGN §5.3): traversal, search,
+//! Accessor layer for edge-block payloads: traversal, search,
 //! mutation, repair, and validation go through these functions instead of
 //! addressing block fields directly, so the in-block layout can evolve (SoA,
 //! compression, live-count sidecars) without touching the engine logic.

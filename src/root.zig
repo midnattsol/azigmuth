@@ -70,7 +70,7 @@ pub const Violation = graph.Violation;
 pub const Context = @import("algorithms/context.zig").Context;
 pub const CancelToken = @import("algorithms/context.zig").CancelToken;
 
-// ── Property columns (RFC §properties) ────────────────────────────────────
+// ── Property columns ──────────────────────────────────────────────────
 // Caller-owned comptime-typed columnar stores indexed by the stable ids the
 // engine exposes: `EdgeRef.property_row` / `NodeId.index`.
 pub const PropertyColumn = @import("properties.zig").PropertyColumn;

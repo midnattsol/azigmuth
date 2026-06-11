@@ -1,4 +1,4 @@
-//! Caller-owned columnar property stores (RFC §properties).
+//! Caller-owned columnar property stores.
 //!
 //! The engine assigns every edge a stable property row id when
 //! `GraphOptions.edge_properties` is enabled (`EdgeRef.property_row`,

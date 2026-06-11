@@ -474,7 +474,7 @@ test "validation: detects predecessor with tombstone but missing needs_repair_fw
 
     // Manually clear the needs_repair_fwd flag on source while the tombstoned
     // forward reference to target still persists in source's blocks.
-    // RFC §3.2 & §6.3: a live predecessor with a tombstoned forward ref MUST
+    // Invariant: a live predecessor with a tombstoned forward ref MUST
     // have needs_repair_fwd set.  Clearing it creates a hidden invariant violation.
     var source_node = try graph.nodeAt(source);
     {

@@ -244,8 +244,8 @@ test "concurrent: removeNode on adjacent endpoints does not double-decrement edg
     }
 }
 
-test "concurrent: removeNode predecessor degree update does not require forward claim (Phase 2)" {
-    // RFC Phase 2 §concurrency note (RFC.md:871-876): removeNode must publish
+test "concurrent: removeNode predecessor degree update does not require forward claim" {
+    // removeNode must publish
     // predecessor degree updates via CAS on published_meta WITHOUT claiming
     // fwd_claim.  The CAS helper (publishMetaFwdUpdated) provides this.
     // This test verifies that removeNode tolerates an unrelated forward writer

@@ -23,7 +23,7 @@ pub fn buildSideFromBlockList(
 }
 
 /// Returns whether the candidate block list would publish a non-tail block
-/// below the hard occupancy bound (RFC §3.6). Resolved by the synchronous
+/// below the hard occupancy bound (constants.MIN_OCCUPANCY). Resolved by the synchronous
 /// in-call dense repack.
 pub fn blockListNeedsRepack(
     graph: *const graph_core.GraphCore,
@@ -72,7 +72,7 @@ fn mergeWindowIntoFreshSpan(
     }
 }
 
-/// Resolves a run-bound overflow (RFC §3.2/§5.1a) with block-level copies
+/// Resolves a run-bound overflow (more than constants.MAX_GROUPS_PER_NODE runs) with block-level copies
 /// only — no per-entry re-sort. A lightly fragmented list (the scattered
 /// single-removal case: one extra run) merges just the cheapest adjacent run
 /// pair; a heavily fragmented one (e.g. a repair rebuild fed from a scattered
@@ -129,7 +129,7 @@ fn repackEntryLessThan(_: void, lhs: RepackEntry, rhs: RepackEntry) bool {
     return lhs.edge_id < rhs.edge_id;
 }
 
-/// Synchronous in-call repair (allowed by RFC §3.6): repacks the candidate
+/// Synchronous in-call repair: repacks the candidate
 /// block list into a fresh contiguous dense span so that no non-tail block is
 /// published below the hard occupancy bound. Superseded shared blocks are
 /// marked for retirement; superseded fresh blocks return to the free stack.

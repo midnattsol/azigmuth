@@ -39,6 +39,7 @@ pub const remove_rebuild_common_mod = @import("mutation/edge/remove/rebuild/comm
 pub const node_access_mod = @import("core/node_access.zig");
 pub const radix_directory_mod = @import("storage/radix_directory.zig");
 pub const persistence_mod = @import("storage/persistence.zig");
+pub const wayfind_mod = @import("query/wayfind.zig");
 pub const adjacency_runs_mod = @import("adjacency/runs.zig");
 pub const algorithms_context_mod = @import("algorithms/context.zig");
 

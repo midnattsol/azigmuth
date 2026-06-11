@@ -422,7 +422,7 @@ test "mutation grouped: removeEdge repacks in-call when COW split exceeds MAX_GR
     // forces a COW replacement. The new block lands at index 1 (LIFO from
     // the free stack), which would break contiguity of the [2..4] run and
     // push the side past MAX_GROUPS_PER_NODE. The removal performs the
-    // synchronous in-call dense repack (RFC §5.1a/§3.6) and succeeds
+    // synchronous in-call dense repack and succeeds
     // instead of bouncing RepairRequired to the caller.
     try testing.expect(try graph.removeEdge(source, .{ .index = 97 }));
 

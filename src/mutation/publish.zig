@@ -75,7 +75,7 @@ pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
 
 /// Meta-only delta: adjusts the published degree and repair flag via CAS
 /// WITHOUT copying staging or flipping the side index. Safe without the side
-/// claim because no side storage changes (RFC §5.3 carveout).
+/// claim because no side storage changes.
 pub fn publishMetaFwdDeltaNoFlip(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, needs_repair_fwd: bool, delta: i23) types.PublishedMeta {
     var expected = node_meta.loadPublishedMeta();
     while (true) {

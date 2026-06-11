@@ -47,7 +47,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // Forward-degree decrements use the meta-only CAS helper
     // (`publishMetaFwdDeltaUpdated`) which does NOT require `fwd_claim` on the
     // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
-    // (RFC §concurrency note).
+    // on its own.
     const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
 
     // Edge accounting happens at publish time: a related endpoint that was

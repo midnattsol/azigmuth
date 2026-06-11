@@ -35,7 +35,7 @@ test "repair debt: repairBudgeted repairs without implicit reclaim" {
     _ = try publish.ensureForwardBlockLayout(&graph, source);
     _ = try graph.removeNode(destination);
 
-    // Clear any retired memory from the removeNode phase so the assertion
+    // Clear any retired memory from removeNode so the assertion
     // below only observes the explicit repair pass.
     graph.reclaimRetired();
 

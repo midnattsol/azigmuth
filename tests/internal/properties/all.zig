@@ -1,4 +1,4 @@
-//! Edge-property rows (RFC Phase 7): stable ids per edge, lifecycle through
+//! Edge-property rows: stable ids per edge, lifecycle through
 //! COW/repair/removal, caller-owned columns, and CSR export alignment.
 
 const std = @import("std");

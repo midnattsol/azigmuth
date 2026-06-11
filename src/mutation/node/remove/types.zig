@@ -7,7 +7,7 @@ pub const RelatedNode = struct {
     node_index: u32,
     node_meta: *node_meta.NodeMeta,
     /// Destinations hold their reverse claim so adjacent removeNode calls
-    /// serialize; predecessor forward updates are claim-free per RFC §5.3.
+    /// serialize; predecessor forward updates are claim-free (meta-only CAS).
     claims: common.ClaimedNodeSides,
     fwd_degree_delta: u22,
     rev_degree_delta: u22,
