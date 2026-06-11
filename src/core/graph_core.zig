@@ -29,9 +29,8 @@ pub const GraphCore = struct {
     /// pair are allowed, and `EdgeId` disambiguates them.
     multigraph_enabled: bool = false,
 
-    /// Atomically-published node pages for lock-free node lookup during
-    /// concurrent reads and `addNode` growth.
-    node_pages_pages: NodePageDirectory = .{},
+    /// Atomically-published node metadata pages for lock-free node lookup
+    /// during concurrent reads and `addNode` growth.
     node_meta_pages: NodePageDirectory = .{},
     node_published_pages: NodePageDirectory = .{},
     node_hot_pages: NodePageDirectory = .{},
@@ -62,6 +61,11 @@ pub const GraphCore = struct {
     /// Per-block metadata pages for lock-free retired/free stacks.
     edge_blocks_fwd_meta_pages: EdgeBlockPageDirectory = .{},
     edge_blocks_rev_meta_pages: EdgeBlockPageDirectory = .{},
+
+    /// Per-block live-count sidecar pages (u8 each): one 64-byte page covers
+    /// a whole block page, keeping counts dense in cache during scans.
+    edge_blocks_fwd_live_pages: EdgeBlockPageDirectory = .{},
+    edge_blocks_rev_live_pages: EdgeBlockPageDirectory = .{},
 
     /// Tagged stack heads: low 32 bits are block index, high 32 bits are tag.
     free_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),

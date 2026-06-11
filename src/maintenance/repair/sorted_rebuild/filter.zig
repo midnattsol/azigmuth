@@ -58,8 +58,7 @@ fn scanBlock(
     skip_source: ?u32,
 ) !void {
     scan.block_count += 1;
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-    const live: u7 = @intCast(@popCount(block.mask));
+    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, side));
     for (0..live) |slot_idx| {
         if (keepSlot(graph, block_idx, @intCast(slot_idx), side, skip_source)) {
             scan.live_after += 1;
@@ -88,8 +87,7 @@ fn pushBlock(
     comptime side: adjacency.AdjSide,
     skip_source: ?u32,
 ) !void {
-    const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-    const live: u7 = @intCast(@popCount(block.mask));
+    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, side));
     const pos = firstPos(graph, block_idx, live, side, skip_source) orelse return;
 
     rebuild_heap.heapPush(heap, .{

@@ -11,7 +11,7 @@ pub const SnapshotSide = snapshot_capture.SnapshotSide;
 
 pub const CapturedGraphView = struct {
     core: *const graph_core.GraphCore,
-    node_state: []u32,
+    node_state: []u8,
     fwd_first_block: []u32,
     fwd_block_count: []u32,
     fwd_group_count: []u16,

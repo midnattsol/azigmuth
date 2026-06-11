@@ -17,14 +17,14 @@ pub fn insertForwardEdge(
 ) !void {
     const forward_block = page_ops.edgeBlockAt(graph, block_idx, .fwd);
     const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx) else undefined;
-    const live = @popCount(forward_block.mask);
+    const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
     var insertion_point: u7 = 0;
     var search_end: u7 = @intCast(live);
     while (insertion_point < search_end) {
         const probe: u7 = insertion_point + (search_end - insertion_point) / 2;
-        if (forward_block.edges[probe].destination < destination.index) {
+        if (forward_block.destinations[probe] < destination.index) {
             insertion_point = probe + 1;
-        } else if (forward_block.edges[probe].destination == destination.index) {
+        } else if (forward_block.destinations[probe] == destination.index) {
             if (!graph.multigraph_enabled) return error.EdgeAlreadyExists;
             if (graph.multigraph_enabled and id_block.ids[probe] < edge_id) {
                 insertion_point = probe + 1;
@@ -37,18 +37,22 @@ pub fn insertForwardEdge(
     }
     var shift: u7 = @intCast(live);
     while (shift > insertion_point) {
-        forward_block.edges[shift] = forward_block.edges[shift - 1];
+        forward_block.destinations[shift] = forward_block.destinations[shift - 1];
+        forward_block.relations[shift] = forward_block.relations[shift - 1];
+        forward_block.flags[shift] = forward_block.flags[shift - 1];
         if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift - 1];
         shift -= 1;
     }
-    forward_block.edges[insertion_point] = types.Edge{ .destination = destination.index, .relation = relation, .flags = @bitCast(flags) };
+    forward_block.destinations[insertion_point] = destination.index;
+    forward_block.relations[insertion_point] = relation;
+    forward_block.flags[insertion_point] = @bitCast((flags));
     if (graph.multigraph_enabled) id_block.ids[insertion_point] = edge_id;
-    forward_block.mask = @import("../../../core/constants.zig").denseMask(@intCast(live + 1));
+    page_ops.setBlockLiveCount(graph, block_idx, .fwd, @intCast(live + 1));
 }
 
 pub fn insertReverseEdge(graph: *graph_core.GraphCore, block_idx: u32, source: types.NodeId) void {
     const reverse_block = page_ops.edgeBlockAt(graph, block_idx, .rev);
-    const live = @popCount(reverse_block.mask);
+    const live = page_ops.blockLiveCount(graph, block_idx, .rev);
     var insertion_point: u7 = 0;
     var search_end: u7 = @intCast(live);
     while (insertion_point < search_end) {
@@ -65,7 +69,7 @@ pub fn insertReverseEdge(graph: *graph_core.GraphCore, block_idx: u32, source: t
         shift -= 1;
     }
     reverse_block.sources[insertion_point] = source.index;
-    reverse_block.mask = @import("../../../core/constants.zig").denseMask(@intCast(live + 1));
+    page_ops.setBlockLiveCount(graph, block_idx, .rev, @intCast(live + 1));
 }
 
 pub fn canUseTinyFwdSide(graph: *const graph_core.GraphCore, side_adj: types.SideAdj) bool {
@@ -121,10 +125,12 @@ pub fn buildForwardTinyOrPromoted(
     const slot = page_ops.tinyFwdAtConst(graph, source_side.first_block);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
-        block.edges[entry_idx] = .{ .destination = entry.destination, .relation = entry.relation, .flags = entry.flags };
+        block.destinations[entry_idx] = entry.destination;
+        block.relations[entry_idx] = entry.relation;
+        block.flags[entry_idx] = @bitCast(entry.flags);
         if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx).ids[entry_idx] = entry.edge_id;
     }
-    block.mask = @import("../../../core/constants.zig").denseMask(@intCast(count));
+    page_ops.setBlockLiveCount(graph, block_idx, .fwd, @intCast(count));
     try insertForwardEdge(graph, block_idx, destination, relation, raw_flags, edge_id);
     return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
 }
@@ -156,7 +162,7 @@ pub fn buildReverseTinyOrPromoted(
     block.* = std.mem.zeroes(types.EdgeBlockRev);
     const slot = page_ops.tinyRevAtConst(graph, destination_side.first_block);
     for (0..count) |entry_idx| block.sources[entry_idx] = slot.sources[entry_idx];
-    block.mask = @import("../../../core/constants.zig").denseMask(@intCast(count));
+    page_ops.setBlockLiveCount(graph, block_idx, .rev, @intCast(count));
     insertReverseEdge(graph, block_idx, source);
     return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
 }

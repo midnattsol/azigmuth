@@ -12,6 +12,7 @@ const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
 const node_published = @import("../storage/node/published.zig");
+const node_meta_mod = @import("../storage/node/meta.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
@@ -25,7 +26,8 @@ pub const OutEdgeIterator = struct {
     blocks_remaining: u32,
     current_group_index: u32,
 
-    current_mask: u64,
+    current_slot: u7 = 0,
+    current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
@@ -35,7 +37,7 @@ pub const OutEdgeIterator = struct {
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
-    cached_node_page: ?[]const types.NodeBuffer = null,
+    cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
     check_removed_destinations: bool,
 
     reader_active: bool,
@@ -71,25 +73,24 @@ pub const OutEdgeIterator = struct {
 
     fn nextBlockOutEdge(self: *OutEdgeIterator) ?types.EdgeRef {
         while (true) {
-            while (self.current_mask == 0) {
-                if (!side_traversal.loadNextOutEdgeMask(self, self.core)) return null;
+            while (self.current_slot >= self.current_live) {
+                if (!side_traversal.loadNextOutEdgeSpan(self, self.core)) return null;
             }
 
-            const bit_index: u6 = @intCast(@ctz(self.current_mask));
-            self.current_mask &= self.current_mask - 1;
+            const slot = self.current_slot;
+            self.current_slot += 1;
 
             const fwd_block = self.cached_fwd_block.?;
             const fwd_ids = self.cached_fwd_ids.?;
-            const edge = fwd_block.edges[bit_index];
-            const destination = types.NodeId{ .index = edge.destination };
+            const destination_idx = fwd_block.destinations[slot];
 
-            if (self.destinationRemoved(destination.index)) continue;
+            if (self.destinationRemoved(destination_idx)) continue;
 
             return types.EdgeRef{
-                .id = .{ .local = fwd_ids.ids[bit_index] },
-                .destination = edge.destination,
-                .relation = edge.relation,
-                .flags = @bitCast(edge.flags),
+                .id = .{ .local = fwd_ids.ids[slot] },
+                .destination = destination_idx,
+                .relation = fwd_block.relations[slot],
+                .flags = @bitCast(fwd_block.flags[slot]),
             };
         }
     }
@@ -127,7 +128,6 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .current_block_index = cursor_init.traversal.current_block_index,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_index = cursor_init.traversal.current_group_index,
-        .current_mask = 0,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,

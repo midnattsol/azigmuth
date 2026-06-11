@@ -17,7 +17,7 @@ fn publishReverseSources(graph: *graph_mod.Graph, source_idx: u32, first_destina
     for (0..count) |offset| {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source_idx;
-        page_ops.edgeBlockAt(&graph.graph, block, .rev).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
         const buf = try graph.nodeAt(.{ .index = first_destination + @as(u32, @intCast(offset)) });
         publish.clearPublishedSides(buf);
         publish.publishedRevSide(buf).first_block = block;
@@ -36,7 +36,7 @@ test "invalid shape: block_count == 1 with group_count > 1 fails validate" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
 
     page_ops.groupAt(&graph.graph, g0).* = .{
         .start = block, .count = 1, .next = g1,
@@ -70,7 +70,7 @@ test "shape: grouped single-block adjacency is accepted as valid layout" {
     const block = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
     page_ops.groupAt(&graph.graph, group).* = .{
         .start = block, .count = 1, .next = constants.END_OF_CHAIN,
     };
@@ -105,12 +105,14 @@ test "shape: grouped contiguous run layout is accepted without repair flag" {
     const b2 = try graph.allocBlockFwd();
     const g0 = try graph.allocGroup();
 
-    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, b0, .fwd).edges[i] = .{ .destination = @intCast(i + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(48);
-    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, b1, .fwd).edges[i] = .{ .destination = @intCast(i + 49), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(48);
-    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).edges[0] = .{ .destination = 97, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).mask = constants.denseMask(1);
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[i] = @intCast(i + 1);
+    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, @intCast(48));
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[i] = @intCast(i + 49);
+    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(48));
+    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).destinations[0] = 97;
+    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, b2, .fwd).flags[0] = 0;
+    page_ops.setBlockLiveCount(&graph.graph, b2, .fwd, @intCast(1));
 
     try publishReverseSources(&graph, node.index, 1, 97);
 
@@ -146,7 +148,7 @@ test "invalid shape: too many groups without needs_repair fails validate" {
 
     var blocks: [6]u32 = undefined;
     for (0..blocks.len) |i| blocks[i] = try graph.allocBlockFwd();
-    for (blocks[0..]) |b| page_ops.edgeBlockAt(&graph.graph, b, .fwd).mask = 0;
+    for (blocks[0..]) |b| page_ops.setBlockLiveCount(&graph.graph, b, .fwd, 0);
 
     var groups: [6]u32 = undefined;
     for (0..groups.len) |i| groups[i] = try graph.allocGroup();
@@ -187,12 +189,14 @@ test "shape: short non-tail run without needs_repair is accepted as valid layout
     const short_run_group = try graph.allocGroup();
     const tail_group = try graph.allocGroup();
 
-    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).edges[i] = .{ .destination = @intCast(i + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).mask = constants.denseMask(48);
-    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, middle_block, .fwd).edges[i] = .{ .destination = @intCast(i + 49), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    page_ops.edgeBlockAt(&graph.graph, middle_block, .fwd).mask = constants.denseMask(48);
-    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).edges[0] = .{ .destination = 97, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).mask = constants.denseMask(1);
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).destinations[i] = @intCast(i + 1);
+    page_ops.setBlockLiveCount(&graph.graph, head_block, .fwd, @intCast(48));
+    for (0..48) |i| page_ops.edgeBlockAt(&graph.graph, middle_block, .fwd).destinations[i] = @intCast(i + 49);
+    page_ops.setBlockLiveCount(&graph.graph, middle_block, .fwd, @intCast(48));
+    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).destinations[0] = 97;
+    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).flags[0] = 0;
+    page_ops.setBlockLiveCount(&graph.graph, tail_block, .fwd, @intCast(1));
 
     try publishReverseSources(&graph, node.index, 1, 97);
 

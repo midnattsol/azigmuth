@@ -18,16 +18,18 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
 fn fillForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
     for (0..count) |edge_index| {
-        block.edges[edge_index] = .{ .destination = first_destination + @as(u32, @intCast(edge_index)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        block.destinations[edge_index] = first_destination + @as(u32, @intCast(edge_index));
+        block.relations[edge_index] = 0;
+        block.flags[edge_index] = 0;
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
     const block_index = try graph.allocBlockRev();
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
     block.sources[0] = source_index;
-    block.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(1));
 
     const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     publish.publishedRevSide(node_buffer).first_block = block_index;

@@ -55,10 +55,9 @@ fn validateForwardView(
 fn validateReverseView(
     graph: *graph_core.GraphCore,
     node: types.NodeId,
-    source_node: *types.NodeBuffer,
     scan: *const remove_types.RemovalScan,
 ) !void {
-    const source_meta = node_access.loadPublishedMeta(source_node);
+    const source_meta = node_access.loadPublishedMetaAtConst(graph, node);
     const source_degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, source_meta);
     const predecessor_reader = try rcu.readerEnter(graph);
     defer rcu.readerExit(graph, predecessor_reader);
@@ -135,10 +134,9 @@ fn validateReverseView(
 pub fn validateNodeRemovalNeighborhood(
     graph: *graph_core.GraphCore,
     node: types.NodeId,
-    source_node: *types.NodeBuffer,
     scan: *const remove_types.RemovalScan,
 ) !void {
     try validateForwardDestinations(graph, scan.forward_destinations.items);
     try validateForwardView(graph, node, scan);
-    try validateReverseView(graph, node, source_node, scan);
+    try validateReverseView(graph, node, scan);
 }

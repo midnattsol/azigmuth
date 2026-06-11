@@ -89,22 +89,20 @@ pub fn assessPublishedRepairDebt(
 
 pub fn refreshPublishedRepairDebt(
     graph: *graph_core.GraphCore,
-    node: *types.NodeBuffer,
     node_idx: u32,
     comptime side: adjacency.AdjSide,
 ) RepairDebtAssessment {
     const published_adj = node_access.publishedAdjAtConst(graph, .{ .index = node_idx });
     const assessment = assessPublishedRepairDebt(graph, published_adj, side);
     const node_meta = page_ops.nodeMetaAt(graph, .{ .index = node_idx });
-    mechanics.writePublishedRepairFlag(node_meta, node, side, assessment == .repair);
+    mechanics.writePublishedRepairFlag(node_meta, side, assessment == .repair);
     return assessment;
 }
 
 pub fn updateRepairDebtSide(
     graph: *graph_core.GraphCore,
-    node: *types.NodeBuffer,
     node_idx: u32,
     comptime side: adjacency.AdjSide,
 ) RepairDebtAssessment {
-    return refreshPublishedRepairDebt(graph, node, node_idx, side);
+    return refreshPublishedRepairDebt(graph, node_idx, side);
 }

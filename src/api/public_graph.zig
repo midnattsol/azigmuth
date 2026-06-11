@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const internal = @import("../graph.zig");
+const public_session = @import("public_session.zig");
 const public_snapshot = @import("public_snapshot.zig");
 
 pub const Graph = opaque {
@@ -109,7 +110,14 @@ pub const Graph = opaque {
         return @ptrCast(snapshot_handle);
     }
 
-    pub fn repairNode(self: *Graph, node: internal.NodeId) internal.GraphError!void {
+    /// Opens a cheap point-read session over the live published state.
+    /// No O(node_count) capture happens; reads may observe newer published
+    /// states as writers progress. Use `snapshot` for a fixed view.
+    pub fn readSession(self: *const Graph, allocator: std.mem.Allocator) internal.GraphError!*public_session.ReadSession {
+        return public_session.create(self.innerConst(), allocator);
+    }
+
+    pub fn repairNode(self: *Graph, node: internal.NodeId) internal.GraphError!internal.RepairNodeSummary {
         return self.inner().repairNode(node);
     }
 
@@ -125,8 +133,18 @@ pub const Graph = opaque {
         return self.innerConst().debtStats();
     }
 
+    pub fn storageStats(self: *const Graph) internal.GraphError!internal.StorageStats {
+        return self.innerConst().storageStats();
+    }
+
     pub fn reclaimRetired(self: *Graph) void {
         return self.inner().reclaimRetired();
+    }
+
+    /// Batched insertion from one source: one claim cycle and one publish
+    /// per touched node. All-or-nothing — on error the graph is unchanged.
+    pub fn addEdges(self: *Graph, source: internal.NodeId, edges: []const internal.EdgeInput) internal.GraphError!usize {
+        return self.inner().addEdges(source, edges);
     }
 
     pub fn addEdge(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!void {

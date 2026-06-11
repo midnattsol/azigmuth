@@ -63,7 +63,7 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
             },
             3 => {
                 const idx: u32 = @intCast((state >> 12) % node_limit);
-                _ = graph.repairNode(.{ .index = idx }) catch {};
+                _ = graph.repairNode(.{ .index = idx }) catch graphz.RepairNodeSummary{};
             },
             4 => {
                 _ = graph.repairBudgeted(2) catch {};

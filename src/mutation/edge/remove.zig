@@ -26,7 +26,7 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
             if (remove_common.usesTinyPath(&remove_state)) {
                 break :blk try remove_tiny.removeSingleTinyCompatible(graph, &endpoints, remove_state, source, destination, probe.found.?);
             }
-            break :blk try remove_single.removeSingleLocated(graph, &endpoints, remove_state, source, destination, probe.found.?, false);
+            break :blk try remove_single.removeSingleLocated(graph, &endpoints, remove_state, source, destination, probe.found.?, true);
         }
         break :blk try remove_bulk.removeBulkDestinationMatches(graph, &endpoints, remove_state, source, destination);
     } else blk: {
@@ -38,11 +38,12 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
             remove_state.source_pub.first_group,
             destination.index,
             .fwd,
+            endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta),
         ) orelse break :blk false;
         if (remove_common.usesTinyPath(&remove_state)) {
             break :blk try remove_tiny.removeSingleTinyCompatible(graph, &endpoints, remove_state, source, destination, forward_found);
         }
-        break :blk try remove_single.removeSingleLocated(graph, &endpoints, remove_state, source, destination, forward_found, false);
+        break :blk try remove_single.removeSingleLocated(graph, &endpoints, remove_state, source, destination, forward_found, true);
     };
     if (!removed) return false;
 
@@ -89,7 +90,7 @@ pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, dest
         destination.index,
         edge_id.local,
     ) orelse return false;
-    const removed = try remove_single.removeSingleLocated(graph, &endpoints, remove_state, source, destination, forward_found, false);
+    const removed = try remove_single.removeSingleLocated(graph, &endpoints, remove_state, source, destination, forward_found, true);
     if (!removed) return false;
 
     rcu.bumpEpoch(graph);

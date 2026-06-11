@@ -82,6 +82,9 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
+    // Wait for the writer's first in-window mutation before traversing, so
+    // the overlap assertion below cannot fail on scheduling delays.
+    while (ctx.created_during_traversal.load(.acquire) == 0) std.atomic.spinLoopHint();
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.bfs(setup.root, .{ .allocator = testing.allocator });
@@ -107,6 +110,9 @@ test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
+    // Wait for the writer's first in-window mutation before traversing, so
+    // the overlap assertion below cannot fail on scheduling delays.
+    while (ctx.created_during_traversal.load(.acquire) == 0) std.atomic.spinLoopHint();
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.dfs(setup.root, .{ .allocator = testing.allocator });
@@ -132,6 +138,9 @@ test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
+    // Wait for the writer's first in-window mutation before traversing, so
+    // the overlap assertion below cannot fail on scheduling delays.
+    while (ctx.created_during_traversal.load(.acquire) == 0) std.atomic.spinLoopHint();
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const has_cycle = try snapshot.hasCycle(.{ .allocator = testing.allocator });
@@ -155,13 +164,16 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
+    // Wait for the removal to land inside the window before traversing, so
+    // the overlap assertion below cannot fail on scheduling delays. The
+    // traversal runs on the sealed snapshot either way.
+    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.bfs(setup.root, .{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
 
-    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
     try testing.expect(ctx.attempted_during_traversal.load(.acquire));
     try testing.expect(order.len >= 1);
 }
@@ -179,13 +191,16 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
+    // Wait for the removal to land inside the window before traversing, so
+    // the overlap assertion below cannot fail on scheduling delays. The
+    // traversal runs on the sealed snapshot either way.
+    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.dfs(setup.root, .{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
     defer testing.allocator.free(order);
 
-    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
     try testing.expect(ctx.attempted_during_traversal.load(.acquire));
     try testing.expect(order.len >= 1);
 }
@@ -203,12 +218,15 @@ test "algorithms concurrent: cycle tolerates node removed during traversal" {
 
     start.store(true, .release);
     traversal_active.store(true, .release);
+    // Wait for the removal to land inside the window before traversing, so
+    // the overlap assertion below cannot fail on scheduling delays. The
+    // traversal runs on the sealed snapshot either way.
+    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const has_cycle = try snapshot.hasCycle(.{ .allocator = testing.allocator });
     traversal_active.store(false, .release);
 
-    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
     try testing.expect(ctx.attempted_during_traversal.load(.acquire));
     try testing.expect(!has_cycle);
 }

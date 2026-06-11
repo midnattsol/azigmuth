@@ -311,7 +311,7 @@ test "multigraph: repair preserves edge IDs" {
         try graph.addEdge(source, targets[target_idx], @intCast(target_idx), .{});
     }
     const duplicate_edge_id = try graph.addEdgeWithId(source, targets[0], 99, .{});
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
     try graph.validate();
     try testing.expect(try graph.removeEdgeWithId(source, targets[0], duplicate_edge_id));
 }
@@ -331,7 +331,7 @@ test "multigraph: repair preserves multiblock duplicate EdgeIds" {
     try graph.addEdge(source, tombstone_target, 0, .{});
 
     _ = try graph.removeNode(tombstone_target);
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
     try graph.validate();
 
     // ids[65] lives in the tail block after repair, and the reverse match is
@@ -358,7 +358,7 @@ test "multigraph: repair keeps duplicate outEdges ordered by EdgeId across block
     try graph.addEdge(source, tombstone_target, 0, .{});
 
     _ = try graph.removeNode(tombstone_target);
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
 
     var out_edge_iterator = try snapshot_support.outEdges(graph, source, testing.allocator);
     defer out_edge_iterator.deinit();

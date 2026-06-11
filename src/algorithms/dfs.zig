@@ -1,4 +1,5 @@
 const std = @import("std");
+const context_mod = @import("context.zig");
 const snapshot_iterators = @import("../query/snapshot/iterators.zig");
 const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
@@ -16,8 +17,10 @@ fn initFrameLive(view: *const snapshot_view.CapturedGraphView, node_idx: u32) Df
 }
 
 /// Returns nodes in depth-first order starting from `start` over a fixed
-/// captured graph view.
-pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, allocator: std.mem.Allocator) types.GraphError![]types.NodeId {
+/// captured graph view. Honors `ctx.cancel_token` cooperatively: cancellation
+/// is observed once per stack step and aborts with `error.Cancelled`.
+pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.NodeId, ctx: context_mod.Context) types.GraphError![]types.NodeId {
+    const allocator = ctx.allocator;
     const node_count = view.nodeCount();
     try view.ensureLiveStart(start);
 
@@ -36,6 +39,9 @@ pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
     }
 
     while (stack.items.len > 0) {
+        if (ctx.cancel_token) |token| {
+            if (token.isCancelled()) return error.Cancelled;
+        }
         const current = &stack.items[stack.items.len - 1];
 
         var pushed = false;

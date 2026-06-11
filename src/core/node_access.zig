@@ -5,26 +5,6 @@ const node_meta_mod = @import("../storage/node/meta.zig");
 const node_published_mod = @import("../storage/node/published.zig");
 const types = @import("types.zig");
 
-pub fn nodeAt(graph: *graph_core.GraphCore, node: types.NodeId) *types.NodeBuffer {
-    return page_ops.nodeAt(graph, node);
-}
-
-pub fn nodeAtConst(graph: *const graph_core.GraphCore, node: types.NodeId) *const types.NodeBuffer {
-    return page_ops.nodeAtConst(graph, node);
-}
-
-pub fn ensureNodeAt(graph: *graph_core.GraphCore, node: types.NodeId) !*types.NodeBuffer {
-    return page_ops.ensureNodeAt(graph, node);
-}
-
-fn nodeMetaOf(node_buffer: *const types.NodeBuffer) *const node_meta_mod.NodeMeta {
-    return @ptrCast(node_buffer);
-}
-
-fn nodeMetaOfMut(node_buffer: *types.NodeBuffer) *node_meta_mod.NodeMeta {
-    return @ptrCast(node_buffer);
-}
-
 pub fn nodePublishedAt(graph: *graph_core.GraphCore, node: types.NodeId) *node_published_mod.NodePublished {
     return page_ops.nodePublishedAt(graph, node);
 }
@@ -33,25 +13,8 @@ pub fn nodePublishedAtConst(graph: *const graph_core.GraphCore, node: types.Node
     return page_ops.nodePublishedAtConst(graph, node);
 }
 
-fn hasPublishedPage(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
-    const page_index = page_ops.pageOf(node.index, constants.NODES_PER_PAGE);
-    return graph.node_published_pages.load(page_index) != 0;
-}
-
-pub fn loadPublishedMeta(node_buffer: *const types.NodeBuffer) types.PublishedMeta {
-    return nodeMetaOf(node_buffer).loadPublishedMeta();
-}
-
 pub fn loadPublishedMetaAtConst(graph: *const graph_core.GraphCore, node: types.NodeId) types.PublishedMeta {
     return page_ops.nodeMetaAtConst(graph, node).loadPublishedMeta();
-}
-
-pub fn storePublishedMeta(node_buffer: *types.NodeBuffer, meta: types.PublishedMeta) void {
-    nodeMetaOfMut(node_buffer).storePublishedMeta(meta);
-}
-
-pub fn cmpxchgPublishedMeta(node_buffer: *types.NodeBuffer, expected: types.PublishedMeta, desired: types.PublishedMeta) ?types.PublishedMeta {
-    return nodeMetaOfMut(node_buffer).cmpxchgPublishedMeta(expected, desired);
 }
 
 fn composedPublishedAdjFromMeta(graph: *const graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) types.NodeAdj {
@@ -84,12 +47,12 @@ pub fn publishedAdjFromMetaAtConst(graph: *const graph_core.GraphCore, node: typ
 }
 
 pub fn publishedFwdFromMeta(graph: *const graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) types.SideAdj {
-    if (!hasPublishedPage(graph, node)) return nodeAtConst(graph, node).publishedFwdFromMeta(meta);
+    // addNode guarantees the published page exists for every published node,
+    // so reads go straight to the canonical pool with no compat branch.
     return page_ops.nodePublishedAtConst(graph, node).publishedFwdFromMeta(meta);
 }
 
 pub fn publishedRevFromMeta(graph: *const graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) types.SideAdj {
-    if (!hasPublishedPage(graph, node)) return nodeAtConst(graph, node).publishedRevFromMeta(meta);
     return page_ops.nodePublishedAtConst(graph, node).publishedRevFromMeta(meta);
 }
 
@@ -104,41 +67,39 @@ pub fn publishedRevDegreeFromMetaAtConst(graph: *const graph_core.GraphCore, nod
 }
 
 pub fn publishedFwdDegreeAtConst(graph: *const graph_core.GraphCore, node: types.NodeId) u32 {
-    const node_buffer = nodeAtConst(graph, node);
+    const node_meta = page_ops.nodeMetaAtConst(graph, node);
     while (true) {
-        const before = loadPublishedMeta(node_buffer);
+        const before = node_meta.loadPublishedMeta();
         const degree = publishedFwdDegreeFromMetaAtConst(graph, node, before);
-        const after = loadPublishedMeta(node_buffer);
+        const after = node_meta.loadPublishedMeta();
         if (@as(u64, @bitCast(before)) == @as(u64, @bitCast(after))) return degree;
     }
 }
 
 pub fn publishedRevDegreeAtConst(graph: *const graph_core.GraphCore, node: types.NodeId) u32 {
-    const node_buffer = nodeAtConst(graph, node);
+    const node_meta = page_ops.nodeMetaAtConst(graph, node);
     while (true) {
-        const before = loadPublishedMeta(node_buffer);
+        const before = node_meta.loadPublishedMeta();
         const degree = publishedRevDegreeFromMetaAtConst(graph, node, before);
-        const after = loadPublishedMeta(node_buffer);
+        const after = node_meta.loadPublishedMeta();
         if (@as(u64, @bitCast(before)) == @as(u64, @bitCast(after))) return degree;
     }
 }
 
 pub fn stagingFwd(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) *types.SideAdj {
-    return nodeAt(graph, node).stagingFwd(meta);
+    return nodePublishedAt(graph, node).stagingFwd(meta);
 }
 
 pub fn stagingRev(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) *types.SideAdj {
-    return nodeAt(graph, node).stagingRev(meta);
+    return nodePublishedAt(graph, node).stagingRev(meta);
 }
 
 pub fn copyPublishedToStagingFwd(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) void {
-    const published = publishedFwdFromMeta(graph, node, meta);
-    nodeAt(graph, node).stagingFwd(meta).* = published;
+    nodePublishedAt(graph, node).copyPublishedToStagingFwd(meta);
 }
 
 pub fn copyPublishedToStagingRev(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) void {
-    const published = publishedRevFromMeta(graph, node, meta);
-    nodeAt(graph, node).stagingRev(meta).* = published;
+    nodePublishedAt(graph, node).copyPublishedToStagingRev(meta);
 }
 
 pub fn writeStagingFwd(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta, side_adj: types.SideAdj) void {
@@ -149,16 +110,6 @@ pub fn writeStagingRev(graph: *graph_core.GraphCore, node: types.NodeId, meta: t
     stagingRev(graph, node, meta).* = side_adj;
 }
 
-pub fn syncStagingFwdToPublishedPool(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) void {
-    const published = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
-    published.stagingFwd(meta).* = nodeAt(graph, node).stagingFwd(meta).*;
-}
-
-pub fn syncStagingRevToPublishedPool(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta) void {
-    const published = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
-    published.stagingRev(meta).* = nodeAt(graph, node).stagingRev(meta).*;
-}
-
 pub fn resetPublishedSides(graph: *graph_core.GraphCore, node: types.NodeId) void {
     const published = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
     published.fwd[0] = .{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 };
@@ -167,23 +118,21 @@ pub fn resetPublishedSides(graph: *graph_core.GraphCore, node: types.NodeId) voi
     published.rev[1] = .{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 };
     published.fwd_degrees = [_]u32{0} ** 2;
     published.rev_degrees = [_]u32{0} ** 2;
-    const node_buffer = nodeAt(graph, node);
-    node_buffer.fwd_buffers[0] = published.fwd[0];
-    node_buffer.fwd_buffers[1] = published.fwd[1];
-    node_buffer.rev_buffers[0] = published.rev[0];
-    node_buffer.rev_buffers[1] = published.rev[1];
+    published.fwd_sorted = [_]u8{ 1, 1 };
+    published.rev_sorted = [_]u8{ 1, 1 };
 }
 
 pub fn setInitialPublishedFwdSide(graph: *graph_core.GraphCore, node: types.NodeId, side_adj: types.SideAdj) void {
     _ = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
+    // Builder freeze emits globally sorted sides into the initial slot.
     page_ops.nodePublishedAt(graph, node).fwd[0] = side_adj;
-    nodeAt(graph, node).fwd_buffers[0] = side_adj;
+    page_ops.nodePublishedAt(graph, node).fwd_sorted[0] = 1;
 }
 
 pub fn setInitialPublishedRevSide(graph: *graph_core.GraphCore, node: types.NodeId, side_adj: types.SideAdj) void {
     _ = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
     page_ops.nodePublishedAt(graph, node).rev[0] = side_adj;
-    nodeAt(graph, node).rev_buffers[0] = side_adj;
+    page_ops.nodePublishedAt(graph, node).rev_sorted[0] = 1;
 }
 
 pub fn setPublishedDegrees(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta, fwd_degree: u32, rev_degree: u32) void {

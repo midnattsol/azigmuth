@@ -42,7 +42,7 @@ fn appendCounterRegression(scan: *EdgeIdScan, next_id: u32) !void {
 
 fn scanForwardEdgeIds(
     graph: *const graph_core.GraphCore,
-    node_buffer: ?*const types.NodeBuffer,
+    check_edge_id_counter: bool,
     node_id: u32,
     adjacency: types.NodeAdj,
     allocator: ?std.mem.Allocator,
@@ -71,7 +71,7 @@ fn scanForwardEdgeIds(
         }
     }.callback);
 
-    if (node_buffer) |_| {
+    if (check_edge_id_counter) {
         const next_id = page_ops.nodeHotAtConst(graph, .{ .index = node_id }).loadNextLocalEdgeId();
         if (scan.max_seen >= next_id) try appendCounterRegression(&scan, next_id);
     }
@@ -97,7 +97,7 @@ fn edgeIdAppearsLater(
         for (common.firstBlock(adjacency, .fwd)..common.firstBlock(adjacency, .fwd) + common.blockCount(adjacency, .fwd)) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-            const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_idx, .fwd).mask);
+            const live_count = @min(page_ops.blockLiveCount(graph, block_idx, .fwd), 64);
             const slot_start: usize = if (block_idx == current_block_idx) current_slot + 1 else 0;
             for (slot_start..live_count) |slot| {
                 if (id_block.ids[slot] == edge_id) return true;
@@ -115,7 +115,7 @@ fn edgeIdAppearsLater(
         for (group.start..group.start + group.count) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-            const live_count = @popCount(page_ops.edgeBlockAtConst(graph, block_idx, .fwd).mask);
+            const live_count = @min(page_ops.blockLiveCount(graph, block_idx, .fwd), 64);
             const slot_start: usize = if (block_idx == current_block_idx) current_slot + 1 else 0;
             for (slot_start..live_count) |slot| {
                 if (id_block.ids[slot] == edge_id) return true;
@@ -130,10 +130,9 @@ pub fn appendForwardEdgeIdViolations(
     allocator: std.mem.Allocator,
     violations: *std.ArrayList(types.Violation),
     node_id: u32,
-    node_buffer: *const types.NodeBuffer,
     adjacency: types.NodeAdj,
 ) !void {
-    try scanForwardEdgeIds(graph, node_buffer, node_id, adjacency, allocator, violations, false);
+    try scanForwardEdgeIds(graph, true, node_id, adjacency, allocator, violations, false);
 }
 
 pub fn appendForwardEdgeIdViolationsSnapshot(
@@ -143,15 +142,13 @@ pub fn appendForwardEdgeIdViolationsSnapshot(
     node_id: u32,
     adjacency: types.NodeAdj,
 ) !void {
-    try scanForwardEdgeIds(graph, null, node_id, adjacency, allocator, violations, false);
+    try scanForwardEdgeIds(graph, false, node_id, adjacency, allocator, violations, false);
 }
 
 pub fn validateForwardEdgeIdsFast(
     graph: *const graph_core.GraphCore,
-    node_buffer: *const types.NodeBuffer,
     node_id: u32,
     adjacency: types.NodeAdj,
 ) !void {
-    _ = node_id;
-    try scanForwardEdgeIds(graph, node_buffer, 0, adjacency, null, null, true);
+    try scanForwardEdgeIds(graph, true, node_id, adjacency, null, null, true);
 }

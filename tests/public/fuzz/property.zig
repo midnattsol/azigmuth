@@ -158,7 +158,7 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
                 _ = graph.removeEdge(nodes[op.src], nodes[op.dst]) catch {};
             },
             .repair_node => {
-                _ = graph.repairNode(nodes[op.src]) catch {};
+                _ = graph.repairNode(nodes[op.src]) catch graphz.RepairNodeSummary{};
             },
             .remove_node => {
                 _ = graph.removeNode(nodes[op.src]) catch {};
@@ -394,7 +394,7 @@ test "property_fuzz: random sequence with repair maintains validity" {
     i = 0;
     while (i < 50) : (i += 1) {
         const repair_node = random.int(u8) % node_count;
-        _ = graph.repairNode(nodes[repair_node]) catch {};
+        _ = graph.repairNode(nodes[repair_node]) catch graphz.RepairNodeSummary{};
     }
 
     try graph.validate();

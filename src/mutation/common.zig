@@ -17,6 +17,9 @@ pub const publishMetaFwdUpdated = publish_mod.publishMetaFwdUpdated;
 pub const publishMetaFwdDeltaUpdated = publish_mod.publishMetaFwdDeltaUpdated;
 pub const publishMetaRevDeltaUpdated = publish_mod.publishMetaRevDeltaUpdated;
 pub const publishMetaBothDeltaUpdated = publish_mod.publishMetaBothDeltaUpdated;
+pub const publishMetaFwdDeltaNoFlip = publish_mod.publishMetaFwdDeltaNoFlip;
+pub const publishMetaRevDeltaNoFlip = publish_mod.publishMetaRevDeltaNoFlip;
+pub const publishMetaBothDeltaNoFlip = publish_mod.publishMetaBothDeltaNoFlip;
 
 pub const MutationScratch = scratch_mod.MutationScratch;
 

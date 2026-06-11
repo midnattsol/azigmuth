@@ -407,3 +407,99 @@ test "contract: inNeighborsMaterialized convenience matches inNeighbors + materi
 
     try testing.expectEqual(direct.len, via_iter.len);
 }
+
+test "api contract: addEdges inserts a batch atomically" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    var destinations: [100]graphz.NodeId = undefined;
+    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+
+    var inputs: [100]graphz.EdgeInput = undefined;
+    for (0..inputs.len) |i| inputs[i] = .{ .destination = destinations[i], .relation = @intCast(i % 7) };
+
+    const added = try graph.addEdges(source, &inputs);
+    try testing.expectEqual(@as(usize, 100), added);
+    try testing.expectEqual(@as(u64, 100), graph.edgeCount());
+    try graph.validate();
+
+    var session = try graph.readSession(testing.allocator);
+    defer session.deinit();
+    try testing.expectEqual(@as(usize, 100), try session.outDegree(source));
+    try testing.expectEqual(@as(usize, 1), try session.inDegree(destinations[42]));
+}
+
+test "api contract: addEdges rejects duplicates without mutating" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(source, a, 0, .{});
+
+    // Existing duplicate in the batch: all-or-nothing rejection.
+    const inputs = [_]graphz.EdgeInput{
+        .{ .destination = b },
+        .{ .destination = a },
+    };
+    try testing.expectError(error.EdgeAlreadyExists, graph.addEdges(source, &inputs));
+    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+
+    // Intra-batch duplicate: same rejection.
+    const dup_inputs = [_]graphz.EdgeInput{
+        .{ .destination = b },
+        .{ .destination = b },
+    };
+    try testing.expectError(error.EdgeAlreadyExists, graph.addEdges(source, &dup_inputs));
+    try testing.expectEqual(@as(u64, 1), graph.edgeCount());
+    try graph.validate();
+}
+
+test "api contract: addEdges merges into an existing block side" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    var first: [80]graphz.NodeId = undefined;
+    for (0..first.len) |i| {
+        first[i] = try graph.addNode();
+        try graph.addEdge(source, first[i], 0, .{});
+    }
+
+    var extra: [50]graphz.NodeId = undefined;
+    var inputs: [50]graphz.EdgeInput = undefined;
+    for (0..extra.len) |i| {
+        extra[i] = try graph.addNode();
+        inputs[i] = .{ .destination = extra[i] };
+    }
+    _ = try graph.addEdges(source, &inputs);
+
+    try testing.expectEqual(@as(u64, 130), graph.edgeCount());
+    try graph.validate();
+
+    var session = try graph.readSession(testing.allocator);
+    defer session.deinit();
+    try testing.expectEqual(@as(usize, 130), try session.outDegree(source));
+}
+
+test "api contract: addEdges handles self edges and repeat batches" {
+    var graph = try graphz.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const node = try graph.addNode();
+    const other = try graph.addNode();
+    const inputs = [_]graphz.EdgeInput{
+        .{ .destination = node },
+        .{ .destination = other },
+    };
+    _ = try graph.addEdges(node, &inputs);
+    try graph.validate();
+
+    var session = try graph.readSession(testing.allocator);
+    defer session.deinit();
+    try testing.expectEqual(@as(usize, 2), try session.outDegree(node));
+    try testing.expectEqual(@as(usize, 1), try session.inDegree(node));
+    try testing.expectEqual(@as(usize, 1), try session.inDegree(other));
+}

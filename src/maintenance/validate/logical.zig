@@ -9,6 +9,12 @@ pub fn validateRemovedNodeState(adjacency: types.NodeAdj, degree_fwd: u64, degre
     if (degree_rev != 0) {
         return error.CorruptGraph;
     }
+    // removeNode clears both adjacency descriptors synchronously (RFC Phase 2):
+    // a removed node with structural reverse storage is corruption even when
+    // its published degree is already zero.
+    if (adjacency.block_count_rev != 0 or adjacency.group_count_rev != 0) {
+        return error.CorruptGraph;
+    }
     if (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev) {
         return error.CorruptGraph;
     }

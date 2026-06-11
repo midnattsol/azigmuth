@@ -1,4 +1,5 @@
 comptime {
+    _ = @import("cancellation.zig");
     _ = @import("bfs.zig");
     _ = @import("concurrent.zig");
     _ = @import("cycle.zig");

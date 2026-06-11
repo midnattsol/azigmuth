@@ -30,7 +30,6 @@ pub fn setRepairFlag(adj: *types.NodeAdj, comptime side: adjacency.AdjSide, valu
 
 pub fn writePublishedRepairFlag(
     node_meta: *node_meta_mod.NodeMeta,
-    node: *types.NodeBuffer,
     comptime side: adjacency.AdjSide,
     value: bool,
 ) void {
@@ -41,10 +40,7 @@ pub fn writePublishedRepairFlag(
             .fwd => desired.needs_repair_fwd = value,
             .rev => desired.needs_repair_rev = value,
         }
-        const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse {
-            node.storePublishedMeta(desired);
-            break;
-        };
+        const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse break;
         expected = actual;
     }
 }

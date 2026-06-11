@@ -18,10 +18,51 @@ pub const NodeMeta = extern struct {
     }
 };
 
+pub fn desiredMetaForPublishFwd(meta: types.PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) types.PublishedMeta {
+    var desired = meta.bumpedVersion();
+    desired.fwd_index = 1 - meta.fwd_index;
+    desired.needs_repair_fwd = needs_repair_fwd;
+    return desired.withFwdDegree(new_degree_fwd);
+}
+
+pub fn desiredMetaForPublishRev(meta: types.PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) types.PublishedMeta {
+    var desired = meta.bumpedVersion();
+    desired.rev_index = 1 - meta.rev_index;
+    desired.needs_repair_rev = needs_repair_rev;
+    return desired.withRevDegree(new_degree_rev);
+}
+
+pub fn desiredMetaForPublishBoth(meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32) types.PublishedMeta {
+    var desired = meta.bumpedVersion();
+    desired.fwd_index = 1 - meta.fwd_index;
+    desired.rev_index = 1 - meta.rev_index;
+    desired.needs_repair_fwd = flags.needs_repair_fwd;
+    desired.needs_repair_rev = flags.needs_repair_rev;
+    desired.removed = flags.removed;
+    return desired.withFwdDegree(fwd_degree).withRevDegree(rev_degree);
+}
+
+pub fn desiredMetaForUpdateFwd(meta: types.PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) types.PublishedMeta {
+    var desired = meta.bumpedVersion();
+    desired.needs_repair_fwd = needs_repair_fwd;
+    return desired.withFwdDegree(new_degree_fwd);
+}
+
+pub fn desiredMetaForUpdateRev(meta: types.PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) types.PublishedMeta {
+    var desired = meta.bumpedVersion();
+    desired.needs_repair_rev = needs_repair_rev;
+    return desired.withRevDegree(new_degree_rev);
+}
+
+pub fn desiredMetaForUpdateBoth(meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32) types.PublishedMeta {
+    var desired = meta.bumpedVersion();
+    desired.needs_repair_fwd = flags.needs_repair_fwd;
+    desired.needs_repair_rev = flags.needs_repair_rev;
+    desired.removed = flags.removed;
+    return desired.withFwdDegree(fwd_degree).withRevDegree(rev_degree);
+}
+
 comptime {
-    if (@offsetOf(types.NodeBuffer, "published_meta") != 0) {
-        @compileError("NodeMeta must alias NodeBuffer at offset 0");
-    }
     if (@sizeOf(NodeMeta) != @sizeOf(std.atomic.Value(u64))) {
         @compileError("NodeMeta must contain only the published_meta word");
     }

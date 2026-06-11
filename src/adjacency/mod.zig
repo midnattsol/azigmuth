@@ -133,7 +133,7 @@ pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.S
     return tailBlockIndexSideChecked(graph, side_adj) catch null;
 }
 
-pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, target: u32) !bool {
+pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, target: u32, globally_sorted: bool) !bool {
     if (side_adj.block_count == 0) return false;
     try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
     if (node_published.NodePublished.isTiny(&side_adj)) {
@@ -145,36 +145,35 @@ pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: typ
         return false;
     }
     if (side_adj.group_count == 0) {
-        return hasEdgeInForwardRun(graph, side_adj.first_block, side_adj.block_count, target);
+        return hasEdgeInForwardRun(graph, side_adj.first_block, side_adj.block_count, target, globally_sorted);
     }
 
     const end_group = side_adj.first_group + side_adj.group_count;
     for (side_adj.first_group..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
-        if (hasEdgeInForwardRun(graph, group.start, group.count, target)) return true;
+        if (hasEdgeInForwardRun(graph, group.start, group.count, target, globally_sorted)) return true;
     }
     return false;
 }
 
 pub fn hasEdgeInSideAdj(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, target: u32) bool {
-    return hasEdgeInSideAdjChecked(graph, side_adj, target) catch false;
+    return hasEdgeInSideAdjChecked(graph, side_adj, target, false) catch false;
 }
 
 // ── Shape inspection, lookup helpers ────────────────────────────────────
 
-pub fn searchInBlock(comptime BlockType: type, block: *const BlockType, target: u32) ?u7 {
-    const live: u7 = @intCast(@popCount(block.mask));
+pub fn searchInBlock(comptime BlockType: type, block: *const BlockType, live: u7, target: u32) ?u7 {
     if (live == 0) return null;
 
-    const first = if (BlockType == types.EdgeBlockFwd) block.edges[0].destination else block.sources[0];
-    if (target < first or target > (if (BlockType == types.EdgeBlockFwd) block.edges[live - 1].destination else block.sources[live - 1])) return null;
+    const first = if (BlockType == types.EdgeBlockFwd) block.destinations[0] else block.sources[0];
+    if (target < first or target > (if (BlockType == types.EdgeBlockFwd) block.destinations[live - 1] else block.sources[live - 1])) return null;
 
     var low: u7 = 0;
     var high: u7 = @intCast(live);
     while (low < high) {
         const probe: u7 = low + (high - low) / 2;
-        const probe_val = if (BlockType == types.EdgeBlockFwd) block.edges[probe].destination else block.sources[probe];
+        const probe_val = if (BlockType == types.EdgeBlockFwd) block.destinations[probe] else block.sources[probe];
         if (probe_val < target) {
             low = probe + 1;
         } else if (probe_val == target) {
@@ -190,11 +189,11 @@ fn forwardRunRangesMonotonic(graph: *const graph_core.GraphCore, start: u32, cou
     var prev_last: ?u32 = null;
     for (start..start + count) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-        const live = @popCount(block.mask);
+        const live = page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd);
         if (live == 0) continue;
 
-        const first_edge = block.edges[0].destination;
-        const last_edge = block.edges[live - 1].destination;
+        const first_edge = block.destinations[0];
+        const last_edge = block.destinations[live - 1];
         if (prev_last) |previous| {
             if (previous > first_edge) return false;
         }
@@ -203,41 +202,45 @@ fn forwardRunRangesMonotonic(graph: *const graph_core.GraphCore, start: u32, cou
     return true;
 }
 
-fn hasEdgeInForwardRun(graph: *const graph_core.GraphCore, start: u32, count: u32, target: u32) bool {
+fn hasEdgeInForwardRun(graph: *const graph_core.GraphCore, start: u32, count: u32, target: u32, globally_sorted: bool) bool {
     var low: u32 = 0;
     var high: u32 = count;
     var hit_empty = false;
     while (low < high) {
         const mid: u32 = low + (high - low) / 2;
         const block = page_ops.edgeBlockAtConst(graph, start + mid, .fwd);
-        const live = @popCount(block.mask);
+        const live = page_ops.blockLiveCount(graph, start + mid, .fwd);
         if (live == 0) {
             hit_empty = true;
             break;
         }
 
-        const first_edge = block.edges[0].destination;
-        const last_edge = block.edges[live - 1].destination;
+        const first_edge = block.destinations[0];
+        const last_edge = block.destinations[live - 1];
         if (target < first_edge) {
             high = mid;
         } else if (target > last_edge) {
             low = mid + 1;
         } else {
-            return searchInBlock(types.EdgeBlockFwd, block, target) != null;
+            return searchInBlock(types.EdgeBlockFwd, block, live, target) != null;
         }
     }
 
+    // A published globally-sorted side makes a binary-search miss conclusive:
+    // no monotonicity re-scan and no linear fallback are needed.
+    if (globally_sorted and !hit_empty) return false;
     if (!hit_empty and forwardRunRangesMonotonic(graph, start, count)) return false;
 
     for (start..start + count) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-        if (searchInBlock(types.EdgeBlockFwd, block, target) != null) return true;
+        const block_live = page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd);
+        if (searchInBlock(types.EdgeBlockFwd, block, block_live, target) != null) return true;
     }
     return false;
 }
 
 pub fn hasEdgeInAdjChecked(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, target: u32) !bool {
-    return hasEdgeInSideAdjChecked(graph, sideAdjOfNode(node_adj, .fwd), target);
+    return hasEdgeInSideAdjChecked(graph, sideAdjOfNode(node_adj, .fwd), target, false);
 }
 
 pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj, target: u32) bool {
@@ -257,17 +260,16 @@ pub fn findTinyForwardSlotById(graph: *const graph_core.GraphCore, side_adj: typ
 // ── Multigraph helpers ─────────────────────────────────────────────────
 
 /// Counts how many times `target` appears as a destination in forward blocks.
-pub fn countForwardInBlock(block: *const types.EdgeBlockFwd, target: u32) u32 {
-    const live = @popCount(block.mask);
+pub fn countForwardInBlock(block: *const types.EdgeBlockFwd, live: u7, target: u32) u32 {
     if (live == 0) return 0;
-    if (target < block.edges[0].destination) return 0;
-    if (target > block.edges[live - 1].destination) return 0;
+    if (target < block.destinations[0]) return 0;
+    if (target > block.destinations[live - 1]) return 0;
 
     var count: u32 = 0;
     for (0..live) |slot| {
-        if (block.edges[slot].destination == target) {
+        if (block.destinations[slot] == target) {
             count += 1;
-        } else if (block.edges[slot].destination > target and count > 0) {
+        } else if (block.destinations[slot] > target and count > 0) {
             break;
         }
     }
@@ -308,7 +310,7 @@ pub fn countForwardDestinationMatchesChecked(
     if (group_count == 0) {
         for (first_block..first_block + block_count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            total += countForwardInBlock(block, destination_index);
+            total += countForwardInBlock(block, page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd), destination_index);
         }
         return total;
     }
@@ -319,7 +321,7 @@ pub fn countForwardDestinationMatchesChecked(
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-            total += countForwardInBlock(block, destination_index);
+            total += countForwardInBlock(block, page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd), destination_index);
         }
     }
     return total;
@@ -348,13 +350,12 @@ pub const ForwardBlockSlot = struct {
     slot: u7,
 };
 
-fn lowerBoundDestination(block: *const types.EdgeBlockFwd, target: u32) u7 {
-    const live: u7 = @intCast(@popCount(block.mask));
+fn lowerBoundDestination(block: *const types.EdgeBlockFwd, live: u7, target: u32) u7 {
     var low: u7 = 0;
     var high: u7 = live;
     while (low < high) {
         const mid: u7 = low + (high - low) / 2;
-        if (block.edges[mid].destination < target) {
+        if (block.destinations[mid] < target) {
             low = mid + 1;
         } else {
             high = mid;
@@ -363,13 +364,12 @@ fn lowerBoundDestination(block: *const types.EdgeBlockFwd, target: u32) u7 {
     return low;
 }
 
-fn upperBoundDestination(block: *const types.EdgeBlockFwd, target: u32) u7 {
-    const live: u7 = @intCast(@popCount(block.mask));
+fn upperBoundDestination(block: *const types.EdgeBlockFwd, live: u7, target: u32) u7 {
     var low: u7 = 0;
     var high: u7 = live;
     while (low < high) {
         const mid: u7 = low + (high - low) / 2;
-        if (block.edges[mid].destination <= target) {
+        if (block.destinations[mid] <= target) {
             low = mid + 1;
         } else {
             high = mid;
@@ -381,17 +381,17 @@ fn upperBoundDestination(block: *const types.EdgeBlockFwd, target: u32) u7 {
 fn searchForwardBlockSlotById(
     block: *const types.EdgeBlockFwd,
     id_block: *const types.EdgeBlockFwdIds,
+    live: u7,
     destination_index: u32,
     edge_id: u32,
 ) ?u7 {
-    const live: u7 = @intCast(@popCount(block.mask));
     if (live == 0) return null;
-    if (destination_index < block.edges[0].destination) return null;
-    if (destination_index > block.edges[live - 1].destination) return null;
+    if (destination_index < block.destinations[0]) return null;
+    if (destination_index > block.destinations[live - 1]) return null;
 
-    const start = lowerBoundDestination(block, destination_index);
-    if (start >= live or block.edges[start].destination != destination_index) return null;
-    const end = upperBoundDestination(block, destination_index);
+    const start = lowerBoundDestination(block, live, destination_index);
+    if (start >= live or block.destinations[start] != destination_index) return null;
+    const end = upperBoundDestination(block, live, destination_index);
 
     var low: u7 = start;
     var high: u7 = end;
@@ -425,14 +425,14 @@ pub fn findForwardSlotByIdInRun(
         const mid: u32 = low + (high - low) / 2;
         const block_idx = start + mid;
         const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-        const live = @popCount(block.mask);
+        const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
         if (live == 0) {
             hit_empty = true;
             break;
         }
 
-        const first_edge = block.edges[0].destination;
-        const last_edge = block.edges[live - 1].destination;
+        const first_edge = block.destinations[0];
+        const last_edge = block.destinations[live - 1];
         if (destination_index < first_edge) {
             high = mid;
             continue;
@@ -443,7 +443,7 @@ pub fn findForwardSlotByIdInRun(
         }
 
         const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-        if (searchForwardBlockSlotById(block, id_block, destination_index, edge_id)) |slot| {
+        if (searchForwardBlockSlotById(block, id_block, live, destination_index, edge_id)) |slot| {
             return .{ .block_idx = block_idx, .slot = slot };
         }
 
@@ -451,11 +451,11 @@ pub fn findForwardSlotByIdInRun(
         while (left > 0) {
             const left_block_idx = start + left - 1;
             const left_block = page_ops.edgeBlockAtConst(graph, left_block_idx, .fwd);
-            const left_live = @popCount(left_block.mask);
+            const left_live = page_ops.blockLiveCount(graph, left_block_idx, .fwd);
             if (left_live == 0) break;
-            if (destination_index < left_block.edges[0].destination or destination_index > left_block.edges[left_live - 1].destination) break;
+            if (destination_index < left_block.destinations[0] or destination_index > left_block.destinations[left_live - 1]) break;
             const left_ids = page_ops.edgeBlockFwdIdsAtConst(graph, left_block_idx);
-            if (searchForwardBlockSlotById(left_block, left_ids, destination_index, edge_id)) |slot| {
+            if (searchForwardBlockSlotById(left_block, left_ids, left_live, destination_index, edge_id)) |slot| {
                 return .{ .block_idx = left_block_idx, .slot = slot };
             }
             left -= 1;
@@ -465,11 +465,11 @@ pub fn findForwardSlotByIdInRun(
         while (right < count) : (right += 1) {
             const right_block_idx = start + right;
             const right_block = page_ops.edgeBlockAtConst(graph, right_block_idx, .fwd);
-            const right_live = @popCount(right_block.mask);
+            const right_live = page_ops.blockLiveCount(graph, right_block_idx, .fwd);
             if (right_live == 0) break;
-            if (destination_index < right_block.edges[0].destination or destination_index > right_block.edges[right_live - 1].destination) break;
+            if (destination_index < right_block.destinations[0] or destination_index > right_block.destinations[right_live - 1]) break;
             const right_ids = page_ops.edgeBlockFwdIdsAtConst(graph, right_block_idx);
-            if (searchForwardBlockSlotById(right_block, right_ids, destination_index, edge_id)) |slot| {
+            if (searchForwardBlockSlotById(right_block, right_ids, right_live, destination_index, edge_id)) |slot| {
                 return .{ .block_idx = right_block_idx, .slot = slot };
             }
         }
@@ -482,7 +482,8 @@ pub fn findForwardSlotByIdInRun(
         const block_idx: u32 = @intCast(block_idx_usize);
         const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
         const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-        if (searchForwardBlockSlotById(block, id_block, destination_index, edge_id)) |slot| {
+        const block_live = page_ops.blockLiveCount(graph, block_idx, .fwd);
+        if (searchForwardBlockSlotById(block, id_block, block_live, destination_index, edge_id)) |slot| {
             return .{ .block_idx = block_idx, .slot = slot };
         }
     }

@@ -13,16 +13,18 @@ fn fillBlock(graph: *graph_mod.Graph, block_index: u32, first_dest: u32, count: 
         .fwd => {
             var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
             for (0..count) |i| {
-                block.edges[i] = .{ .destination = first_dest + @as(u32, @intCast(i)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+                block.destinations[i] = first_dest + @as(u32, @intCast(i));
+                block.relations[i] = 0;
+                block.flags[i] = 0;
             }
-            block.mask = constants.denseMask(count);
+            page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
         },
         .rev => {
             var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
             for (0..count) |i| {
                 block.sources[i] = first_dest + @as(u32, @intCast(i));
             }
-            block.mask = constants.denseMask(count);
+            page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(count));
         },
     }
 }

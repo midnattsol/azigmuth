@@ -24,12 +24,12 @@ fn appendForwardBlockWithoutDestination(
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else undefined;
-    const live = @popCount(old_block.mask);
+    const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
     if (live == 0) return 0;
 
     var removed: u32 = 0;
     for (0..live) |slot| {
-        if (old_block.edges[slot].destination == destination_idx) removed += 1;
+        if (old_block.destinations[slot] == destination_idx) removed += 1;
     }
     if (removed == 0) {
         // Published blocks are immutable under RCU, so the rebuilt side may
@@ -47,13 +47,15 @@ fn appendForwardBlockWithoutDestination(
     const new_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block_idx) else undefined;
     var write: u7 = 0;
     for (0..live) |slot| {
-        if (old_block.edges[slot].destination != destination_idx) {
-            new_block.edges[write] = old_block.edges[slot];
+        if (old_block.destinations[slot] != destination_idx) {
+            new_block.destinations[write] = old_block.destinations[slot];
+            new_block.relations[write] = old_block.relations[slot];
+            new_block.flags[write] = old_block.flags[slot];
             if (graph.multigraph_enabled) new_ids.ids[write] = old_ids.ids[slot];
             write += 1;
         }
     }
-    new_block.mask = constants.denseMask(write);
+    page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));
     try block_list.append(graph.allocator, new_block_idx);
     try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
     return removed;
@@ -85,10 +87,10 @@ fn appendForwardBlockRemovingOneById(
 ) !bool {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-    const live: u7 = @intCast(@popCount(old_block.mask));
+    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, .fwd));
 
     for (0..live) |slot| {
-        if (old_block.edges[slot].destination != destination_idx or old_ids.ids[slot] != edge_id) continue;
+        if (old_block.destinations[slot] != destination_idx or old_ids.ids[slot] != edge_id) continue;
         if (live == 1) {
             try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
             return true;
@@ -100,11 +102,13 @@ fn appendForwardBlockRemovingOneById(
         var write: u7 = 0;
         for (0..live) |copy_slot| {
             if (copy_slot == slot) continue;
-            new_block.edges[write] = old_block.edges[copy_slot];
+            new_block.destinations[write] = old_block.destinations[copy_slot];
+            new_block.relations[write] = old_block.relations[copy_slot];
+            new_block.flags[write] = old_block.flags[copy_slot];
             new_ids.ids[write] = old_ids.ids[copy_slot];
             write += 1;
         }
-        new_block.mask = constants.denseMask(write);
+        page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));
         try block_list.append(graph.allocator, new_block_idx);
         try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
         return true;
@@ -126,7 +130,7 @@ pub fn rebuildForwardRemoveAll(
     defer block_list.deinit(graph.allocator);
     var context = ForwardRemovalContext{ .destination_idx = destination_idx, .scratch = scratch, .block_list = &block_list };
     try common.forEachBlockInSide(graph, published_side.*, .fwd, &context, collectForwardRemovalBlock);
-    return .{ .new_side = try rebuild_common.buildSideFromBlockList(graph, scratch, block_list.items), .removed = context.removed };
+    return .{ .new_side = try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .fwd), .removed = context.removed };
 }
 
 pub fn rebuildForwardRemoveOneById(
@@ -160,5 +164,5 @@ pub fn rebuildForwardRemoveOneById(
     }.callback);
 
     if (!removed_target_edge) return null;
-    return try rebuild_common.buildSideFromBlockList(graph, scratch, block_list.items);
+    return try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .fwd);
 }

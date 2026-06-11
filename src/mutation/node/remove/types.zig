@@ -6,7 +6,8 @@ const common = @import("../../common.zig");
 pub const RelatedNode = struct {
     node_index: u32,
     node_meta: *node_meta.NodeMeta,
-    node_buffer: *types.NodeBuffer,
+    /// Destinations hold their reverse claim so adjacent removeNode calls
+    /// serialize; predecessor forward updates are claim-free per RFC §5.3.
     claims: common.ClaimedNodeSides,
     fwd_degree_delta: u22,
     rev_degree_delta: u22,
@@ -28,6 +29,10 @@ pub const RemovalScan = struct {
 pub const RemoveCounts = struct {
     predecessors: u32 = 0,
     destinations: u32 = 0,
+    /// Edge removals actually applied at publish time. Related nodes that
+    /// were concurrently removed after the scan are excluded, so the global
+    /// edge_count never double-decrements under adjacent removeNode races.
+    applied_edge_removals: u64 = 0,
 };
 
 pub const RelatedUpdates = struct {

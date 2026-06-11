@@ -27,13 +27,6 @@ pub inline fn makeIndex(page_index: u32, slot_index: u32, comptime entries_per_p
     return page_index * entries_per_page + slot_index;
 }
 
-/// Returns mutable access to one node buffer by flat node id.
-pub fn nodeAt(graph: *graph_core.GraphCore, id: types.NodeId) *types.NodeBuffer {
-    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    const page = loadPageMut(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
-    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
-}
-
 pub fn nodeMetaAt(graph: *graph_core.GraphCore, id: types.NodeId) *node_meta.NodeMeta {
     const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
     const page = loadPageMut(node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
@@ -42,20 +35,6 @@ pub fn nodeMetaAt(graph: *graph_core.GraphCore, id: types.NodeId) *node_meta.Nod
 
 pub fn ensureNodeMetaPage(graph: *graph_core.GraphCore, page_index: u32) ![]node_meta.NodeMeta {
     return ensurePage(graph, node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
-}
-
-/// Ensures the node page exists and returns mutable access to one node buffer.
-pub fn ensureNodeAt(graph: *graph_core.GraphCore, id: types.NodeId) !*types.NodeBuffer {
-    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    const page = try ensureNodePage(graph, page_index);
-    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
-}
-
-/// Returns read-only access to one node buffer by flat node id.
-pub fn nodeAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const types.NodeBuffer {
-    const page_index = pageOf(id.index, constants.NODES_PER_PAGE);
-    const page = loadPage(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
-    return &page[slotOf(id.index, constants.NODES_PER_PAGE)];
 }
 
 pub fn nodeMetaAtConst(graph: *const graph_core.GraphCore, id: types.NodeId) *const node_meta.NodeMeta {
@@ -264,9 +243,17 @@ fn allocFreshTinyRevSlot(graph: *graph_core.GraphCore) !u32 {
     }
 }
 
-/// Returns one published node page as a read-only slice.
-pub fn nodePageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []const types.NodeBuffer {
-    return loadPage(types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
+/// Returns one node-meta page as a read-only slice.
+pub fn nodeMetaPageAtConst(graph: *const graph_core.GraphCore, page_index: u32) []const node_meta.NodeMeta {
+    return loadPage(node_meta.NodeMeta, &graph.node_meta_pages, page_index, constants.NODES_PER_PAGE);
+}
+
+/// Returns one published-descriptor page, or null when the page was never
+/// allocated (every node in it has provably empty published sides).
+pub fn nodePublishedPageAtConst(graph: *const graph_core.GraphCore, page_index: u32) ?[]const node_published.NodePublished {
+    const raw = graph.node_published_pages.load(page_index);
+    if (raw == 0) return null;
+    return ptrFromRawConst(node_published.NodePublished, raw, constants.NODES_PER_PAGE);
 }
 
 fn ptrFromRaw(comptime T: type, raw: usize, comptime len: usize) []T {
@@ -322,11 +309,6 @@ fn ensurePage(
     }
 
     return new_page;
-}
-
-/// Ensures that one node page exists and returns mutable access to it.
-pub fn ensureNodePage(graph: *graph_core.GraphCore, page_index: u32) ![]types.NodeBuffer {
-    return ensurePage(graph, types.NodeBuffer, &graph.node_pages_pages, page_index, constants.NODES_PER_PAGE);
 }
 
 fn ensureMetaPage(graph: *graph_core.GraphCore, directory: anytype, page_index: u32) ![]types.BlockMeta {
@@ -582,12 +564,30 @@ fn ensureBlockPage(graph: *graph_core.GraphCore, page_index: u32, comptime side:
             _ = try ensurePage(graph, types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
             if (graph.multigraph_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
             _ = try ensureMetaPage(graph, &graph.edge_blocks_fwd_meta_pages, page_index);
+            _ = try ensurePage(graph, u8, &graph.edge_blocks_fwd_live_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
         },
         .rev => {
             _ = try ensurePage(graph, types.EdgeBlockRev, &graph.edge_blocks_rev_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
             _ = try ensureMetaPage(graph, &graph.edge_blocks_rev_meta_pages, page_index);
+            _ = try ensurePage(graph, u8, &graph.edge_blocks_rev_live_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
         },
     }
+}
+
+/// Live-count sidecar access. The count is published together with the block
+/// under the same RCU discipline: blocks are immutable once published, so the
+/// sidecar entry of a published block never changes either.
+pub fn blockLiveCountPtr(graph: *graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide) *u8 {
+    return pageEntryAt(u8, if (side == .fwd) &graph.edge_blocks_fwd_live_pages else &graph.edge_blocks_rev_live_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
+}
+
+pub fn blockLiveCount(graph: *const graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide) u7 {
+    const entry = pageEntryAtConst(u8, if (side == .fwd) &graph.edge_blocks_fwd_live_pages else &graph.edge_blocks_rev_live_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
+    return @intCast(entry.*);
+}
+
+pub fn setBlockLiveCount(graph: *graph_core.GraphCore, block_index: u32, comptime side: adjacency.AdjSide, live_count: u7) void {
+    blockLiveCountPtr(graph, block_index, side).* = live_count;
 }
 
 fn zeroForwardIdsIfNeeded(graph: *graph_core.GraphCore, block_idx: u32) void {
@@ -600,6 +600,7 @@ fn zeroBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjace
         .fwd => types.EdgeBlockFwd,
         .rev => types.EdgeBlockRev,
     });
+    setBlockLiveCount(graph, block_idx, side, 0);
     if (side == .fwd) zeroForwardIdsIfNeeded(graph, block_idx);
 }
 

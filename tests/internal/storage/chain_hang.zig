@@ -10,7 +10,7 @@ const publish = @import("publish");
 const testing = std.testing;
 
 fn makeAdjacencyGroupedWithInvalidDeclaredSpan(graph: *graph_mod.Graph, node: graph_mod.NodeId) !void {
-    var published_adj = (try graph.nodeAtConst(node)).publishedAdj();
+    var published_adj = (try graph.nodeAt(node)).publishedAdj();
     if (published_adj.block_count_fwd == 0) return error.SkipZigTest;
 
     published_adj = try publish.ensureForwardBlockLayout(graph, node);
@@ -78,7 +78,7 @@ test "group chain: hasEdgeInAdj on cyclic chain with absent target does not hang
 
     // absent is not an edge destination — the cyclic scan should terminate
     // via bounded traversal and return false without hanging.
-    try testing.expect(!graph.hasEdgeInAdj((try graph.nodeAtConst(src)).publishedAdj(), absent.index));
+    try testing.expect(!graph.hasEdgeInAdj((try graph.nodeAt(src)).publishedAdj(), absent.index));
 }
 
 test "group chain: tailBlockIndex on cyclic chain returns null (does not hang)" {
@@ -91,9 +91,9 @@ test "group chain: tailBlockIndex on cyclic chain returns null (does not hang)" 
 
     try makeAdjacencyGroupedWithInvalidDeclaredSpan(&graph, src);
 
-    const adj = (try graph.nodeAtConst(src)).publishedAdj();
+    const adj = (try graph.nodeAt(src)).publishedAdj();
     if (adj.group_count_fwd > 0) {
-        const side_adj = (try graph.nodeAtConst(src)).publishedFwd();
+        const side_adj = (try graph.nodeAt(src)).publishedFwd();
         try testing.expect(graph_mod.adjacency_mod.tailBlockIndexSide(&graph.graph, &side_adj) == null);
     }
 }
@@ -213,10 +213,10 @@ test "group chain: validate does not hang on cyclic chain with forward tombstone
     const published_fwd = src_buf.publishedFwd();
     if (published_fwd.block_count > 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, published_fwd.first_block, .fwd);
-        const live: u7 = @intCast(@popCount(block.mask));
+        const live: u7 = @intCast(page_ops.blockLiveCount(&graph.graph, published_fwd.first_block, .fwd));
         // Overwrite the first entry to point to the removed node.
         if (live > 0) {
-            block.edges[0].destination = removed.index;
+            block.destinations[0] = removed.index;
         }
     }
 
@@ -268,9 +268,9 @@ test "group chain: debugValidate terminates on cyclic chain with tombstone" {
     const published_fwd = src_buf.publishedFwd();
     if (published_fwd.block_count > 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, published_fwd.first_block, .fwd);
-        const live: u7 = @intCast(@popCount(block.mask));
+        const live: u7 = @intCast(page_ops.blockLiveCount(&graph.graph, published_fwd.first_block, .fwd));
         if (live > 0) {
-            block.edges[0].destination = removed.index;
+            block.destinations[0] = removed.index;
         }
     }
 

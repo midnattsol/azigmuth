@@ -93,7 +93,7 @@ fn benchRemoveEdgeTail(allocator: std.mem.Allocator) !harness.Result {
             // The engine refuses removals that would break the hard non-tail
             // occupancy bound; the caller pays the repair debt and retries.
             error.RepairRequired => repaired: {
-                try graph.repairNode(source);
+                _ = try graph.repairNode(source);
                 break :repaired try graph.removeEdge(source, destination);
             },
             else => return err,
@@ -109,20 +109,25 @@ fn benchRemoveEdgeRepairRequired(allocator: std.mem.Allocator) !harness.Result {
     var graph = try graphz.Graph.init(allocator);
     defer graph.deinit();
 
+    // RepairRequired surfaces when removing from a non-tail block already at
+    // the hard occupancy floor while both endpoints are block-sided.
     const source = try graph.addNode();
-    const edge_count: usize = 65;
-    const destinations = try allocator.alloc(graphz.NodeId, edge_count);
-    defer allocator.free(destinations);
+    const hub = try graph.addNode();
+    var fillers: [64]graphz.NodeId = undefined;
+    for (0..fillers.len) |filler_idx| fillers[filler_idx] = try graph.addNode();
 
-    for (destinations) |*destination| {
-        destination.* = try graph.addNode();
-        try graph.addEdge(source, destination.*, 0, .{});
+    try graph.addEdge(source, hub, 0, .{});
+    for (fillers) |filler| try graph.addEdge(source, filler, 0, .{});
+    for (0..17) |_| {
+        const extra_source = try graph.addNode();
+        try graph.addEdge(extra_source, hub, 0, .{});
     }
+    for (fillers[0..16]) |filler| _ = try graph.removeEdge(source, filler);
 
     const ops: usize = 1024;
     const start_ns = harness.nowNs();
     for (0..ops) |_| {
-        _ = graph.removeEdge(source, destinations[0]) catch |err| {
+        _ = graph.removeEdge(source, hub) catch |err| {
             if (err == error.RepairRequired) continue;
             return err;
         };

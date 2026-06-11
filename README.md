@@ -5,7 +5,7 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 - page-based node and edge-block pools
 - forward and reverse adjacency
 - lock-free reader iterators via per-node RCU snapshots
-- sorted fixed-size edge blocks with dense occupancy masks
+- sorted fixed-size struct-of-arrays edge blocks (dense, cache-line aligned)
 - local repair and validation
 - tombstone-based node deletion (Phase 2) with debt/repair cleanup
 - a `GraphBuilder` bulk-construction handle
@@ -19,10 +19,11 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 
 Implementation notes:
 
-- Const read paths compose adjacency from `NodeMeta + NodePublished`.
-- `NodeHot` lives in padded `hot_layout.Slot` entries (default `32 B` stride).
-- `NodeBuffer` remains as the mutation staging / compatibility layer, not the
-  canonical const read source for published adjacency.
+- Per-node state is split into `NodeMeta` (atomic publication word),
+  `NodePublished` (double-buffered side descriptors, degrees, sorted bits)
+  and `NodeHot` (writer claims, edge-id counter, padded `32 B` stride).
+- Edge blocks are struct-of-arrays (512 B forward / 256 B reverse, 64-byte
+  aligned); per-block live counts live in a one-cache-line sidecar page.
 
 ## Basic usage
 
@@ -124,12 +125,39 @@ if (summary.left_repair_debt) {
 }
 ```
 
-When you want to return memory from retired blocks/groups to the reusable pools,
-call `reclaimRetired()` explicitly:
+## RepairRequired And Explicit Repair
+
+A mutation that cannot preserve the hard read bounds without a wider rewrite
+fails fast with `error.RepairRequired` and leaves the graph unchanged. The
+resolution is always the same explicit action: repair the node, then retry.
+
+```zig
+const removed = g.removeEdge(a, b) catch |err| switch (err) {
+    error.RepairRequired => blk: {
+        const summary = try g.repairNode(a);
+        _ = summary; // reports flagged vs preventive work per side
+        break :blk try g.removeEdge(a, b);
+    },
+    else => return err,
+};
+```
+
+`repairNode()` returns a `RepairNodeSummary`: `repaired_*` says a side was
+rebuilt, `preventive_*` marks rebuilds done without flagged debt (layout
+hardening so the retry succeeds), and `left_repair_debt_*` reports the flag
+state after the call. `repairBudgeted()`/`flushRepairs()` never do preventive
+work — they only pay debt the graph has already published.
+
+When you want to return memory from retired blocks/groups/tiny slots to the
+reusable pools, call `reclaimRetired()` explicitly:
 
 ```zig
 g.reclaimRetired();
 ```
+
+The single exception to "no hidden reclaim": if an internal allocation would
+otherwise fail while epoch-safe retired storage exists, the engine runs one
+last-resort reclaim pass before surfacing `error.OutOfMemory`.
 
 When you want debt observability or an explicit repair flush that drains only
 published repair debt sources:
@@ -140,6 +168,39 @@ _ = stats;
 
 const flush = try g.flushRepairs();
 _ = flush;
+```
+
+## Batched Insertion
+
+`addEdges()` inserts a whole fan-out from one source with one claim cycle, a
+single rebuild of the source side, and one publish per touched node. It is
+all-or-nothing: duplicates (in simple-graph mode) or invalid destinations
+reject the entire batch before anything is published.
+
+```zig
+const inputs = [_]gz.EdgeInput{
+    .{ .destination = b },
+    .{ .destination = c, .relation = 7 },
+};
+_ = try g.addEdges(a, &inputs);
+```
+
+## Point Reads Without Capture
+
+`readSession()` is the cheap counterpart to `snapshot()`: it opens in O(1) and
+reads the live published state under RCU, instead of capturing the whole graph
+up front. Reads are per-node coherent but not a fixed view.
+
+```zig
+var session = try g.readSession(allocator);
+defer session.deinit();
+
+const degree = try session.outDegree(node);
+var it = try session.neighbors(node);
+defer it.deinit();
+while (it.next()) |neighbor| {
+    _ = neighbor;
+}
 ```
 
 ## Snapshot Read Path
@@ -191,6 +252,29 @@ defer allocator.free(snap_dfs);
 `ReadSnapshot` is a reusable sealed in-memory graph view. Its algorithms run
 against that fixed captured view and do not perform repair or other hidden
 maintenance.
+
+Long traversals can be cancelled cooperatively. Attach a `CancelToken` to the
+`Context`; `bfs`, `dfs`, and `hasCycle` observe it once per visited node and
+abort with `error.Cancelled`. Cancelling is sticky and safe from any thread.
+Cancellation is best-effort: a call that finishes its work before reaching a
+cancellation checkpoint returns its normal result, so callers must treat
+`error.Cancelled` as an optimization for aborting long traversals, not as a
+guaranteed outcome. On `error.Cancelled` partial results are freed and the
+snapshot stays valid.
+
+```zig
+var token = gz.CancelToken.init();
+const ctx = gz.Context{ .allocator = allocator, .cancel_token = &token };
+
+// From a watchdog/timeout thread:
+token.cancel();
+
+const order = snapshot.bfs(start, ctx) catch |err| switch (err) {
+    error.Cancelled => return, // query aborted
+    else => return err,
+};
+defer allocator.free(order);
+```
 
 `Graph.validate()` remains the live fast-path structural check over the mutable
 engine state. `snapshot.validate()` is the fast logical/structural check over a

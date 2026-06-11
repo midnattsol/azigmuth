@@ -43,7 +43,7 @@ fn publishForwardGroups(
     try publish.syncToPublished(graph, node.index);
 }
 
-test "validation: detects non-dense masks" {
+test "validation: detects live count beyond block capacity" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -51,9 +51,11 @@ test "validation: detects non-dense masks" {
     const target = try graph.addNode();
     const block = try graph.allocBlockFwd();
     var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    edges.edges[0] = .{ .destination = target.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.edges[2] = .{ .destination = target.index, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.mask = 0b101;
+    edges.destinations[0] = target.index;
+    edges.relations[0] = 0;
+    edges.flags[0] = 0;
+    // Corrupt: live count beyond block capacity.
+    page_ops.blockLiveCountPtr(&graph.graph, block, .fwd).* = 65;
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(2, .release);
 
@@ -70,8 +72,10 @@ test "validation: detects invalid destinations" {
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
     var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    edges.edges[0] = .{ .destination = 999, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.mask = constants.denseMask(1);
+    edges.destinations[0] = 999;
+    edges.relations[0] = 0;
+    edges.flags[0] = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(1, .release);
 
@@ -88,9 +92,13 @@ test "validation: detects unsorted blocks" {
     try addNodeCount(&graph, 3);
     const block = try graph.allocBlockFwd();
     var edges = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    edges.edges[0] = .{ .destination = 2, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.edges[1] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    edges.mask = constants.denseMask(2);
+    edges.destinations[0] = 2;
+    edges.relations[0] = 0;
+    edges.flags[0] = 0;
+    edges.destinations[1] = 1;
+    edges.relations[1] = 0;
+    edges.flags[1] = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(2));
     try publishForwardBlock(&graph, .{ .index = 0 }, block, 1);
     graph.graph.edge_count.store(2, .release);
 
@@ -129,7 +137,7 @@ test "validation: multigraph detects zero edge id in sidecar" {
     const destination = try graph.addNode();
     _ = try graph.addEdgeWithId(source, destination, 0, 0);
 
-    const source_adj = page_ops.nodeAtConst(&graph.graph, source).publishedAdj();
+    const source_adj = graph.nodeRefAny(source).publishedAdj();
     try publish.writeForwardEdgeId(&graph, source_adj, 0, 0);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -148,7 +156,7 @@ test "validation: multigraph detects duplicate edge id within one source" {
     const id_a = try graph.addEdgeWithId(source, destination_a, 0, 0);
     _ = try graph.addEdgeWithId(source, destination_b, 0, 0);
 
-    const source_adj = page_ops.nodeAtConst(&graph.graph, source).publishedAdj();
+    const source_adj = graph.nodeRefAny(source).publishedAdj();
     try publish.writeForwardEdgeId(&graph, source_adj, 1, id_a.local);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -165,9 +173,8 @@ test "validation: multigraph detects regressed next edge id counter" {
     const destination = try graph.addNode();
     _ = try graph.addEdgeWithId(source, destination, 0, 0);
 
-    const source_node = page_ops.nodeAt(&graph.graph, source);
     page_ops.nodeHotAt(&graph.graph, source).storeNextLocalEdgeId(1);
-    source_node.next_local_edge_id.store(1, .release);
+    page_ops.nodeHotAt(&graph.graph, source).storeNextLocalEdgeId(1);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
@@ -184,7 +191,7 @@ test "validation: multigraph detects descending edge ids for equal destination" 
     const first_id = try graph.addEdgeWithId(source, destination, 0, 0);
     const second_id = try graph.addEdgeWithId(source, destination, 1, 0);
 
-    const source_adj = page_ops.nodeAtConst(&graph.graph, source).publishedAdj();
+    const source_adj = graph.nodeRefAny(source).publishedAdj();
     try publish.writeForwardEdgeId(&graph, source_adj, 0, second_id.local);
     try publish.writeForwardEdgeId(&graph, source_adj, 1, first_id.local);
 
@@ -218,13 +225,17 @@ test "validation: detects underfull non-tail blocks" {
 
     var first_edges = page_ops.edgeBlockAt(&graph.graph, first_block, .fwd);
     for (0..47) |edge_index| {
-        first_edges.edges[edge_index] = .{ .destination = @intCast(edge_index + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        first_edges.destinations[edge_index] = @intCast(edge_index + 1);
+        first_edges.relations[edge_index] = 0;
+        first_edges.flags[edge_index] = 0;
     }
-    first_edges.mask = constants.denseMask(47);
+    page_ops.setBlockLiveCount(&graph.graph, first_block, .fwd, 47);
 
     var second_edges = page_ops.edgeBlockAt(&graph.graph, second_block, .fwd);
-    second_edges.edges[0] = .{ .destination = 48, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
-    second_edges.mask = constants.denseMask(1);
+    second_edges.destinations[0] = 48;
+    second_edges.relations[0] = 0;
+    second_edges.flags[0] = 0;
+    page_ops.setBlockLiveCount(&graph.graph, second_block, .fwd, 1);
 
     try publishForwardBlock(&graph, .{ .index = 0 }, first_block, 2);
     graph.graph.edge_count.store(48, .release);
@@ -242,7 +253,7 @@ test "validation: detects grouped span declared past allocated runs" {
     const block = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
     try publishForwardGroups(&graph, node, group, 1, 2);
 
@@ -279,7 +290,7 @@ test "validation: detects double-owned blocks" {
     const node0 = try graph.addNode();
     const node1 = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
 
     try publishForwardBlock(&graph, node0, block, 1);
     try publishForwardBlock(&graph, node1, block, 1);
@@ -296,7 +307,7 @@ test "validation: detects owned blocks present in free list" {
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
     try publishForwardBlock(&graph, node, block, 1);
     page_ops.freeBlock(&graph.graph, block, .fwd);
 
@@ -312,7 +323,7 @@ test "validation: detects retired blocks still reachable" {
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
     try publishForwardBlock(&graph, node, block, 1);
     try graph.retireBlockFwd(block);
 
@@ -355,9 +366,9 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
     const rb0 = try graph.allocBlockRev();
     const rb1 = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, rb0, .rev).sources[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, rb0, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, rb0, .rev, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, rb1, .rev).sources[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, rb1, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, rb1, .rev, @intCast(1));
     {
         const d1 = try graph.nodeAt(.{ .index = 1 });
         publish.clearPublishedSides(d1);
@@ -390,9 +401,11 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
 fn fillBlockWithDst(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
     for (0..count) |i| {
-        block.edges[i] = .{ .destination = first_dst + @as(u32, @intCast(i)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        block.destinations[i] = first_dst + @as(u32, @intCast(i));
+        block.relations[i] = 0;
+        block.flags[i] = 0;
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
 }
 
 test "validation: removed node entry in repair queue is currently accepted" {
@@ -546,7 +559,7 @@ test "validation: removed node with non-zero published degree is flagged" {
     _ = try graph.removeNode(target);
 
     // Removed nodes must have published degree 0 on both sides.
-    const node = page_ops.nodeAt(&graph.graph, target);
+    const node = graph.nodeRefAny(target);
     publish.setPublishedRevDegree(node, 1);
     publish.syncMetaToPublished(&graph, target.index);
 
@@ -559,8 +572,10 @@ test "validation: debugValidate survives invalid first_group" {
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     try publishForwardGroups(&graph, node, 0xFF_FFFF, 1, 1);
     graph.graph.edge_count.store(1, .release);
 
@@ -576,8 +591,10 @@ test "validation: debugValidate continues after malformed group.next with later 
     try addNodeCount(&graph, 3);
     const node = graph_mod.NodeId{ .index = 0 };
     const block = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     const group = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = 0xFF_FFFF };
     try publishForwardGroups(&graph, node, group, 1, 2);
@@ -597,10 +614,58 @@ test "validation: validate returns CorruptGraph for invalid first_group" {
     const node = try graph.addNode();
     _ = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).edges[0] = .{ .destination = 1, .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     try publishForwardGroups(&graph, node, 0xFF_FFFF, 1, 1);
     graph.graph.edge_count.store(1, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
+}
+
+test "validation: removed node with reverse structural storage is corruption" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const removed_target = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, removed_target, 0, 0);
+    _ = try graph.removeNode(removed_target);
+    try graph.validate();
+
+    // Corrupt: re-inject a structural reverse block on the removed node while
+    // its published reverse degree stays zero. removeNode guarantees both
+    // descriptors are cleared synchronously, so this must be flagged.
+    const block = try graph.allocBlockRev();
+    const node_buffer = graph.nodeRefAny(removed_target);
+    publish.publishedRevSide(node_buffer).first_block = block;
+    publish.publishedRevSide(node_buffer).block_count = 1;
+    try publish.syncToPublished(&graph, removed_target.index);
+
+    try testing.expectError(error.CorruptGraph, graph.validate());
+
+    const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
+    defer testing.allocator.free(violations);
+    try testing.expect(containsViolation(violations, .removed_node_has_reverse_storage));
+}
+
+test "validation: snapshot capture does not elide zero-degree side headers" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const node = try graph.addNode();
+    _ = try graph.addNode();
+
+    // Corrupt: forward side header points at one block while the published
+    // degree stays zero. The capture must surface the header so snapshot
+    // validation can see the inconsistency instead of an invented empty side.
+    const block = try graph.allocBlockFwd();
+    try publishForwardBlock(&graph, node, block, 1);
+
+    var view = try graph_mod.snapshot_view_mod.captureGraphView(&graph.graph, testing.allocator);
+    defer view.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 1), view.fwd_block_count[node.index]);
+    try testing.expectEqual(@as(u32, 0), view.degree_fwd[node.index]);
 }

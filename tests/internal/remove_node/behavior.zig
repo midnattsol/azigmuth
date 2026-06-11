@@ -29,7 +29,7 @@ test "removeNode: public API invalidates removed node and hides tombstoned incom
     try expectRemovedNodeInvalid(&graph, a);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
     try testing.expectEqual(@as(usize, 0), try graph.inDegree(c));
-    try testing.expectEqual(@as(u22, 0), (try graph.nodeAtConst(b)).loadPublishedMeta().degree_fwd);
+    try testing.expectEqual(@as(u22, 0), (try graph.nodeAt(b)).loadPublishedMeta().degree_fwd);
     // Tombstone b -> a may remain structural until repair compaction,
     // but it is no longer part of the visible logical edge count.
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
@@ -51,12 +51,12 @@ test "removeNode: repairNode compacts tombstoned incoming edges" {
     _ = try graph.removeNode(a);
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
 
-    try graph.repairNode(b);
+    _ = try graph.repairNode(b);
     try graph.validate();
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    const a_adj = page_ops.nodeAtConst(&graph.graph, a).publishedAdj();
+    const a_adj = graph.nodeRefAny(a).publishedAdj();
     try testing.expectEqual(@as(u16, 0), a_adj.block_count_rev);
 }
 
@@ -72,7 +72,7 @@ test "removeNode: self-edge is removed from both forward and reverse state" {
     try expectRemovedNodeInvalid(&graph, a);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    const a_adj = page_ops.nodeAtConst(&graph.graph, a).publishedAdj();
+    const a_adj = graph.nodeRefAny(a).publishedAdj();
     try testing.expectEqual(@as(u16, 0), a_adj.block_count_fwd);
     try testing.expectEqual(@as(u16, 0), a_adj.block_count_rev);
 }
@@ -94,7 +94,7 @@ test "removeNode: repairBudgeted discovers tombstone debt without explicit repai
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    const a_adj = page_ops.nodeAtConst(&graph.graph, a).publishedAdj();
+    const a_adj = graph.nodeRefAny(a).publishedAdj();
     try testing.expectEqual(@as(u16, 0), a_adj.block_count_rev);
 }
 

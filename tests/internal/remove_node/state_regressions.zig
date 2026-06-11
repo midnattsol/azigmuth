@@ -48,7 +48,7 @@ test "removeNode regression: validate and debugValidate agree on removed node wi
 
     for (0..spoke_count) |spoke_idx| {
         if (spoke_idx % 2 == 0) {
-            const removed_adj = page_ops.nodeAtConst(&graph.graph, spokes[spoke_idx]).publishedAdj();
+            const removed_adj = graph.nodeRefAny(spokes[spoke_idx]).publishedAdj();
             try testing.expectEqual(@as(u16, 0), removed_adj.block_count_rev);
             try testing.expectEqual(@as(u16, 0), removed_adj.group_count_rev);
         }
@@ -63,7 +63,7 @@ test "removeNode regression: validate and debugValidate agree on grouped chain s
 
     const block = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
 
     const node_buffer = try graph.nodeAt(node);

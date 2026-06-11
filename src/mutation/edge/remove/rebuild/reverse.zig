@@ -24,7 +24,7 @@ fn appendReverseBlockRemovingSourceCount(
     remove_count: u32,
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-    const live = @popCount(old_block.mask);
+    const live = page_ops.blockLiveCount(graph, block_idx, .rev);
     if (live == 0) return remove_count;
     if (remove_count == 0) {
         // Published blocks are immutable under RCU: unchanged blocks are
@@ -61,7 +61,7 @@ fn appendReverseBlockRemovingSourceCount(
             write += 1;
         }
     }
-    new_block.mask = constants.denseMask(write);
+    page_ops.setBlockLiveCount(graph, new_block_idx, .rev, @intCast(write));
     try block_list.append(graph.allocator, new_block_idx);
     try scratch.markRetireBlock(graph.allocator, .rev, block_idx);
     return remove_count - take;
@@ -89,5 +89,5 @@ pub fn rebuildReverseRemoveCount(
     var context = ReverseRemovalContext{ .source_idx = source_idx, .remaining = remove_count, .scratch = scratch, .block_list = &block_list };
     try common.forEachBlockInSide(graph, published_side.*, .rev, &context, collectReverseRemovalBlock);
     if (context.remaining > 0) return error.CorruptGraph;
-    return try rebuild_common.buildSideFromBlockList(graph, scratch, block_list.items);
+    return try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .rev);
 }

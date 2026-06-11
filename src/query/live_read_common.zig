@@ -28,8 +28,7 @@ pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeI
     const reader_token = try rcu.readerEnter(@constCast(graph));
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
-    const node_buffer = node_access.nodeAtConst(graph, node);
-    const meta = node_access.loadPublishedMeta(node_buffer);
+    const meta = node_access.loadPublishedMetaAtConst(graph, node);
     const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
 
@@ -45,16 +44,18 @@ pub fn validateReverseSideQuick(graph: *const graph_core.GraphCore, side_snapsho
 }
 
 /// Returns whether a candidate node should be treated as removed during live iteration.
+/// Caches the candidate's NodeMeta page: 8 bytes per node keeps the removed
+/// filter dense in cache during multi-candidate scans.
 pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_index: u32) bool {
     if (candidate_index >= graph.publishedNodeCount()) return true;
     const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
     if (iterator.cached_node_page == null or iterator.cached_node_page_index != page_index) {
-        iterator.cached_node_page = page_ops.nodePageAtConst(graph, page_index);
+        iterator.cached_node_page = page_ops.nodeMetaPageAtConst(graph, page_index);
         iterator.cached_node_page_index = page_index;
     }
 
     const slot_index = page_ops.slotOf(candidate_index, constants.NODES_PER_PAGE);
-    return node_access.loadPublishedMeta(&iterator.cached_node_page.?[slot_index]).removed;
+    return iterator.cached_node_page.?[slot_index].loadPublishedMeta().removed;
 }
 
 /// Releases the reader token held by one live iterator, if still active.

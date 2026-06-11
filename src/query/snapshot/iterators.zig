@@ -29,7 +29,6 @@ fn initNeighborCursor(
         .current_block_index = cursor_init.traversal.current_block_index,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_index = cursor_init.traversal.current_group_index,
-        .current_mask = 0,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
@@ -59,7 +58,6 @@ fn initOutEdgeCursor(
         .current_block_index = cursor_init.traversal.current_block_index,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_index = cursor_init.traversal.current_group_index,
-        .current_mask = 0,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
@@ -82,7 +80,8 @@ pub const SnapshotNeighborIterator = struct {
     blocks_remaining: u32,
     current_group_index: u32,
 
-    current_mask: u64,
+    current_slot: u7 = 0,
+    current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
@@ -101,8 +100,8 @@ pub const SnapshotNeighborIterator = struct {
         return side_traversal.advanceToNextGroup(self, self.view.core);
     }
 
-    fn loadNextNonEmptyMask(self: *SnapshotNeighborIterator) bool {
-        return side_traversal.loadNextNeighborMask(self, self.view.core);
+    fn loadNextNonEmptySpan(self: *SnapshotNeighborIterator) bool {
+        return side_traversal.loadNextNeighborSpan(self, self.view.core);
     }
 
     fn candidateExcluded(self: *const SnapshotNeighborIterator, candidate_idx: u32) bool {
@@ -124,31 +123,72 @@ pub const SnapshotNeighborIterator = struct {
         return null;
     }
 
-    fn nextBlockNeighbor(self: *SnapshotNeighborIterator) ?types.NodeId {
+    fn nextBlockNeighborImpl(self: *SnapshotNeighborIterator, comptime check_removed: bool) ?types.NodeId {
         while (true) {
-            while (self.current_mask == 0) {
-                if (!self.loadNextNonEmptyMask()) return null;
+            while (self.current_slot >= self.current_live) {
+                if (!self.loadNextNonEmptySpan()) return null;
             }
 
-            const bit_index: u6 = @intCast(@ctz(self.current_mask));
-            self.current_mask &= self.current_mask - 1;
-            const candidate = switch (self.direction) {
-                .fwd => types.NodeId{ .index = self.cached_fwd_block.?.edges[bit_index].destination },
-                .rev => types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] },
+            const slot = self.current_slot;
+            self.current_slot += 1;
+            const candidate_idx = switch (self.direction) {
+                .fwd => self.cached_fwd_block.?.destinations[slot],
+                .rev => self.cached_rev_block.?.sources[slot],
             };
-            if (self.candidateExcluded(candidate.index)) continue;
-            return candidate;
+            if (candidate_idx >= self.view.node_state.len) continue;
+            if (check_removed and !self.view.isLiveIndex(candidate_idx)) continue;
+            return types.NodeId{ .index = candidate_idx };
         }
     }
 
     pub fn next(self: *SnapshotNeighborIterator) ?types.NodeId {
         if (self.tiny_mode) return self.nextTinyNeighbor();
-        return self.nextBlockNeighbor();
+        if (self.check_removed_candidates) return self.nextBlockNeighborImpl(true);
+        return self.nextBlockNeighborImpl(false);
     }
 
     pub fn materialize(self: *SnapshotNeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
         var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.degree_hint);
         defer out.deinit(allocator);
+
+        // Clean block sides drain block-by-block: a tight counted append loop
+        // per cached block instead of the per-element iterator state machine.
+        if (!self.tiny_mode and !self.check_removed_candidates) {
+            const len_bound = self.view.node_state.len;
+
+            // Drain a partially consumed block element-wise first.
+            while (self.current_slot < self.current_live) {
+                const slot = self.current_slot;
+                self.current_slot += 1;
+                const candidate_idx = switch (self.direction) {
+                    .fwd => self.cached_fwd_block.?.destinations[slot],
+                    .rev => self.cached_rev_block.?.sources[slot],
+                };
+                if (candidate_idx < len_bound) try out.append(allocator, .{ .index = candidate_idx });
+            }
+
+            while (self.loadNextNonEmptySpan()) {
+                const live: usize = self.current_live;
+                try out.ensureUnusedCapacity(allocator, live);
+                switch (self.direction) {
+                    .fwd => {
+                        const destinations = self.cached_fwd_block.?.destinations[0..live];
+                        for (destinations) |destination_idx| {
+                            if (destination_idx < len_bound) out.appendAssumeCapacity(.{ .index = destination_idx });
+                        }
+                    },
+                    .rev => {
+                        const sources = self.cached_rev_block.?.sources[0..live];
+                        for (sources) |source_idx| {
+                            if (source_idx < len_bound) out.appendAssumeCapacity(.{ .index = source_idx });
+                        }
+                    },
+                }
+                self.current_slot = self.current_live;
+            }
+            return out.toOwnedSlice(allocator);
+        }
+
         while (self.next()) |neighbor| {
             try out.append(allocator, neighbor);
         }
@@ -164,7 +204,8 @@ pub const SnapshotOutEdgeIterator = struct {
     blocks_remaining: u32,
     current_group_index: u32,
 
-    current_mask: u64,
+    current_slot: u7 = 0,
+    current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
@@ -181,8 +222,8 @@ pub const SnapshotOutEdgeIterator = struct {
         return side_traversal.advanceToNextGroup(self, self.view.core);
     }
 
-    fn loadNextNonEmptyMask(self: *SnapshotOutEdgeIterator) bool {
-        return side_traversal.loadNextOutEdgeMask(self, self.view.core);
+    fn loadNextNonEmptySpan(self: *SnapshotOutEdgeIterator) bool {
+        return side_traversal.loadNextOutEdgeSpan(self, self.view.core);
     }
 
     fn destinationExcluded(self: *const SnapshotOutEdgeIterator, destination_idx: u32) bool {
@@ -203,19 +244,19 @@ pub const SnapshotOutEdgeIterator = struct {
 
     fn nextBlockOutEdge(self: *SnapshotOutEdgeIterator) ?types.EdgeRef {
         while (true) {
-            while (self.current_mask == 0) {
-                if (!self.loadNextNonEmptyMask()) return null;
+            while (self.current_slot >= self.current_live) {
+                if (!self.loadNextNonEmptySpan()) return null;
             }
 
-            const bit_index: u6 = @intCast(@ctz(self.current_mask));
-            self.current_mask &= self.current_mask - 1;
+            const slot = self.current_slot;
+            self.current_slot += 1;
 
             const fwd_block = self.cached_fwd_block.?;
             const fwd_ids = self.cached_fwd_ids.?;
-            const edge = fwd_block.edges[bit_index];
-            if (self.destinationExcluded(edge.destination)) continue;
+            const destination_idx = fwd_block.destinations[slot];
+            if (self.destinationExcluded(destination_idx)) continue;
 
-            return .{ .id = .{ .local = fwd_ids.ids[bit_index] }, .destination = edge.destination, .relation = edge.relation, .flags = @bitCast(edge.flags) };
+            return .{ .id = .{ .local = fwd_ids.ids[slot] }, .destination = destination_idx, .relation = fwd_block.relations[slot], .flags = @bitCast(fwd_block.flags[slot]) };
         }
     }
 

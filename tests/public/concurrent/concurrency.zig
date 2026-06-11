@@ -30,6 +30,20 @@ fn readerLoop(ctx: *ReaderCtx) void {
     }
 }
 
+/// Bounded variant of `readerLoop` for tests that only need "both readers
+/// make progress concurrently": a fixed number of read attempts, no `stop`
+/// coordination, so the outcome does not depend on thread scheduling.
+fn readerLoopCounted(ctx: *ReaderCtx) void {
+    var attempt: usize = 0;
+    while (attempt < 256) : (attempt += 1) {
+        var iter = snapshot_support.neighbors(ctx.graph, ctx.node, std.heap.page_allocator) catch continue;
+        defer iter.deinit();
+        const materialized = iter.materialize(std.heap.page_allocator) catch continue;
+        defer std.heap.page_allocator.free(materialized);
+        _ = ctx.reads.fetchAdd(1, .monotonic);
+    }
+}
+
 const RemoveNodeCtx = struct {
     graph: *graphz.Graph,
     target: graphz.NodeId,
@@ -150,16 +164,9 @@ test "contract: concurrent readers on disjoint nodes are lock-free" {
         .stop = &stop,
     };
 
-    var thread_one = try std.Thread.spawn(.{}, readerLoop, .{&ctx_one});
-    var thread_two = try std.Thread.spawn(.{}, readerLoop, .{&ctx_two});
+    var thread_one = try std.Thread.spawn(.{}, readerLoopCounted, .{&ctx_one});
+    var thread_two = try std.Thread.spawn(.{}, readerLoopCounted, .{&ctx_two});
 
-    var verify_spin: usize = 0;
-    while (verify_spin < 200_000) : (verify_spin += 1) {
-        if (ctx_one.reads.load(.acquire) > 0 and ctx_two.reads.load(.acquire) > 0) break;
-        std.atomic.spinLoopHint();
-    }
-
-    stop.store(true, .release);
     thread_one.join();
     thread_two.join();
 

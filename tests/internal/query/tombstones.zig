@@ -325,7 +325,7 @@ test "tombstones: repairNode removes tombstones from forward adjacency" {
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
     try graph.validate();
 
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
     try graph.validate();
 
     const after_adj = try graph.publishedNodeAdj(source);

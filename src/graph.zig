@@ -37,8 +37,11 @@ pub const EdgeId = types.EdgeId;
 pub const EdgeRef = types.EdgeRef;
 pub const GraphOptions = types.GraphOptions;
 pub const NodeRemovalSummary = types.NodeRemovalSummary;
+pub const RepairNodeSummary = types.RepairNodeSummary;
+pub const EdgeInput = types.EdgeInput;
 pub const RepairFlushSummary = types.RepairFlushSummary;
 pub const DebtStats = types.DebtStats;
+pub const StorageStats = types.StorageStats;
 pub const Context = algorithm_context.Context;
 pub const ReadSession = graph_snapshot_api.ReadSession;
 pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
@@ -128,10 +131,6 @@ pub const Graph = struct {
         allocator: std.mem.Allocator,
         options: types.GraphOptions,
     ) !Graph {
-        const first_page = try allocator.alloc(types.NodeBuffer, constants.NODES_PER_PAGE);
-        errdefer allocator.free(first_page);
-        @memset(first_page, std.mem.zeroes(types.NodeBuffer));
-
         var state_value = graph_core.GraphCore{
             .allocator = allocator,
             .multigraph_enabled = options.multigraph,
@@ -139,8 +138,14 @@ pub const Graph = struct {
             .repair_rev = .empty,
         };
 
-        const first_page_slot = try state_value.node_pages_pages.slotPtr(allocator, 0);
-        first_page_slot.store(@intFromPtr(first_page.ptr), .release);
+        // Pre-allocate the first meta page so an empty graph keeps the
+        // historical "init allocates" contract and OOM tests stay meaningful.
+        _ = try state_value.node_meta_pages.slotPtr(allocator, 0);
+        const first_meta = try allocator.alloc(node_meta_mod.NodeMeta, constants.NODES_PER_PAGE);
+        errdefer allocator.free(first_meta);
+        @memset(first_meta, .{});
+        const first_page_slot = try state_value.node_meta_pages.slotPtr(allocator, 0);
+        first_page_slot.store(@intFromPtr(first_meta.ptr), .release);
 
         return .{ .graph = state_value };
     }
@@ -163,7 +168,6 @@ pub const Graph = struct {
         }
 
         const alloc = self.graph.allocator;
-        freeAtomicPages(types.NodeBuffer, alloc, &self.graph.node_pages_pages, constants.NODES_PER_PAGE);
         freeAtomicPages(node_meta_mod.NodeMeta, alloc, &self.graph.node_meta_pages, constants.NODES_PER_PAGE);
         freeAtomicPages(node_published_mod.NodePublished, alloc, &self.graph.node_published_pages, constants.NODES_PER_PAGE);
         freeAtomicPages(node_hot_layout_mod.Slot, alloc, &self.graph.node_hot_pages, constants.NODES_PER_PAGE);
@@ -176,6 +180,8 @@ pub const Graph = struct {
         freeAtomicPages(types.EdgeBlockGroup, alloc, &self.graph.edge_block_group_pages, constants.EDGE_GROUPS_PER_PAGE);
         if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, &self.graph.edge_blocks_fwd_id_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_fwd_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(u8, alloc, &self.graph.edge_blocks_fwd_live_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(u8, alloc, &self.graph.edge_blocks_rev_live_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_rev_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_block_group_meta_pages, constants.EDGE_GROUPS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_fwd_meta_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
@@ -224,14 +230,50 @@ pub const Graph = struct {
 
     // ── Internal helpers (test/debug access, not public API) ───────────
 
-    pub fn nodeAt(self: *Graph, node: types.NodeId) !*types.NodeBuffer {
+    pub const NodeRef = struct {
+        core: *graph_core.GraphCore,
+        node: types.NodeId,
+
+        pub fn publishedAdj(self: NodeRef) types.NodeAdj {
+            return node_access.publishedAdjAtConst(self.core, self.node);
+        }
+
+        pub fn loadPublishedMeta(self: NodeRef) types.PublishedMeta {
+            return node_access.loadPublishedMetaAtConst(self.core, self.node);
+        }
+
+        pub fn storePublishedMeta(self: NodeRef, meta: types.PublishedMeta) void {
+            page_ops.nodeMetaAt(self.core, self.node).storePublishedMeta(meta);
+        }
+
+        pub fn publishedFwdFromMeta(self: NodeRef, meta: types.PublishedMeta) types.SideAdj {
+            return node_access.publishedFwdFromMeta(self.core, self.node, meta);
+        }
+
+        pub fn publishedRevFromMeta(self: NodeRef, meta: types.PublishedMeta) types.SideAdj {
+            return node_access.publishedRevFromMeta(self.core, self.node, meta);
+        }
+
+        pub fn publishedAdjFromMeta(self: NodeRef, meta: types.PublishedMeta) types.NodeAdj {
+            return node_access.publishedAdjFromMetaAtConst(self.core, self.node, meta);
+        }
+
+        pub fn publishedFwd(self: NodeRef) types.SideAdj {
+            return node_access.publishedFwdFromMeta(self.core, self.node, self.loadPublishedMeta());
+        }
+
+        pub fn publishedRev(self: NodeRef) types.SideAdj {
+            return node_access.publishedRevFromMeta(self.core, self.node, self.loadPublishedMeta());
+        }
+    };
+
+    pub fn nodeAt(self: *Graph, node: types.NodeId) !NodeRef {
         try node_validity.ensureLiveNode(&self.graph, node);
-        return node_access.nodeAt(&self.graph, node);
+        return .{ .core = &self.graph, .node = node };
     }
 
-    pub fn nodeAtConst(self: *const Graph, node: types.NodeId) !*const types.NodeBuffer {
-        try node_validity.ensureLiveNode(&self.graph, node);
-        return node_access.nodeAtConst(&self.graph, node);
+    pub fn nodeRefAny(self: *Graph, node: types.NodeId) NodeRef {
+        return .{ .core = &self.graph, .node = node };
     }
 
     pub fn nodePageCount(self: *const Graph) usize {
@@ -360,7 +402,7 @@ pub const Graph = struct {
 
     // ── Repair API ────────────────────────────────────────────────────
 
-    pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!void {
+    pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!types.RepairNodeSummary {
         const core = try self.beginMutCall();
         defer endCall(core);
         return repair.repairNode(core, node);
@@ -384,7 +426,25 @@ pub const Graph = struct {
         return stats_mod.debtStats(core);
     }
 
+    pub fn storageStats(self: *const Graph) GraphError!types.StorageStats {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return .{
+            .blocks_fwd_allocated = @atomicLoad(u32, @constCast(&core.block_fwd_count), .acquire),
+            .blocks_rev_allocated = @atomicLoad(u32, @constCast(&core.block_rev_count), .acquire),
+            .groups_allocated = @atomicLoad(u32, @constCast(&core.group_count), .acquire),
+            .tiny_fwd_allocated = @atomicLoad(u32, @constCast(&core.tiny_fwd_count), .acquire),
+            .tiny_rev_allocated = @atomicLoad(u32, @constCast(&core.tiny_rev_count), .acquire),
+        };
+    }
+
     // ── Mutation ──────────────────────────────────────────────────────
+
+    pub fn addEdges(self: *Graph, source: types.NodeId, edges: []const types.EdgeInput) GraphError!usize {
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.addEdges(core, source, edges);
+    }
 
     pub fn addEdge(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!void {
         const core = try self.beginMutCall();

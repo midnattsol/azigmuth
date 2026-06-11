@@ -21,7 +21,7 @@ fn publishForwardBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     publish.publishedFwdSide(node_buffer).block_count = block_count;
     var total: usize = 0;
     for (first_block..first_block + block_count) |block_index| {
-        total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .fwd).mask);
+        total += page_ops.blockLiveCount(&graph.graph, @intCast(block_index), .fwd);
     }
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast((total))));
     try publish.syncToPublished(graph, node.index);
@@ -34,7 +34,7 @@ fn publishReverseBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     publish.publishedRevSide(node_buffer).block_count = block_count;
     var total: usize = 0;
     for (first_block..first_block + block_count) |block_index| {
-        total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .rev).mask);
+        total += page_ops.blockLiveCount(&graph.graph, @intCast(block_index), .rev);
     }
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast((total))));
     try publish.syncToPublished(graph, node.index);
@@ -43,9 +43,11 @@ fn publishReverseBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
 fn fillForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
     for (0..count) |edge_index| {
-        block.edges[edge_index] = .{ .destination = first_destination + @as(u32, @intCast(edge_index)), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        block.destinations[edge_index] = first_destination + @as(u32, @intCast(edge_index));
+        block.relations[edge_index] = 0;
+        block.flags[edge_index] = 0;
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
 }
 
 fn fillReverseBlock(graph: *graph_mod.Graph, block_index: u32, first_source: u32, count: u7) void {
@@ -53,14 +55,14 @@ fn fillReverseBlock(graph: *graph_mod.Graph, block_index: u32, first_source: u32
     for (0..count) |source_index| {
         block.sources[source_index] = first_source + @as(u32, @intCast(source_index));
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(count));
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
     const block_index = try graph.allocBlockRev();
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
     block.sources[0] = source_index;
-    block.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(1));
 
     const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     publish.publishedRevSide(node_buffer).first_block = block_index;
@@ -116,8 +118,7 @@ test "repair: fill-and-shift keeps two blocks when merged total exceeds capacity
 
     const adjacency = try graph.publishedNodeAdj(.{ .index = 0 });
     try testing.expectEqual(@as(u16, 2), adjacency.block_count_fwd);
-    const first_repaired_block = page_ops.edgeBlockAtConst(&graph.graph, adjacency.first_block_fwd, .fwd);
-    try testing.expectEqual(constants.FULL_BLOCK_MASK, first_repaired_block.mask);
+    try testing.expectEqual(@as(u7, 64), page_ops.blockLiveCount(&graph.graph, adjacency.first_block_fwd, .fwd));
     try graph.validate();
 }
 
@@ -160,7 +161,7 @@ test "repair: repairNode consolidates a fragmented reverse adjacency into a vali
     const before_repair_adj = try graph.publishedNodeAdj(target);
     try testing.expect(before_repair_adj.group_count_rev > 0 or before_repair_adj.block_count_rev > 1);
 
-    try graph.repairNode(target);
+    _ = try graph.repairNode(target);
 
     const after_repair_adj = try graph.publishedNodeAdj(target);
     try testing.expectEqual(@as(usize, source_count - remove_indices.len), try graph.inDegree(target));
@@ -194,14 +195,18 @@ test "repair: repairNode compacts under-full adjacent blocks" {
     var first_block_edges = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
     var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
     for (0..47) |edge_idx| {
-        first_block_edges.edges[edge_idx] = types.Edge{ .destination = @intCast(edge_idx + 1), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        first_block_edges.destinations[edge_idx] = @intCast(edge_idx + 1);
+        first_block_edges.relations[edge_idx] = 0;
+        first_block_edges.flags[edge_idx] = 0;
     }
-    first_block_edges.mask = constants.denseMask(47);
+    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
 
     for (0..36) |edge_idx| {
-        second_block_edges.edges[edge_idx] = types.Edge{ .destination = @intCast(edge_idx + 48), .relation = 0, .flags = @bitCast(@as(u16, 0)) };
+        second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 48);
+        second_block_edges.relations[edge_idx] = 0;
+        second_block_edges.flags[edge_idx] = 0;
     }
-    second_block_edges.mask = constants.denseMask(36);
+    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
 
     const node = try graph.nodeAt(source);
     publish.clearPublishedSides(node);
@@ -213,7 +218,7 @@ test "repair: repairNode compacts under-full adjacent blocks" {
     try publishReverseSourcesForForwardRange(&graph, source.index, 48, 36);
     graph.graph.edge_count.store(83, .release);
 
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
 
     try graph.validate();
     try testing.expectEqual(@as(usize, 83), try graph.outDegree(source));
@@ -299,6 +304,7 @@ test "repair: repairBudgeted counts a node with forward and reverse debt once" {
     publish.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = true, .removed = false });
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(40)));
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(40)));
+    try publish.syncToPublished(&graph, node.index);
 
     try graph.graph.repair_fwd.append(graph.graph.allocator, node.index);
     try graph.graph.repair_rev.append(graph.graph.allocator, node.index);
@@ -434,6 +440,7 @@ test "repair: grouped adjacency becomes contiguous after repair" {
     publish.publishedFwdSide(node_buffer).group_count = 3;
     publish.publishedFwdSide(node_buffer).first_group = g0;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(60)));
+    try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(60, .release);
 
     const compacted = try repair.repairNodeSide(&graph.graph, node, .fwd);
@@ -461,7 +468,7 @@ test "repair: valid forward blocks produce valid reverse after repair" {
         const r = try graph.allocBlockRev();
         var rev = page_ops.edgeBlockAt(&graph.graph, r, .rev);
         rev.sources[0] = src.index;
-        rev.mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, r, .rev, @intCast(1));
         const dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         publish.publishedRevSide(dn).first_block = r;
         publish.publishedRevSide(dn).block_count = 1;

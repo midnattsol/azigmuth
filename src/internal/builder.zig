@@ -146,12 +146,9 @@ pub const GraphBuilder = struct {
     fn resetPublishedAdjacencyBuffers(self: *GraphBuilder) void {
         for (0..self.graph.nodeCount()) |node_index| {
             const node = graph_mod.NodeId{ .index = @intCast(node_index) };
-            const node_buffer = node_access.nodeAt(&self.graph.graph, node);
             node_access.resetPublishedSides(&self.graph.graph, node);
             page_ops.nodeHotAt(&self.graph.graph, .{ .index = @intCast(node_index) }).storeNextLocalEdgeId(1);
-            node_buffer.next_local_edge_id.store(1, .monotonic);
             page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_index) }).storePublishedMeta(.{});
-            node_buffer.storePublishedMeta(.{});
         }
     }
 
@@ -220,25 +217,21 @@ pub const GraphBuilder = struct {
             const live = @min(remaining, 64);
             for (0..live) |slot| {
                 const edge = run[edge_index + slot];
-                block.edges[slot] = .{
-                    .destination = edge.destination,
-                    .relation = edge.relation,
-                    .flags = @bitCast(edge.flags),
-                };
+                block.destinations[slot] = edge.destination;
+                block.relations[slot] = edge.relation;
+                block.flags[slot] = edge.flags;
                 if (id_block) |fwd_ids| {
                     fwd_ids.ids[slot] = next_edge_id;
                     next_edge_id += 1;
                 }
             }
-            block.mask = constants.denseMask(@intCast(live));
+            page_ops.setBlockLiveCount(&self.graph.graph, block_index, .fwd, @intCast(live));
             edge_index += live;
         }
 
         const node = graph_mod.NodeId{ .index = source_index };
-        const node_buffer = node_access.nodeAt(&self.graph.graph, node);
         if (self.graph.graph.multigraph_enabled) {
             page_ops.nodeHotAt(&self.graph.graph, .{ .index = source_index }).storeNextLocalEdgeId(next_edge_id);
-            node_buffer.next_local_edge_id.store(next_edge_id, .monotonic);
         }
         var side_adj = std.mem.zeroes(types.SideAdj);
         setContiguousSide(&side_adj, first_block, block_count);
@@ -311,7 +304,7 @@ pub const GraphBuilder = struct {
             for (0..block_count) |block_offset| {
                 const live = @min(remaining, 64);
                 const block_index = first_block + @as(u32, @intCast(block_offset));
-                page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev).mask = constants.denseMask(@intCast(live));
+                page_ops.setBlockLiveCount(&self.graph.graph, block_index, .rev, @intCast(live));
                 remaining -= live;
             }
         }
@@ -329,11 +322,9 @@ pub const GraphBuilder = struct {
 
     fn publishExactDegrees(self: *GraphBuilder, plan: *const FreezePlan) void {
         for (0..self.graph.nodeCount()) |node_index| {
-            const node_buffer = node_access.nodeAt(&self.graph.graph, .{ .index = @intCast(node_index) });
             const meta = (types.PublishedMeta{}).withFwdDegree(@intCast(plan.fwd_degrees[node_index])).withRevDegree(@intCast(plan.rev_degrees[node_index]));
             node_access.setPublishedDegrees(&self.graph.graph, .{ .index = @intCast(node_index) }, meta, @intCast(plan.fwd_degrees[node_index]), @intCast(plan.rev_degrees[node_index]));
             page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_index) }).storePublishedMeta(meta);
-            node_buffer.storePublishedMeta(meta);
         }
     }
 

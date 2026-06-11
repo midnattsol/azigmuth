@@ -13,9 +13,9 @@ const LiveTotal = struct { value: u64 = 0 };
 pub fn validateBlockDense(graph: *const graph_core.GraphCore, block_index: u32, comptime side: common.Side) !void {
     if (!common.blockExists(graph, block_index, side)) return error.CorruptGraph;
 
-    const mask = common.blockMask(graph, block_index, side);
-    const live_count = @popCount(mask);
-    if (mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
+    // Dense storage is structural now (entries occupy [0, live)); the only
+    // representable corruption is a live count beyond block capacity.
+    if (common.blockLive(graph, block_index, side) > 64) return error.CorruptGraph;
 }
 
 pub fn validateDenseInContiguousBlocks(
@@ -65,12 +65,12 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
     if (side == .fwd) {
         const block = page_ops.edgeBlockAtConst(graph, block_index, .fwd);
         const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_index) else null;
-        const live_count = @popCount(block.mask);
-        if (block.mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
+        const live_count = page_ops.blockLiveCount(graph, block_index, .fwd);
+        if (live_count > 64) return error.CorruptGraph;
         var prev: u32 = 0;
         var prev_id: u32 = 0;
         for (0..live_count) |slot| {
-            const key = block.edges[slot].destination;
+            const key = block.destinations[slot];
             if (key >= node_count) return error.CorruptGraph;
             if (graph.multigraph_enabled) {
                 const edge_id = id_block.?.ids[slot];
@@ -88,8 +88,8 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
         return live_count;
     } else {
         const block = page_ops.edgeBlockAtConst(graph, block_index, .rev);
-        const live_count = @popCount(block.mask);
-        if (block.mask != constants.denseMask(@intCast(live_count))) return error.CorruptGraph;
+        const live_count = page_ops.blockLiveCount(graph, block_index, .rev);
+        if (live_count > 64) return error.CorruptGraph;
         var prev: u32 = 0;
         for (0..live_count) |slot| {
             const key = block.sources[slot];
@@ -203,7 +203,7 @@ pub fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: type
         ) !void {
             const end = if (is_last) start + run_count - 1 else start + run_count;
             for (start..end) |block_index| {
-                if (@popCount(common.blockMask(inner_graph, @intCast(block_index), side)) < constants.MIN_OCCUPANCY) {
+                if (common.blockLive(inner_graph, @intCast(block_index), side) < constants.MIN_OCCUPANCY) {
                     return error.CorruptGraph;
                 }
             }

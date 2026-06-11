@@ -148,7 +148,7 @@ test "repair_budgeted: repair of node already optimal returns zero" {
     }
 
     try graph.validate();
-    try graph.repairNode(source);
+    _ = try graph.repairNode(source);
     try graph.validate();
 
     const repaired = try graph.repairBudgeted(10);

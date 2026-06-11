@@ -15,15 +15,15 @@ pub fn appendBlockShapeViolations(
 ) !void {
     if (!common.blockExists(graph, block_index, side)) return;
 
-    const mask = common.blockMask(graph, block_index, side);
-    const live_count = @popCount(mask);
+    const live_count = common.blockLive(graph, block_index, side);
     const id_block = if (side == .fwd and graph.multigraph_enabled)
         page_ops.edgeBlockFwdIdsAtConst(graph, block_index)
     else
         null;
 
-    if (mask != constants.denseMask(@intCast(live_count))) {
+    if (live_count > 64) {
         try violations.append(allocator, .{ .mask_bit_out_of_range = .{ .node = node_id, .block = block_index } });
+        return;
     }
 
     var prev_key: ?u32 = null;

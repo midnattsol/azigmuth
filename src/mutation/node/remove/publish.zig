@@ -31,24 +31,25 @@ pub fn publishRelatedNodeUpdates(graph: *graph_core.GraphCore, related_nodes: []
         if (related.rev_degree_delta > 0) counts.destinations += 1;
         if (related.fwd_degree_delta == 0 and related.rev_degree_delta == 0) continue;
 
-        const meta = node_access.loadPublishedMeta(related.node_buffer);
+        const meta = related.node_meta.loadPublishedMeta();
         if (meta.removed) continue;
+        counts.applied_edge_removals += @as(u64, related.fwd_degree_delta) + @as(u64, related.rev_degree_delta);
         const node_id = types.NodeId{ .index = related.node_index };
         const node_published = page_ops.ensureNodePublishedAt(graph, node_id) catch @panic("failed to ensure published page");
         if (related.fwd_degree_delta > 0 and related.rev_degree_delta > 0) {
-            _ = common.publishMetaBothDeltaUpdated(graph, node_id, related.node_meta, node_published, related.node_buffer, meta, .{
+            _ = common.publishMetaBothDeltaNoFlip(related.node_meta, node_published, .{
                 .needs_repair_fwd = true,
                 .needs_repair_rev = true,
                 .removed = false,
-            }, related.fwd_degree_delta, related.rev_degree_delta);
+            }, -@as(i23, @intCast(related.fwd_degree_delta)), -@as(i23, @intCast(related.rev_degree_delta)));
             continue;
         }
 
         if (related.fwd_degree_delta > 0) {
-            _ = common.publishMetaFwdDeltaUpdated(graph, node_id, related.node_meta, node_published, related.node_buffer, meta, true, related.fwd_degree_delta);
+            _ = common.publishMetaFwdDeltaNoFlip(related.node_meta, node_published, true, -@as(i23, @intCast(related.fwd_degree_delta)));
         }
         if (related.rev_degree_delta > 0) {
-            _ = common.publishMetaRevDeltaUpdated(graph, node_id, related.node_meta, node_published, related.node_buffer, meta, true, related.rev_degree_delta);
+            _ = common.publishMetaRevDeltaNoFlip(related.node_meta, node_published, true, -@as(i23, @intCast(related.rev_degree_delta)));
         }
     }
     return counts;
