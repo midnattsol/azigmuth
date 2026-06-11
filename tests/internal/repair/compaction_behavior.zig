@@ -21,7 +21,7 @@ fn publishForwardBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     publish.publishedFwdSide(node_buffer).block_count = block_count;
     var total: usize = 0;
     for (first_block..first_block + block_count) |block_index| {
-        total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .fwd).mask);
+        total += page_ops.blockLiveCount(&graph.graph, @intCast(block_index), .fwd);
     }
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast((total))));
     try publish.syncToPublished(graph, node.index);
@@ -34,7 +34,7 @@ fn publishReverseBlocks(graph: *graph_mod.Graph, node: graph_mod.NodeId, first_b
     publish.publishedRevSide(node_buffer).block_count = block_count;
     var total: usize = 0;
     for (first_block..first_block + block_count) |block_index| {
-        total += @popCount(page_ops.edgeBlockAtConst(&graph.graph, @intCast(block_index), .rev).mask);
+        total += page_ops.blockLiveCount(&graph.graph, @intCast(block_index), .rev);
     }
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast((total))));
     try publish.syncToPublished(graph, node.index);
@@ -47,7 +47,7 @@ fn fillForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination
         block.relations[edge_index] = 0;
         block.flags[edge_index] = 0;
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
 }
 
 fn fillReverseBlock(graph: *graph_mod.Graph, block_index: u32, first_source: u32, count: u7) void {
@@ -55,14 +55,14 @@ fn fillReverseBlock(graph: *graph_mod.Graph, block_index: u32, first_source: u32
     for (0..count) |source_index| {
         block.sources[source_index] = first_source + @as(u32, @intCast(source_index));
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(count));
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
     const block_index = try graph.allocBlockRev();
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
     block.sources[0] = source_index;
-    block.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(1));
 
     const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     publish.publishedRevSide(node_buffer).first_block = block_index;
@@ -118,8 +118,7 @@ test "repair: fill-and-shift keeps two blocks when merged total exceeds capacity
 
     const adjacency = try graph.publishedNodeAdj(.{ .index = 0 });
     try testing.expectEqual(@as(u16, 2), adjacency.block_count_fwd);
-    const first_repaired_block = page_ops.edgeBlockAtConst(&graph.graph, adjacency.first_block_fwd, .fwd);
-    try testing.expectEqual(constants.FULL_BLOCK_MASK, first_repaired_block.mask);
+    try testing.expectEqual(@as(u7, 64), page_ops.blockLiveCount(&graph.graph, adjacency.first_block_fwd, .fwd));
     try graph.validate();
 }
 
@@ -200,14 +199,14 @@ test "repair: repairNode compacts under-full adjacent blocks" {
         first_block_edges.relations[edge_idx] = 0;
         first_block_edges.flags[edge_idx] = 0;
     }
-    first_block_edges.mask = constants.denseMask(47);
+    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
 
     for (0..36) |edge_idx| {
         second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 48);
         second_block_edges.relations[edge_idx] = 0;
         second_block_edges.flags[edge_idx] = 0;
     }
-    second_block_edges.mask = constants.denseMask(36);
+    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
 
     const node = try graph.nodeAt(source);
     publish.clearPublishedSides(node);
@@ -469,7 +468,7 @@ test "repair: valid forward blocks produce valid reverse after repair" {
         const r = try graph.allocBlockRev();
         var rev = page_ops.edgeBlockAt(&graph.graph, r, .rev);
         rev.sources[0] = src.index;
-        rev.mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, r, .rev, @intCast(1));
         const dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         publish.publishedRevSide(dn).first_block = r;
         publish.publishedRevSide(dn).block_count = 1;

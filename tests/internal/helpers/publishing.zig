@@ -132,14 +132,14 @@ pub fn appendForwardEntry(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, ad
     }
 
     const side = page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .fwd);
-    const live = @popCount(side.mask);
+    const live = page_ops.blockLiveCount(&graph.graph, side_adj.first_block, .fwd);
     side.destinations[live] = entry.destination;
     side.relations[live] = entry.relation;
     side.flags[live] = @bitCast(entry.flags);
     if (graph.graph.multigraph_enabled) {
         page_ops.edgeBlockFwdIdsAt(&graph.graph, side_adj.first_block).ids[live] = entry.edge_id;
     }
-    side.mask = graph_mod.constants_mod.denseMask(@intCast(live + 1));
+    page_ops.setBlockLiveCount(&graph.graph, side_adj.first_block, .fwd, @intCast(live + 1));
 }
 
 pub fn appendReverseSource(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, adjacency: types.NodeAdj, source_idx: u32) !void {
@@ -155,10 +155,9 @@ pub fn appendReverseSource(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, a
         return;
     }
 
-    const side = page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .rev);
-    const live = @popCount(side.mask);
-    side.sources[live] = source_idx;
-    side.mask = graph_mod.constants_mod.denseMask(@intCast(live + 1));
+    const live = page_ops.blockLiveCount(&graph.graph, side_adj.first_block, .rev);
+    page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .rev).sources[live] = source_idx;
+    page_ops.setBlockLiveCount(&graph.graph, side_adj.first_block, .rev, @intCast(live + 1));
 }
 
 pub fn truncateReverseByOne(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, adjacency: types.NodeAdj) !void {
@@ -172,9 +171,8 @@ pub fn truncateReverseByOne(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, 
         return;
     }
 
-    const side = page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .rev);
-    const live = @popCount(side.mask);
-    side.mask = graph_mod.constants_mod.denseMask(@intCast(live - 1));
+    const live = page_ops.blockLiveCount(&graph.graph, side_adj.first_block, .rev);
+    page_ops.setBlockLiveCount(&graph.graph, side_adj.first_block, .rev, @intCast(live - 1));
 }
 
 pub fn ensureForwardBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.NodeId) !types.NodeAdj {
@@ -195,7 +193,7 @@ pub fn ensureForwardBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
             page_ops.edgeBlockFwdIdsAt(&graph.graph, block_idx).ids[entry_idx] = entry.edge_id;
         }
     }
-    block.mask = graph_mod.constants_mod.denseMask(@intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 
     var updated_adj = adjacency;
     updated_adj.first_block_fwd = block_idx;
@@ -219,7 +217,7 @@ pub fn ensureReverseBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
     for (0..count) |entry_idx| {
         block.sources[entry_idx] = page_ops.tinyRevAtConst(&graph.graph, side_adj.first_block).sources[entry_idx];
     }
-    block.mask = graph_mod.constants_mod.denseMask(@intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(count));
 
     var updated_adj = adjacency;
     updated_adj.first_block_rev = block_idx;
@@ -232,77 +230,80 @@ pub fn ensureReverseBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
     return updated_adj;
 }
 
-pub fn clearPublishedSides(node: *graph_mod.NodeBuffer) void {
-    node.fwd_buffers[0] = std.mem.zeroes(types.SideAdj);
-    node.fwd_buffers[1] = std.mem.zeroes(types.SideAdj);
-    node.rev_buffers[0] = std.mem.zeroes(types.SideAdj);
-    node.rev_buffers[1] = std.mem.zeroes(types.SideAdj);
-    node.storePublishedMeta(.{});
+const NodeRef = graph_mod.Graph.NodeRef;
+
+fn metaOf(ref: NodeRef) *graph_mod.node_meta_mod.NodeMeta {
+    return page_ops.nodeMetaAt(ref.core, ref.node);
 }
 
+fn publishedOf(ref: NodeRef) *node_published.NodePublished {
+    return page_ops.ensureNodePublishedAt(ref.core, ref.node) catch @panic("ensureNodePublishedAt failed");
+}
+
+pub fn clearPublishedSides(ref: NodeRef) void {
+    const published = publishedOf(ref);
+    published.fwd[0] = std.mem.zeroes(types.SideAdj);
+    published.fwd[1] = std.mem.zeroes(types.SideAdj);
+    published.rev[0] = std.mem.zeroes(types.SideAdj);
+    published.rev[1] = std.mem.zeroes(types.SideAdj);
+    published.fwd_degrees = [_]u32{0} ** 2;
+    published.rev_degrees = [_]u32{0} ** 2;
+    metaOf(ref).storePublishedMeta(.{});
+}
+
+/// The published pool is canonical: nothing to sync. Kept so white-box tests
+/// that publish through this helper keep their call shape.
 pub fn syncToPublished(graph: *graph_mod.Graph, node_idx: u32) !void {
-    const node = page_ops.nodeAt(&graph.graph, .{ .index = node_idx });
-    const published = try page_ops.ensureNodePublishedAt(&graph.graph, .{ .index = node_idx });
-    published.fwd[0] = node.fwd_buffers[0];
-    published.fwd[1] = node.fwd_buffers[1];
-    published.rev[0] = node.rev_buffers[0];
-    published.rev[1] = node.rev_buffers[1];
-    page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx }).storePublishedMeta(node.loadPublishedMeta());
+    _ = graph;
+    _ = node_idx;
 }
 
 pub fn syncMetaToPublished(graph: *graph_mod.Graph, node_idx: u32) void {
-    const node = page_ops.nodeAt(&graph.graph, .{ .index = node_idx });
-    const published = page_ops.ensureNodePublishedAt(&graph.graph, .{ .index = node_idx }) catch @panic("ensureNodePublishedAt failed");
-    const meta = node.loadPublishedMeta();
-    published.fwd_degrees[meta.fwd_index] = if (meta.degree_fwd_overflow) graph_mod.constants_mod.MAX_DEGREE_PER_SIDE else meta.degree_fwd;
-    published.rev_degrees[meta.rev_index] = if (meta.degree_rev_overflow) graph_mod.constants_mod.MAX_DEGREE_PER_SIDE else meta.degree_rev;
-    page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx }).storePublishedMeta(node.loadPublishedMeta());
+    _ = graph;
+    _ = node_idx;
 }
 
 pub fn setPublishedFwdDegreeExact(graph: *graph_mod.Graph, node_idx: u32, deg: u32) void {
-    const node = page_ops.nodeAt(&graph.graph, .{ .index = node_idx });
-    var meta = node.loadPublishedMeta();
+    const node_meta = page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx });
+    var meta = node_meta.loadPublishedMeta();
     meta = meta.withFwdDegree(deg);
-    node.storePublishedMeta(meta);
     const published = page_ops.ensureNodePublishedAt(&graph.graph, .{ .index = node_idx }) catch @panic("ensureNodePublishedAt failed");
     published.fwd_degrees[meta.fwd_index] = deg;
-    page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx }).storePublishedMeta(meta);
+    node_meta.storePublishedMeta(meta);
 }
 
 pub fn setPublishedRevDegreeExact(graph: *graph_mod.Graph, node_idx: u32, deg: u32) void {
-    const node = page_ops.nodeAt(&graph.graph, .{ .index = node_idx });
-    var meta = node.loadPublishedMeta();
+    const node_meta = page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx });
+    var meta = node_meta.loadPublishedMeta();
     meta = meta.withRevDegree(deg);
-    node.storePublishedMeta(meta);
     const published = page_ops.ensureNodePublishedAt(&graph.graph, .{ .index = node_idx }) catch @panic("ensureNodePublishedAt failed");
     published.rev_degrees[meta.rev_index] = deg;
-    page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx }).storePublishedMeta(meta);
+    node_meta.storePublishedMeta(meta);
 }
 
 pub fn storePublishedMeta(graph: *graph_mod.Graph, node_idx: u32, meta: types.PublishedMeta) void {
     page_ops.nodeMetaAt(&graph.graph, .{ .index = node_idx }).storePublishedMeta(meta);
-    page_ops.nodeAt(&graph.graph, .{ .index = node_idx }).storePublishedMeta(meta);
 }
 
-pub fn publishedFwdSide(node: *graph_mod.NodeBuffer) *types.SideAdj {
-    return &node.fwd_buffers[node.loadPublishedMeta().fwd_index];
+pub fn publishedFwdSide(ref: NodeRef) *types.SideAdj {
+    const published = publishedOf(ref);
+    return &published.fwd[metaOf(ref).loadPublishedMeta().fwd_index];
 }
 
-pub fn publishedRevSide(node: *graph_mod.NodeBuffer) *types.SideAdj {
-    return &node.rev_buffers[node.loadPublishedMeta().rev_index];
+pub fn publishedRevSide(ref: NodeRef) *types.SideAdj {
+    const published = publishedOf(ref);
+    return &published.rev[metaOf(ref).loadPublishedMeta().rev_index];
 }
 
-pub fn setPublishedAdjSnapshot(node: *graph_mod.NodeBuffer, adj: types.NodeAdj) void {
-    const meta = node.loadPublishedMeta();
-    const fwd = publishedFwdSide(node);
-    fwd.* = .{
+pub fn setPublishedAdjSnapshot(ref: NodeRef, adj: types.NodeAdj) void {
+    const meta = metaOf(ref).loadPublishedMeta();
+    publishedFwdSide(ref).* = .{
         .first_block = adj.first_block_fwd,
         .block_count = adj.block_count_fwd,
         .group_count = adj.group_count_fwd,
         .first_group = adj.first_group_fwd,
     };
-    const rev = publishedRevSide(node);
-    rev.* = .{
+    publishedRevSide(ref).* = .{
         .first_block = adj.first_block_rev,
         .block_count = adj.block_count_rev,
         .group_count = adj.group_count_rev,
@@ -311,47 +312,47 @@ pub fn setPublishedAdjSnapshot(node: *graph_mod.NodeBuffer, adj: types.NodeAdj) 
     var new_meta = meta.withFlags(adj.flags);
     new_meta.degree_fwd = meta.degree_fwd;
     new_meta.degree_rev = meta.degree_rev;
-    node.storePublishedMeta(new_meta);
+    metaOf(ref).storePublishedMeta(new_meta);
 }
 
-pub fn setPublishedFlags(node: *graph_mod.NodeBuffer, flags: types.NodeFlags) void {
-    const meta = node.loadPublishedMeta();
-    node.storePublishedMeta(meta.withFlags(flags));
+pub fn setPublishedFlags(ref: NodeRef, flags: types.NodeFlags) void {
+    const meta = metaOf(ref).loadPublishedMeta();
+    metaOf(ref).storePublishedMeta(meta.withFlags(flags));
 }
 
-pub fn setPublishedDegrees(node: *graph_mod.NodeBuffer, fwd: u22, rev: u22) void {
-    var meta = node.loadPublishedMeta();
+pub fn setPublishedDegrees(ref: NodeRef, fwd: u22, rev: u22) void {
+    var meta = metaOf(ref).loadPublishedMeta();
     meta.degree_fwd = fwd;
     meta.degree_rev = rev;
-    node.storePublishedMeta(meta);
+    metaOf(ref).storePublishedMeta(meta);
 }
 
-pub fn setPublishedState(node: *graph_mod.NodeBuffer, flags: types.NodeFlags, fwd_deg: u32, rev_deg: u32) void {
-    var meta = node.loadPublishedMeta();
+pub fn setPublishedState(ref: NodeRef, flags: types.NodeFlags, fwd_deg: u32, rev_deg: u32) void {
+    var meta = metaOf(ref).loadPublishedMeta();
     meta = meta.withFlags(flags);
     meta = meta.withFwdDegree(fwd_deg).withRevDegree(rev_deg);
-    node.storePublishedMeta(meta);
+    metaOf(ref).storePublishedMeta(meta);
 }
 
-pub fn publishedDegrees(node: *graph_mod.NodeBuffer) struct { fwd: u32, rev: u32 } {
-    const meta = node.loadPublishedMeta();
+pub fn publishedDegrees(ref: NodeRef) struct { fwd: u32, rev: u32 } {
+    const meta = metaOf(ref).loadPublishedMeta();
     return .{ .fwd = meta.degree_fwd, .rev = meta.degree_rev };
 }
 
-pub fn setPublishedFwdDegree(node: *graph_mod.NodeBuffer, deg: u32) void {
-    var meta = node.loadPublishedMeta();
+pub fn setPublishedFwdDegree(ref: NodeRef, deg: u32) void {
+    var meta = metaOf(ref).loadPublishedMeta();
     meta = meta.withFwdDegree(deg);
-    node.storePublishedMeta(meta);
+    metaOf(ref).storePublishedMeta(meta);
 }
 
-pub fn setPublishedRevDegree(node: *graph_mod.NodeBuffer, deg: u32) void {
-    var meta = node.loadPublishedMeta();
+pub fn setPublishedRevDegree(ref: NodeRef, deg: u32) void {
+    var meta = metaOf(ref).loadPublishedMeta();
     meta = meta.withRevDegree(deg);
-    node.storePublishedMeta(meta);
+    metaOf(ref).storePublishedMeta(meta);
 }
 
-pub fn updatePublishedFlags(node: *graph_mod.NodeBuffer, update: fn (*types.NodeFlags) void) void {
-    var flags = node.loadPublishedMeta().flags();
+pub fn updatePublishedFlags(ref: NodeRef, update: fn (*types.NodeFlags) void) void {
+    var flags = metaOf(ref).loadPublishedMeta().flags();
     update(&flags);
-    setPublishedFlags(node, flags);
+    setPublishedFlags(ref, flags);
 }

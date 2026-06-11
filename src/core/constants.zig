@@ -3,23 +3,11 @@ const types = @import("types.zig");
 
 /// Entries per page — chosen to fit in common cache sizes.
 pub const NODES_PER_PAGE: u32 = 256; // 256 × 64 B = 16 KB.
-pub const EDGE_BLOCKS_PER_PAGE: u32 = 64; // 64 × 520 B ≈ 33 KB — fits in L2; traversal locality is per-block (~9 cache lines).
+pub const EDGE_BLOCKS_PER_PAGE: u32 = 64; // 64 × 512 B = 32 KB, line-aligned; live counts: one 64 B sidecar page per block page.
 pub const EDGE_GROUPS_PER_PAGE: u32 = 128; // 128 × 12 B = 1536 B.
 
 /// Sentinel value marking the end of an EdgeBlockGroup chain.
 pub const END_OF_CHAIN: u32 = 0xFFFF_FFFF;
-
-/// Compute the occupancy mask for a given live count. Handles the
-/// edge cases live_count == 0 (mask = 0) and live_count == 64
-/// (mask = 0xFFFF_FFFF_FFFF_FFFF) which would be UB with a bare shift.
-pub fn denseMask(live_count: u7) u64 {
-    if (live_count == 0) return 0;
-    if (live_count == 64) return 0xFFFF_FFFF_FFFF_FFFF;
-    return (@as(u64, 1) << @as(u6, @intCast(live_count))) - 1;
-}
-
-/// Occupancy mask for a fully-saturated edge block (all 64 slots occupied).
-pub const FULL_BLOCK_MASK: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 /// Minimum occupancy per non-tail block (75% of 64).
 pub const MIN_OCCUPANCY: u6 = 48;
@@ -56,9 +44,10 @@ pub const MAX_EDGE_GROUP_PAGES: usize = EDGE_GROUP_PAGE_DIR_L1 * EDGE_GROUP_PAGE
 pub const MAX_READER_SLOTS: usize = 256;
 
 comptime {
-    std.debug.assert(@sizeOf(types.NodeBuffer) == 80);
-    std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 520);
-    std.debug.assert(@sizeOf(types.EdgeBlockRev) == 264);
+    std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 512);
+    std.debug.assert(@alignOf(types.EdgeBlockFwd) == 64);
+    std.debug.assert(@sizeOf(types.EdgeBlockRev) == 256);
+    std.debug.assert(@alignOf(types.EdgeBlockRev) == 64);
     std.debug.assert(@sizeOf(types.EdgeBlockGroup) == 12);
     std.debug.assert(@sizeOf(types.NodeAdj) == 36);
     std.debug.assert(@sizeOf(types.SideAdj) == 16);

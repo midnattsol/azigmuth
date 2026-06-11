@@ -42,28 +42,6 @@ pub fn forEachRunInAdj(
     }
 }
 
-fn containsRun(
-    graph: *const graph_core.GraphCore,
-    contains: *ContainsContext,
-    start: u32,
-    count: u16,
-    comptime side: common.Side,
-) !void {
-    if (!runContainsTarget(graph, start, count, contains.target, side)) return;
-    contains.found = true;
-    return error.FoundTarget;
-}
-
-fn countRunMatches(
-    graph: *const graph_core.GraphCore,
-    count: *CountContext,
-    start: u32,
-    block_count: u16,
-    comptime side: common.Side,
-) !void {
-    count.total += countTargetInRun(graph, start, block_count, count.target, side);
-}
-
 pub fn runContainsTarget(
     graph: *const graph_core.GraphCore,
     start: u32,
@@ -99,7 +77,10 @@ pub fn findSlotInRun(
             .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
             .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
         };
-        const live = @as(u7, @intCast(@popCount(block.mask)));
+        const live: u7 = @intCast(@min(switch (side) {
+            .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
+            .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+        }, 64));
         if (live == 0) break;
         const first_key = switch (side) {
             .fwd => block.destinations[0],
@@ -114,7 +95,7 @@ pub fn findSlotInRun(
         } else if (target > last_key) {
             low = mid + 1;
         } else {
-            if (adjacency_mod.searchInBlock(BlockType, block, target)) |slot| return slot;
+            if (adjacency_mod.searchInBlock(BlockType, block, live, target)) |slot| return slot;
             break;
         }
     }
@@ -125,7 +106,11 @@ pub fn findSlotInRun(
             .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
             .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
         };
-        if (adjacency_mod.searchInBlock(BlockType, block, target)) |slot| return slot;
+        const live: u7 = @intCast(@min(switch (side) {
+            .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
+            .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+        }, 64));
+        if (adjacency_mod.searchInBlock(BlockType, block, live, target)) |slot| return slot;
     }
     return null;
 }
@@ -148,24 +133,6 @@ pub fn adjacencyContains(
         return false;
     };
     return contains.found;
-}
-
-fn countTargetInRun(
-    graph: *const graph_core.GraphCore,
-    start: u32,
-    count: u16,
-    target: u32,
-    comptime side: common.Side,
-) u32 {
-    var total: u32 = 0;
-    for (start..start + count) |block_idx_usize| {
-        const block_idx: u32 = @intCast(block_idx_usize);
-        const live_count = @popCount(common.blockMask(graph, block_idx, side));
-        for (0..live_count) |slot| {
-            if (common.blockKey(graph, block_idx, slot, side) == target) total += 1;
-        }
-    }
-    return total;
 }
 
 pub fn countTargetMatches(

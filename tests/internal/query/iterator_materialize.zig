@@ -93,21 +93,21 @@ test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency re
     for (0..64) |i| {
         blk0.sources[i] = @intCast(i + 1);
     }
-    blk0.mask = constants.FULL_BLOCK_MASK;
+    page_ops.setBlockLiveCount(&graph.graph, block0, .rev, 64);
 
     const block1 = try graph.allocBlockRev();
     var blk1 = page_ops.edgeBlockAt(&graph.graph, block1, .rev);
     for (0..64) |i| {
         blk1.sources[i] = @intCast(i + 65);
     }
-    blk1.mask = constants.FULL_BLOCK_MASK;
+    page_ops.setBlockLiveCount(&graph.graph, block1, .rev, 64);
 
     const block2 = try graph.allocBlockRev();
     var blk2 = page_ops.edgeBlockAt(&graph.graph, block2, .rev);
     for (0..2) |i| {
         blk2.sources[i] = @intCast(i + 129);
     }
-    blk2.mask = constants.denseMask(2);
+    page_ops.setBlockLiveCount(&graph.graph, block2, .rev, @intCast(2));
 
     const group0 = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1, .next = constants.END_OF_CHAIN };

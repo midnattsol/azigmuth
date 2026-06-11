@@ -4,8 +4,6 @@ const node_hot = @import("../storage/node/hot.zig");
 const types = @import("../core/types.zig");
 
 pub const ClaimedAdjacencies = struct {
-    source_node: *types.NodeBuffer,
-    destination_node: *types.NodeBuffer,
     source_hot: *node_hot.NodeHot,
     destination_hot: *node_hot.NodeHot,
     source_fwd_claimed: bool = false,
@@ -32,7 +30,6 @@ pub const ClaimedAdjacencies = struct {
 };
 
 pub const ClaimedNodeSides = struct {
-    node: *types.NodeBuffer,
     hot: *node_hot.NodeHot,
     fwd_claimed: bool = false,
     rev_claimed: bool = false,
@@ -71,12 +68,10 @@ pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
     return .{ .graph = graph };
 }
 
-pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_node: *types.NodeBuffer, destination_node: *types.NodeBuffer, source_index: u32, destination_index: u32) !ClaimedAdjacencies {
+pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_index: u32, destination_index: u32) !ClaimedAdjacencies {
     const source_hot = try page_ops.ensureNodeHotAt(graph, .{ .index = source_index });
     const destination_hot = if (source_index == destination_index) source_hot else try page_ops.ensureNodeHotAt(graph, .{ .index = destination_index });
     var claims = ClaimedAdjacencies{
-        .source_node = source_node,
-        .destination_node = destination_node,
         .source_hot = source_hot,
         .destination_hot = destination_hot,
     };
@@ -91,8 +86,8 @@ pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_node: *types.Nod
     return claims;
 }
 
-pub fn tryClaimNodeSides(graph: *graph_core.GraphCore, node: *types.NodeBuffer, node_index: u32, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
-    var claims = ClaimedNodeSides{ .node = node, .hot = try page_ops.ensureNodeHotAt(graph, .{ .index = node_index }) };
+pub fn tryClaimNodeSides(graph: *graph_core.GraphCore, node_index: u32, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
+    var claims = ClaimedNodeSides{ .hot = try page_ops.ensureNodeHotAt(graph, .{ .index = node_index }) };
     errdefer claims.release();
     if (want_fwd) try claims.ensureFwd();
     if (want_rev) try claims.ensureRev();

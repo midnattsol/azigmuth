@@ -191,7 +191,26 @@ fn benchPointReadSession(allocator: std.mem.Allocator) !harness.Result {
     return .{ .ops = ops, .elapsed_ns = elapsed_ns };
 }
 
+fn benchAddEdgesBatch(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try graphz.Graph.init(allocator);
+    defer graph.deinit();
+
+    const edge_count: usize = 4096;
+    const source = try graph.addNode();
+    const inputs = try allocator.alloc(graphz.EdgeInput, edge_count);
+    defer allocator.free(inputs);
+    for (inputs) |*input| input.* = .{ .destination = try graph.addNode() };
+
+    const start_ns = harness.nowNs();
+    _ = try graph.addEdges(source, inputs);
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    try graph.validate();
+    return .{ .ops = edge_count, .elapsed_ns = elapsed_ns };
+}
+
 pub const cases = [_]harness.Case{
+    .{ .name = "workload.addedges_batch", .run = benchAddEdgesBatch },
     .{ .name = "workload.point_read_session", .run = benchPointReadSession },
     .{ .name = "workload.tiny_churn", .run = benchTinyChurn },
     .{ .name = "workload.addedge_monotonic", .run = benchAddEdgeMonotonic },

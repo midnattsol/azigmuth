@@ -24,7 +24,7 @@ fn appendReverseBlockRemovingSourceCount(
     remove_count: u32,
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-    const live = @popCount(old_block.mask);
+    const live = page_ops.blockLiveCount(graph, block_idx, .rev);
     if (live == 0) return remove_count;
     if (remove_count == 0) {
         // Published blocks are immutable under RCU: unchanged blocks are
@@ -61,7 +61,7 @@ fn appendReverseBlockRemovingSourceCount(
             write += 1;
         }
     }
-    new_block.mask = constants.denseMask(write);
+    page_ops.setBlockLiveCount(graph, new_block_idx, .rev, @intCast(write));
     try block_list.append(graph.allocator, new_block_idx);
     try scratch.markRetireBlock(graph.allocator, .rev, block_idx);
     return remove_count - take;

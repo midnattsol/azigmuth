@@ -201,13 +201,12 @@ pub fn appendNodeViolations(
     try trackGroupsForSide(allocator, list, tracking, node_id, adjacency.first_group_fwd, adjacency.group_count_fwd);
     try trackGroupsForSide(allocator, list, tracking, node_id, adjacency.first_group_rev, adjacency.group_count_rev);
 
-    const node_buffer = node_access.nodeAtConst(graph, .{ .index = node_id });
 
     try v.appendOwnershipAndShapeViolations(graph, allocator, list, &tracking.owned_forward_blocks, &tracking.free_forward_blocks, &tracking.retired_forward_blocks, node_id, forward_blocks.items, .fwd);
     try v.appendOwnershipAndShapeViolations(graph, allocator, list, &tracking.owned_reverse_blocks, &tracking.free_reverse_blocks, &tracking.retired_reverse_blocks, node_id, reverse_blocks.items, .rev);
 
     if (!adjacency.flags.removed) {
-        try consistency.appendForwardEdgeIdViolations(graph, allocator, list, node_id, node_buffer, adjacency);
+        try consistency.appendForwardEdgeIdViolations(graph, allocator, list, node_id, adjacency);
         try consistency.appendForwardConsistencyViolations(graph, allocator, list, node_id, forward_blocks.items);
         try consistency.appendReverseConsistencyViolations(graph, allocator, list, node_id, reverse_blocks.items);
     }

@@ -141,6 +141,12 @@ pub const Graph = opaque {
         return self.inner().reclaimRetired();
     }
 
+    /// Batched insertion from one source: one claim cycle and one publish
+    /// per touched node. All-or-nothing — on error the graph is unchanged.
+    pub fn addEdges(self: *Graph, source: internal.NodeId, edges: []const internal.EdgeInput) internal.GraphError!usize {
+        return self.inner().addEdges(source, edges);
+    }
+
     pub fn addEdge(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!void {
         return self.inner().addEdge(source, destination, relation, @bitCast(flags));
     }

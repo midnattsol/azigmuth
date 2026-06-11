@@ -74,14 +74,14 @@ pub const ReadSnapshot = struct {
     }
 
     pub fn bfs(self: *const ReadSnapshot, start: types.NodeId, ctx: context_mod.Context) types.GraphError![]types.NodeId {
-        return bfs_mod.bfsCaptured(&self.view, start, ctx.allocator);
+        return bfs_mod.bfsCaptured(&self.view, start, ctx);
     }
 
     pub fn dfs(self: *const ReadSnapshot, start: types.NodeId, ctx: context_mod.Context) types.GraphError![]types.NodeId {
-        return dfs_mod.dfsCaptured(&self.view, start, ctx.allocator);
+        return dfs_mod.dfsCaptured(&self.view, start, ctx);
     }
 
     pub fn hasCycle(self: *const ReadSnapshot, ctx: context_mod.Context) types.GraphError!bool {
-        return cycle_mod.hasCycleCaptured(&self.view, ctx.allocator);
+        return cycle_mod.hasCycleCaptured(&self.view, ctx);
     }
 };

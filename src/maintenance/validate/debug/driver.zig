@@ -17,9 +17,8 @@ pub fn debugValidateLive(graph: *const graph_core.GraphCore, allocator: std.mem.
     for (0..node_count) |node_index| {
         const node_id: u32 = @intCast(node_index);
         const node = types.NodeId{ .index = node_id };
-        const node_buffer = node_access.nodeAtConst(graph, node);
         const adjacency = node_access.publishedAdjAtConst(graph, node);
-        const meta = node_access.loadPublishedMeta(node_buffer);
+        const meta = node_access.loadPublishedMetaAtConst(graph, node);
         const node_totals = try shared.appendNodeViolations(graph, allocator, &list, &tracking, node_id, adjacency, node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta), node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta));
         totals.fwd += node_totals.fwd;
         totals.rev += node_totals.rev;

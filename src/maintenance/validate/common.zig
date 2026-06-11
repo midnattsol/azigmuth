@@ -66,16 +66,12 @@ pub fn forEachLiveSlotInAdj(
             inner_graph: *const graph_core.GraphCore,
             inner_context: @TypeOf(context),
             start: u32,
-            count: u16,
+            count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block_idx: u32 = @intCast(block_idx_usize);
-                const block = switch (side) {
-                    .fwd => page_ops.edgeBlockAtConst(inner_graph, block_idx, .fwd),
-                    .rev => page_ops.edgeBlockAtConst(inner_graph, block_idx, .rev),
-                };
-                const live_count = @popCount(block.mask);
+                const live_count = @min(blockLive(inner_graph, block_idx, side), 64);
                 for (0..live_count) |slot| {
                     try callback(inner_graph, inner_context, block_idx, slot);
                 }
@@ -278,10 +274,10 @@ pub fn blockExists(graph: *const graph_core.GraphCore, block_index: u32, comptim
     return block_index < allocatedBlockCount(graph, side);
 }
 
-pub fn blockMask(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) u64 {
+pub fn blockLive(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) usize {
     return switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd).mask,
-        .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev).mask,
+        .fwd => page_ops.blockLiveCount(graph, block_index, .fwd),
+        .rev => page_ops.blockLiveCount(graph, block_index, .rev),
     };
 }
 

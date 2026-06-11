@@ -18,6 +18,13 @@ pub const EdgeRef = struct {
     flags: EdgeFlags,
 };
 
+/// One edge of a batched insertion (see `Graph.addEdges`).
+pub const EdgeInput = struct {
+    destination: NodeId,
+    relation: u16 = 0,
+    flags: EdgeFlags = .{},
+};
+
 /// Options passed at graph creation time.
 pub const GraphOptions = struct {
     /// When true, multiple edges between the same (source,destination) pair
@@ -93,6 +100,7 @@ pub const GraphError = error{
     UnsupportedOperation,
     RepairRequired,
     GraphBusy,
+    Cancelled,
 };
 
 /// Per-node boolean flags. Backed by u32.
@@ -196,7 +204,7 @@ pub const SideAdj = extern struct {
 // ── Combined adjacency snapshot ───────────────────────────────────────
 
 /// Full-node adjacency snapshot for iteration, validation, and bulk operations.
-/// Obtained via `NodeBuffer.publishedAdj()` which composes from both sides.
+/// Composed on demand from the published NodeMeta + NodePublished pools.
 /// Full published adjacency snapshot.
 pub const NodeAdj = extern struct {
     first_block_fwd: u32,
@@ -214,188 +222,25 @@ pub const NodeAdj = extern struct {
 
 // ── Per-node data ─────────────────────────────────────────────────────
 
-/// RCU double-buffer for adjacency headers, per side, with a single atomic
-/// publication word that selects both published side buffers and carries the
-/// public node flags plus exact logical degree per side. Readers load one
-/// coherent node snapshot from `published_meta`, while writers on disjoint
-/// logical sides still publish with per-side claims and CAS. The current
-/// compatibility/staging layout measures 80 bytes.
-pub const NodeBuffer = extern struct {
-    published_meta: std.atomic.Value(u64) = std.atomic.Value(u64).init(@bitCast(PublishedMeta{})),
-
-    /// Per-node writer claims: forward side.
-    fwd_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
-    /// Per-node writer claims: reverse side.
-    rev_claim: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
-
-    fwd_buffers: [2]SideAdj,
-    rev_buffers: [2]SideAdj,
-
-    /// Monotonic edge-id counter local to this node, used in multigraph mode.
-    /// 0 is reserved for "empty" slot; valid IDs start at 1.  Atomic so that
-    /// lock-free readers (validate, debugValidate) can observe a coherent value
-    /// while writers increment via nextEdgeId().
-    next_local_edge_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
-
-    /// Allocates and returns the next edge ID local to this node.
-    ///
-    /// `0` is reserved as invalid/unset, so the counter never wraps through 0.
-    /// Once it reaches `maxInt(u32)`, the next allocation fails cleanly.
-    pub fn nextEdgeId(self: *NodeBuffer) GraphError!EdgeId {
-        var expected = self.next_local_edge_id.load(.acquire);
-        while (true) {
-            if (expected == std.math.maxInt(u32)) return error.EdgeIdExhausted;
-            const desired = expected + 1;
-            if (self.next_local_edge_id.cmpxchgWeak(expected, desired, .acq_rel, .acquire) == null) {
-                return .{ .local = expected };
-            }
-            expected = self.next_local_edge_id.load(.acquire);
-        }
-    }
-
-    pub fn loadPublishedMeta(self: *const NodeBuffer) PublishedMeta {
-        return @bitCast(self.published_meta.load(.acquire));
-    }
-
-    pub fn storePublishedMeta(self: *NodeBuffer, meta: PublishedMeta) void {
-        self.published_meta.store(@bitCast(meta), .release);
-    }
-
-    pub fn cmpxchgPublishedMeta(self: *NodeBuffer, expected: PublishedMeta, desired: PublishedMeta) ?PublishedMeta {
-        const actual = self.published_meta.cmpxchgStrong(@bitCast(expected), @bitCast(desired), .acq_rel, .acquire);
-        return if (actual) |raw| @as(PublishedMeta, @bitCast(raw)) else null;
-    }
-
-    pub fn publishedFwdFromMeta(self: *const NodeBuffer, meta: PublishedMeta) SideAdj {
-        return self.fwd_buffers[meta.fwd_index];
-    }
-
-    pub fn publishedRevFromMeta(self: *const NodeBuffer, meta: PublishedMeta) SideAdj {
-        return self.rev_buffers[meta.rev_index];
-    }
-
-    pub fn publishedFwd(self: *const NodeBuffer) SideAdj {
-        return self.publishedFwdFromMeta(self.loadPublishedMeta());
-    }
-
-    pub fn publishedRev(self: *const NodeBuffer) SideAdj {
-        return self.publishedRevFromMeta(self.loadPublishedMeta());
-    }
-
-    pub fn stagingFwd(self: *NodeBuffer, meta: PublishedMeta) *SideAdj {
-        return &self.fwd_buffers[1 - meta.fwd_index];
-    }
-
-    pub fn stagingRev(self: *NodeBuffer, meta: PublishedMeta) *SideAdj {
-        return &self.rev_buffers[1 - meta.rev_index];
-    }
-
-    pub fn copyPublishedToStagingFwd(self: *NodeBuffer, meta: PublishedMeta) void {
-        self.fwd_buffers[1 - meta.fwd_index] = self.fwd_buffers[meta.fwd_index];
-    }
-
-    pub fn copyPublishedToStagingRev(self: *NodeBuffer, meta: PublishedMeta) void {
-        self.rev_buffers[1 - meta.rev_index] = self.rev_buffers[meta.rev_index];
-    }
-
-    pub fn desiredMetaForPublishFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) PublishedMeta {
-        var desired = meta.bumpedVersion();
-        desired.fwd_index = 1 - meta.fwd_index;
-        desired.needs_repair_fwd = needs_repair_fwd;
-        return desired.withFwdDegree(new_degree_fwd);
-    }
-
-    pub fn desiredMetaForPublishRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) PublishedMeta {
-        var desired = meta.bumpedVersion();
-        desired.rev_index = 1 - meta.rev_index;
-        desired.needs_repair_rev = needs_repair_rev;
-        return desired.withRevDegree(new_degree_rev);
-    }
-
-    pub fn desiredMetaForPublishBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u32, rev_degree: u32) PublishedMeta {
-        var desired = meta.bumpedVersion();
-        desired.fwd_index = 1 - meta.fwd_index;
-        desired.rev_index = 1 - meta.rev_index;
-        desired.needs_repair_fwd = flags.needs_repair_fwd;
-        desired.needs_repair_rev = flags.needs_repair_rev;
-        desired.removed = flags.removed;
-        return desired.withFwdDegree(fwd_degree).withRevDegree(rev_degree);
-    }
-
-    /// CAS-friendly forward update: changes `degree_fwd` and `needs_repair_fwd`
-    /// WITHOUT touching staging buffers or flipping `fwd_index`/`rev_index`.
-    /// Safe to call without `fwd_claim` — the 64-bit CAS on `published_meta`
-    /// provides the atomicity.  Intended for paths where only the meta counters
-    /// need updating (e.g. predecessor forward-degree decrement in removeNode).
-    pub fn desiredMetaForUpdateFwd(meta: PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) PublishedMeta {
-        var desired = meta.bumpedVersion();
-        desired.needs_repair_fwd = needs_repair_fwd;
-        return desired.withFwdDegree(new_degree_fwd);
-    }
-
-    pub fn desiredMetaForUpdateRev(meta: PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) PublishedMeta {
-        var desired = meta.bumpedVersion();
-        desired.needs_repair_rev = needs_repair_rev;
-        return desired.withRevDegree(new_degree_rev);
-    }
-
-    pub fn desiredMetaForUpdateBoth(meta: PublishedMeta, flags: NodeFlags, fwd_degree: u32, rev_degree: u32) PublishedMeta {
-        var desired = meta.bumpedVersion();
-        desired.needs_repair_fwd = flags.needs_repair_fwd;
-        desired.needs_repair_rev = flags.needs_repair_rev;
-        desired.removed = flags.removed;
-        return desired.withFwdDegree(fwd_degree).withRevDegree(rev_degree);
-    }
-
-    /// Composes a full NodeAdj snapshot from the current published sides.
-    /// Callers MUST NOT alias the returned value across RCU flips.
-    pub fn publishedAdj(self: *const NodeBuffer) NodeAdj {
-        while (true) {
-            const before = self.loadPublishedMeta();
-            const adjacency = self.publishedAdjFromMeta(before);
-            const after = self.loadPublishedMeta();
-            if (@as(u64, @bitCast(before)) == @as(u64, @bitCast(after))) return adjacency;
-        }
-    }
-
-    pub fn publishedAdjFromMeta(self: *const NodeBuffer, meta: PublishedMeta) NodeAdj {
-        const fwd = self.publishedFwdFromMeta(meta);
-        const rev = self.publishedRevFromMeta(meta);
-        return NodeAdj{
-            .first_block_fwd = fwd.first_block,
-            .block_count_fwd = fwd.block_count,
-            .group_count_fwd = fwd.group_count,
-            .first_group_fwd = fwd.first_group,
-            .first_block_rev = rev.first_block,
-            .block_count_rev = rev.block_count,
-            .group_count_rev = rev.group_count,
-            .first_group_rev = rev.first_group,
-            .flags = meta.flags(),
-        };
-    }
-};
-
 // ── Edge blocks ──────────────────────────────────────────────────────
 
-/// 64 outgoing edges (520 bytes), stored as struct-of-arrays: the 256-byte
-/// destination array is contiguous, so neighbor scans touch 4 cache lines of
-/// payload instead of striding through interleaved metadata, and in-block
-/// search/iteration loops are vectorizable. Dense storage: live entries occupy
-/// slots [0, live_count) with no holes and `mask = denseMask(live_count)`,
-/// sorted by destination. Access goes through `storage/edge_blocks.zig`.
+/// 64 outgoing edges (512 bytes, cache-line aligned), stored as
+/// struct-of-arrays: the 256-byte destination array fills exactly 4 cache
+/// lines, so neighbor scans never touch relation/flag metadata and in-block
+/// loops vectorize. Dense storage: live entries occupy slots
+/// [0, live_count) with no holes, sorted by destination. The live count
+/// lives in a per-block u8 sidecar (one 64-byte page covers 64 blocks).
+/// Access goes through `storage/edge_blocks.zig`.
 pub const EdgeBlockFwd = extern struct {
-    mask: u64,
-    destinations: [64]u32,
+    destinations: [64]u32 align(64),
     relations: [64]u16,
     flags: [64]u16,
 };
 
-/// 64 incoming source node IDs (264 bytes). Same mask logic as
-/// EdgeBlockFwd, but payload is u32 (half the size) — reverse adjacency
-/// only needs the source, not relation or flags.
-pub const EdgeBlockRev = struct {
-    mask: u64,
-    sources: [64]u32,
+/// 64 incoming source node IDs (256 bytes, cache-line aligned). Same dense
+/// model as EdgeBlockFwd; reverse adjacency only needs the source.
+pub const EdgeBlockRev = extern struct {
+    sources: [64]u32 align(64),
 };
 
 // ── Forward edge ID sidecar ──────────────────────────────────────────

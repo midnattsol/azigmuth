@@ -22,12 +22,14 @@ fn copyBlock(graph: *graph_core.GraphCore, source_block_idx: u32, destination_bl
     switch (side) {
         .fwd => {
             page_ops.edgeBlockAt(graph, destination_block_idx, .fwd).* = page_ops.edgeBlockAtConst(graph, source_block_idx, .fwd).*;
+            page_ops.setBlockLiveCount(graph, destination_block_idx, .fwd, page_ops.blockLiveCount(graph, source_block_idx, .fwd));
             if (graph.multigraph_enabled) {
                 page_ops.edgeBlockFwdIdsAt(graph, destination_block_idx).* = page_ops.edgeBlockFwdIdsAtConst(graph, source_block_idx).*;
             }
         },
         .rev => {
             page_ops.edgeBlockAt(graph, destination_block_idx, .rev).* = page_ops.edgeBlockAtConst(graph, source_block_idx, .rev).*;
+            page_ops.setBlockLiveCount(graph, destination_block_idx, .rev, page_ops.blockLiveCount(graph, source_block_idx, .rev));
         },
     }
 }

@@ -1,4 +1,5 @@
 comptime {
+    _ = @import("reader_token_retain.zig");
     _ = @import("deinit_readers.zig");
     _ = @import("overflow.zig");
     _ = @import("rcu.zig");

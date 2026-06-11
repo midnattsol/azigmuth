@@ -28,18 +28,20 @@ fn prepareAppendBlockSide(
     switch (side) {
         .fwd => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .fwd);
-            if (@popCount(tail_block.mask) == 64) {
+            if (page_ops.blockLiveCount(graph, tail_idx, .fwd) == 64) {
                 return .{ .new_block = new_block, .tail_index = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = tail_block.*;
+            page_ops.setBlockLiveCount(graph, new_block, .fwd, page_ops.blockLiveCount(graph, tail_idx, .fwd));
             if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block).* = page_ops.edgeBlockFwdIdsAtConst(graph, tail_idx).*;
         },
         .rev => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .rev);
-            if (@popCount(tail_block.mask) == 64) {
+            if (page_ops.blockLiveCount(graph, tail_idx, .rev) == 64) {
                 return .{ .new_block = new_block, .tail_index = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .rev).* = tail_block.*;
+            page_ops.setBlockLiveCount(graph, new_block, .rev, page_ops.blockLiveCount(graph, tail_idx, .rev));
         },
     }
 

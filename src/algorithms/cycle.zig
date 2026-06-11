@@ -1,11 +1,14 @@
 const std = @import("std");
+const context_mod = @import("context.zig");
 const snapshot_iterators = @import("../query/snapshot/iterators.zig");
 const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
 
 /// Returns true if the fixed captured graph view contains at least one
-/// directed cycle.
-pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, allocator: std.mem.Allocator) types.GraphError!bool {
+/// directed cycle. Honors `ctx.cancel_token` cooperatively: cancellation is
+/// observed once per processed node and aborts with `error.Cancelled`.
+pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, ctx: context_mod.Context) types.GraphError!bool {
+    const allocator = ctx.allocator;
     const node_count = view.nodeCount();
     if (node_count == 0) return false;
 
@@ -33,6 +36,9 @@ pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, allocator:
     var processed_live: usize = 0;
     var head: usize = 0;
     while (head < zero_count) : (head += 1) {
+        if (ctx.cancel_token) |token| {
+            if (token.isCancelled()) return error.Cancelled;
+        }
         const current_idx = zero_indegree[head];
         processed_live += 1;
 

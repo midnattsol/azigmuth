@@ -20,7 +20,7 @@ test "graph debug validate: detects forward entry without reverse entry" {
     fwd.destinations[0] = b.index;
     fwd.relations[0] = 0;
     fwd.flags[0] = 0;
-    fwd.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
 
     const a_node = try graph.nodeAt(a);
     publish.clearPublishedSides(a_node);
@@ -53,14 +53,14 @@ test "graph debug validate: detects removed node with outgoing adjacency" {
     fwd.destinations[0] = live.index;
     fwd.relations[0] = 0;
     fwd.flags[0] = 0;
-    fwd.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, fwd_block, .fwd, @intCast(1));
 
     const rev_block = try graph.allocBlockRev();
     var rev = page_ops.edgeBlockAt(&graph.graph, rev_block, .rev);
     rev.sources[0] = removed.index;
-    rev.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, rev_block, .rev, @intCast(1));
 
-    const removed_raw = page_ops.nodeAt(&graph.graph, removed);
+    const removed_raw = graph.nodeRefAny(removed);
     publish.publishedFwdSide(removed_raw).first_block = fwd_block;
     publish.publishedFwdSide(removed_raw).block_count = 1;
     publish.setPublishedFlags(removed_raw, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = true });
@@ -100,7 +100,7 @@ test "graph debug validate: detects reverse entry without forward entry" {
     const block = try graph.allocBlockRev();
     var rev = page_ops.edgeBlockAt(&graph.graph, block, .rev);
     rev.sources[0] = a.index;
-    rev.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
 
     const b_node = try graph.nodeAt(b);
     publish.clearPublishedSides(b_node);

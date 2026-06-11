@@ -42,8 +42,8 @@ test "validation: debugValidate accepts short non-tail runs as valid layout" {
     const short_run_group = try graph.allocGroup();
     const tail_group = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, head_block, .fwd).mask = 0;
-    page_ops.edgeBlockAt(&graph.graph, tail_block, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, head_block, .fwd, 0);
+    page_ops.setBlockLiveCount(&graph.graph, tail_block, .fwd, 0);
 
     page_ops.groupAt(&graph.graph, short_run_group).* = .{
         .start = head_block,
@@ -81,9 +81,9 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
     const block2 = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
 
-    page_ops.edgeBlockAt(&graph.graph, block0, .fwd).mask = 0;
-    page_ops.edgeBlockAt(&graph.graph, block1, .fwd).mask = 0;
-    page_ops.edgeBlockAt(&graph.graph, block2, .fwd).mask = 0;
+    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, 0);
+    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, 0);
+    page_ops.setBlockLiveCount(&graph.graph, block2, .fwd, 0);
 
     page_ops.groupAt(&graph.graph, group).* = .{
         .start = block0,
@@ -117,7 +117,7 @@ test "validation: debugValidate emits degree_mismatch when cached degree diverge
     try graph.addEdge(source, target_a, 0, 0);
     try graph.addEdge(source, target_b, 0, 0);
 
-    var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, source).loadPublishedMeta();
+    var meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
     meta.degree_fwd = 0;
     meta.degree_rev = 99;
     publish.storePublishedMeta(&graph, source.index, meta);
@@ -159,13 +159,13 @@ test "validation: debugValidate detects forward/reverse visible count mismatch" 
         try publish.appendReverseSource(&graph, b, b_adj, try publish.readReverseSource(&graph, b_adj, 0));
     } else {
         const rev_block = page_ops.edgeBlockAt(&graph.graph, b_adj.first_block_rev, .rev);
-        const live: u7 = @intCast(@popCount(rev_block.mask));
+        const live: u7 = @intCast(page_ops.blockLiveCount(&graph.graph, b_adj.first_block_rev, .rev));
 
         // Duplicate the first source entry to create 3 reverse but only 2 forward.
         if (live < 64) {
             const dup_source = rev_block.sources[0];
             rev_block.sources[live] = dup_source;
-            rev_block.mask = constants.denseMask(@intCast(live + 1));
+            page_ops.setBlockLiveCount(&graph.graph, b_adj.first_block_rev, .rev, @intCast(live + 1));
         }
     }
 
@@ -192,7 +192,7 @@ test "validation: debugValidate emits forward_tombstone_missing_repair_flag when
     _ = try graph.removeNode(b);
     try graph.validate();
 
-    var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, a).loadPublishedMeta();
+    var meta = page_ops.nodeMetaAtConst(&graph.graph, a).loadPublishedMeta();
     meta.needs_repair_fwd = false;
     publish.storePublishedMeta(&graph, a.index, meta);
 
@@ -213,7 +213,7 @@ test "validation: debugValidate catches group_count longer than actual chain eve
 
     const node = try graph.addNode();
     const b0 = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = 0;
 
     const g0 = try graph.allocGroup();

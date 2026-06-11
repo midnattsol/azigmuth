@@ -16,7 +16,6 @@ const rebuild_mod = @import("../rebuild.zig");
 const side_rebuild_apply = @import("../side_rebuild_apply.zig");
 
 const RepairPreparation = struct {
-    node_mut: *types.NodeBuffer,
     published_adj: types.NodeAdj,
     published_side: types.SideAdj,
 };
@@ -63,7 +62,7 @@ fn sideIsCanonical(
     const tail_block_idx = side_view.first_block + side_view.block_count - 1;
     for (side_view.first_block..tail_block_idx) |block_idx_usize| {
         const block_idx: u32 = @intCast(block_idx_usize);
-        const live = @popCount(page_ops.edgeBlockAtConst(graph, block_idx, side).mask);
+        const live = page_ops.blockLiveCount(graph, block_idx, side);
         if (live != 64) return false;
     }
     return true;
@@ -78,12 +77,10 @@ fn prepareRepairTarget(
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
     if (max_compactions == 0) return null;
 
-    const node_mut = node_access.nodeAt(graph, node);
     const published_adj = node_access.publishedAdjAtConst(graph, node);
     if (!node_validity.snapshotIsLive(published_adj)) return null;
 
     return .{
-        .node_mut = node_mut,
         .published_adj = published_adj,
         .published_side = side_adj.sideAdjOfNode(published_adj, side),
     };
@@ -92,23 +89,21 @@ fn prepareRepairTarget(
 fn tryCompactForwardTombstones(
     graph: *graph_core.GraphCore,
     node: types.NodeId,
-    node_mut: *types.NodeBuffer,
     comptime side: adjacency.AdjSide,
 ) !?usize {
     if (side != .fwd) return null;
 
-    const compacted_tombstones = try rebuild_mod.compactForwardTombstones(graph, node, node_mut);
+    const compacted_tombstones = try rebuild_mod.compactForwardTombstones(graph, node);
     if (compacted_tombstones > 0) return compacted_tombstones;
     return null;
 }
 
 fn needsRepairWork(
     graph: *graph_core.GraphCore,
-    node_mut: *types.NodeBuffer,
     node_idx: u32,
     comptime side: adjacency.AdjSide,
 ) bool {
-    return debt_mod.refreshPublishedRepairDebt(graph, node_mut, node_idx, side) == .repair;
+    return debt_mod.refreshPublishedRepairDebt(graph, node_idx, side) == .repair;
 }
 
 fn rebuildTinyReverseSideForRepair(
@@ -194,14 +189,13 @@ fn repairedDegrees(
 
 fn publishRepairedAdjacency(
     graph: *graph_core.GraphCore,
-    node_mut: *types.NodeBuffer,
     node_idx: u32,
     staging_adj: types.NodeAdj,
     degrees: PublishedDegrees,
     comptime rebuilt_side: adjacency.AdjSide,
 ) !void {
     const published_ref = try page_ops.ensureNodePublishedAt(graph, .{ .index = node_idx });
-    const meta = node_access.loadPublishedMeta(node_mut);
+    const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
     // The rebuilt side is emitted in sorted order; the other side keeps its
     // current published sortedness.
     const fwd_sorted = if (rebuilt_side == .fwd) true else published_ref.publishedFwdSortedFromMeta(meta);
@@ -211,7 +205,6 @@ fn publishRepairedAdjacency(
         .{ .index = node_idx },
         page_ops.nodeMetaAt(graph, .{ .index = node_idx }),
         published_ref,
-        node_mut,
         staging_adj,
         degrees.fwd,
         degrees.rev,
@@ -222,7 +215,6 @@ fn publishRepairedAdjacency(
 
 fn publishRepairedSide(
     graph: *graph_core.GraphCore,
-    node_mut: *types.NodeBuffer,
     published_adj: types.NodeAdj,
     staging_adj: *types.NodeAdj,
     node_idx: u32,
@@ -230,10 +222,10 @@ fn publishRepairedSide(
     comptime side: adjacency.AdjSide,
 ) !usize {
     debt_mod.updateRepairDebt(graph, staging_adj, node_idx, side);
-    const meta = node_access.loadPublishedMeta(node_mut);
+    const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
     const degrees = repairedDegrees(graph, .{ .index = node_idx }, meta, live_total, side);
 
-    try publishRepairedAdjacency(graph, node_mut, node_idx, staging_adj.*, degrees, side);
+    try publishRepairedAdjacency(graph, node_idx, staging_adj.*, degrees, side);
 
     try side_adj.retireSide(graph, published_adj, side);
     return 1;
@@ -241,7 +233,6 @@ fn publishRepairedSide(
 
 fn repairPublishedSide(
     graph: *graph_core.GraphCore,
-    node_mut: *types.NodeBuffer,
     published_adj: types.NodeAdj,
     published_side: types.SideAdj,
     node_idx: u32,
@@ -250,24 +241,24 @@ fn repairPublishedSide(
 ) !SideRepairOutcome {
     var outcome = SideRepairOutcome{};
 
-    const flagged = needsRepairWork(graph, node_mut, node_idx, side);
+    const flagged = needsRepairWork(graph, node_idx, side);
     if (!flagged) {
         if (!allow_preventive or sideIsCanonical(graph, published_side, side)) {
-            outcome.left_repair_debt = sideFlagAfter(node_mut, side);
+            outcome.left_repair_debt = sideFlagAfter(graph, node_idx, side);
             return outcome;
         }
         outcome.preventive = true;
     }
 
     var rebuild = try rebuildSideForRepair(graph, &published_side, &published_adj, side);
-    _ = try publishRepairedSide(graph, node_mut, published_adj, &rebuild.staging_adj, node_idx, rebuild.live_total, side);
+    _ = try publishRepairedSide(graph, published_adj, &rebuild.staging_adj, node_idx, rebuild.live_total, side);
     outcome.repaired = true;
-    outcome.left_repair_debt = sideFlagAfter(node_mut, side);
+    outcome.left_repair_debt = sideFlagAfter(graph, node_idx, side);
     return outcome;
 }
 
-fn sideFlagAfter(node_mut: *const types.NodeBuffer, comptime side: adjacency.AdjSide) bool {
-    const meta = node_access.loadPublishedMeta(node_mut);
+fn sideFlagAfter(graph: *const graph_core.GraphCore, node_idx: u32, comptime side: adjacency.AdjSide) bool {
+    const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
     return switch (side) {
         .fwd => meta.needs_repair_fwd,
         .rev => meta.needs_repair_rev,
@@ -285,7 +276,6 @@ pub fn repairNodeSideDetailed(
 ) !SideRepairOutcome {
     const preparation = (try prepareRepairTarget(graph, node, side, std.math.maxInt(usize))) orelse return .{};
 
-    const node_mut = preparation.node_mut;
     const published_adj = preparation.published_adj;
     const published_side = preparation.published_side;
 
@@ -297,19 +287,19 @@ pub fn repairNodeSideDetailed(
     try rebuild_mod.claimNodeForPublish(graph, node);
     defer rebuild_mod.releaseNodeForPublish(graph, node);
 
-    if (try tryCompactForwardTombstones(graph, node, node_mut, side)) |compacted_tombstones| {
+    if (try tryCompactForwardTombstones(graph, node, side)) |compacted_tombstones| {
         _ = compacted_tombstones;
         return .{
             .repaired = true,
             .had_flagged_debt = had_flagged_debt,
-            .left_repair_debt = sideFlagAfter(node_mut, side),
+            .left_repair_debt = sideFlagAfter(graph, node.index, side),
         };
     }
 
     var writer_guard = rebuild_mod.beginWriter(graph);
     defer writer_guard.end();
 
-    var outcome = try repairPublishedSide(graph, node_mut, published_adj, published_side, node.index, side, allow_preventive);
+    var outcome = try repairPublishedSide(graph, published_adj, published_side, node.index, side, allow_preventive);
     outcome.had_flagged_debt = had_flagged_debt;
     return outcome;
 }

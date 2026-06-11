@@ -5,23 +5,18 @@
 
 const types = @import("../core/types.zig");
 const constants = @import("../core/constants.zig");
+const graph_core = @import("../core/graph_core.zig");
+const page_ops = @import("page_ops.zig");
+const adjacency_side = @import("../adjacency/mod.zig");
 
-// ── Live count ───────────────────────────────────────────────────────
+// ── Live count (per-block u8 sidecar) ────────────────────────────────
 
-pub inline fn liveCountFwd(block: *const types.EdgeBlockFwd) u7 {
-    return @intCast(@popCount(block.mask));
+pub inline fn liveCount(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: adjacency_side.AdjSide) u7 {
+    return page_ops.blockLiveCount(graph, block_idx, side);
 }
 
-pub inline fn liveCountRev(block: *const types.EdgeBlockRev) u7 {
-    return @intCast(@popCount(block.mask));
-}
-
-pub inline fn setLiveCountFwd(block: *types.EdgeBlockFwd, live_count: u7) void {
-    block.mask = constants.denseMask(live_count);
-}
-
-pub inline fn setLiveCountRev(block: *types.EdgeBlockRev, live_count: u7) void {
-    block.mask = constants.denseMask(live_count);
+pub inline fn setLiveCount(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency_side.AdjSide, live_count: u7) void {
+    page_ops.setBlockLiveCount(graph, block_idx, side, live_count);
 }
 
 // ── Forward entry access ─────────────────────────────────────────────

@@ -43,9 +43,8 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     for (0..node_count) |node_index| {
         const node_id: u32 = @intCast(node_index);
         const node = types.NodeId{ .index = node_id };
-        const node_buffer = node_access.nodeAtConst(graph, node);
         const adjacency = node_access.publishedAdjAtConst(graph, node);
-        const meta = node_access.loadPublishedMeta(node_buffer);
+        const meta = node_access.loadPublishedMetaAtConst(graph, node);
         const degree_fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta);
         const degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta);
 
@@ -59,7 +58,7 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .rev);
         try shape.validateOccupancyFast(graph, adjacency, .fwd);
         try shape.validateOccupancyFast(graph, adjacency, .rev);
-        try consistency.validateForwardEdgeIdsFast(graph, node_buffer, node_id, adjacency);
+        try consistency.validateForwardEdgeIdsFast(graph, node_id, adjacency);
         try consistency.validateForwardConsistencyFast(graph, node_id, adjacency);
         try consistency.validateReverseConsistencyFast(graph, node_id, adjacency);
 

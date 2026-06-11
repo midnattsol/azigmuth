@@ -257,7 +257,7 @@ test "concurrent: removeNode predecessor degree update does not require forward 
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, target, 0, 0);
 
-    const predecessor_claim = &graph_mod.page_ops_mod.nodeAt(&graph.graph, predecessor).fwd_claim;
+    const predecessor_claim = &graph_mod.page_ops_mod.nodeHotAt(&graph.graph, predecessor).fwd_claim;
     try testing.expectEqual(@as(u8, 0), predecessor_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
 
     // removeNode must succeed even though predecessor's fwd_claim is held

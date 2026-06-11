@@ -55,7 +55,7 @@ test "concurrent repair: two repairBudgeted callers in parallel do not crash or 
     // Mark many nodes for repair to create contention on the queue.
     for (0..30) |i| {
         if (i % 3 == 0) {
-            var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
+            var meta = graph_mod.page_ops_mod.nodeMetaAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
             var flags = meta.flags();
             flags.needs_repair_fwd = true;
             meta = meta.withFlags(flags);
@@ -132,7 +132,7 @@ test "concurrent repair: repairBudgeted + removeEdge in parallel does not crash"
 
     for (0..20) |i| {
         if (i % 5 == 0) {
-            var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
+            var meta = graph_mod.page_ops_mod.nodeMetaAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
             var flags = meta.flags();
             flags.needs_repair_fwd = true;
             meta = meta.withFlags(flags);
@@ -206,7 +206,7 @@ test "concurrent repair: repairBudgeted + removeNode in parallel does not crash"
 
     for (0..20) |i| {
         if (i % 5 == 0) {
-            var meta = graph_mod.page_ops_mod.nodeAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
+            var meta = graph_mod.page_ops_mod.nodeMetaAtConst(&graph.graph, .{ .index = @intCast(i) }).loadPublishedMeta();
             var flags = meta.flags();
             flags.needs_repair_fwd = true;
             meta = meta.withFlags(flags);

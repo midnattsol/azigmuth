@@ -95,8 +95,9 @@ pub fn forEachSlotInSide(
 
     var cursor = BlockCursor.init(side_adj);
     while (cursor.next(graph)) |block_idx| {
-        const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-        const live_count = @popCount(block.mask);
+        // Clamp: a corrupt sidecar must surface as a validation finding, not
+        // as an out-of-bounds crash inside shared traversal helpers.
+        const live_count = @min(page_ops.blockLiveCount(graph, block_idx, side), 64);
         for (0..live_count) |slot| {
             try callback(graph, context, block_idx, @as(u7, @intCast(slot)));
         }
@@ -212,7 +213,7 @@ fn countLiveSlotsInBlock(
         total.* += 1;
         return;
     }
-    total.* += @popCount(page_ops.edgeBlockAtConst(graph, block_idx, side).mask);
+    total.* += page_ops.blockLiveCount(graph, block_idx, side);
 }
 
 pub fn countLiveInSide(
@@ -278,14 +279,13 @@ pub fn publishBothAdj(
     node_id: types.NodeId,
     node_meta: *node_meta_mod.NodeMeta,
     node_published: *node_published_mod.NodePublished,
-    node: *types.NodeBuffer,
     adj: types.NodeAdj,
     fwd_degree: u32,
     rev_degree: u32,
     fwd_sorted: bool,
     rev_sorted: bool,
 ) void {
-    const meta = node_access.loadPublishedMeta(node);
+    const meta = node_meta.loadPublishedMeta();
     node_access.writeStagingFwd(graph, node_id, meta, .{
         .first_block = adj.first_block_fwd,
         .block_count = adj.block_count_fwd,
@@ -298,7 +298,7 @@ pub fn publishBothAdj(
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     });
-    _ = publish_mod.publishStagedBoth(node_meta, node_published, node, meta, adj.flags, fwd_degree, rev_degree, fwd_sorted, rev_sorted);
+    _ = publish_mod.publishStagedBoth(node_meta, node_published, meta, adj.flags, fwd_degree, rev_degree, fwd_sorted, rev_sorted);
 }
 
 pub fn publishRevAdj(
@@ -306,12 +306,11 @@ pub fn publishRevAdj(
     node_id: types.NodeId,
     node_meta: *node_meta_mod.NodeMeta,
     node_published: *node_published_mod.NodePublished,
-    node: *types.NodeBuffer,
     adj: types.NodeAdj,
     new_rev_degree: u32,
     rev_sorted: bool,
 ) void {
-    const meta = node_access.loadPublishedMeta(node);
+    const meta = node_meta.loadPublishedMeta();
     const rev_delta: i23 = @intCast(@as(i64, @intCast(new_rev_degree)) - @as(i64, @intCast(node_access.publishedRevDegreeFromMetaAtConst(graph, node_id, meta))));
     node_access.writeStagingRev(graph, node_id, meta, .{
         .first_block = adj.first_block_rev,
@@ -319,7 +318,7 @@ pub fn publishRevAdj(
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     });
-    _ = publish_mod.publishStagedRev(node_meta, node_published, node, meta, adj.flags.needs_repair_rev, rev_delta, rev_sorted);
+    _ = publish_mod.publishStagedRev(node_meta, node_published, meta, adj.flags.needs_repair_rev, rev_delta, rev_sorted);
 }
 
 pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
@@ -436,9 +435,10 @@ fn findSlotInBlockRunLinear(
     for (start..start + count) |block_idx_usize| {
         const block_idx: u32 = @intCast(block_idx_usize);
         const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
+        const live = page_ops.blockLiveCount(graph, block_idx, side);
         const slot = switch (side) {
-            .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, target),
-            .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, target),
+            .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, live, target),
+            .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, live, target),
         } orelse continue;
         return .{ .block_idx = block_idx, .slot = slot };
     }
@@ -459,7 +459,7 @@ fn findSlotInBlockRun(
         const mid: u32 = low + (high - low) / 2;
         const block_idx = start + mid;
         const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-        const live = @popCount(block.mask);
+        const live = page_ops.blockLiveCount(graph, block_idx, side);
         if (live == 0) break;
         const first_key = switch (side) {
             .fwd => block.destinations[0],
@@ -475,8 +475,8 @@ fn findSlotInBlockRun(
             low = mid + 1;
         } else {
             const slot = switch (side) {
-                .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, target),
-                .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, target),
+                .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, live, target),
+                .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, live, target),
             } orelse break;
             return .{ .block_idx = block_idx, .slot = slot };
         }

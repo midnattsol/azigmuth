@@ -25,6 +25,5 @@ test "graph api: removed node is absent from public node API" {
 
     try testing.expect(!graph.hasNode(node));
     try testing.expectError(error.InvalidNode, graph.nodeAt(node));
-    try testing.expectError(error.InvalidNode, graph.nodeAtConst(node));
     try testing.expectError(error.InvalidNode, graph.publishedNodeAdj(node));
 }

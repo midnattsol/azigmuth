@@ -5,7 +5,7 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 - page-based node and edge-block pools
 - forward and reverse adjacency
 - lock-free reader iterators via per-node RCU snapshots
-- sorted fixed-size edge blocks with dense occupancy masks
+- sorted fixed-size struct-of-arrays edge blocks (dense, cache-line aligned)
 - local repair and validation
 - tombstone-based node deletion (Phase 2) with debt/repair cleanup
 - a `GraphBuilder` bulk-construction handle
@@ -19,10 +19,11 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 
 Implementation notes:
 
-- Const read paths compose adjacency from `NodeMeta + NodePublished`.
-- `NodeHot` lives in padded `hot_layout.Slot` entries (default `32 B` stride).
-- `NodeBuffer` remains as the mutation staging / compatibility layer, not the
-  canonical const read source for published adjacency.
+- Per-node state is split into `NodeMeta` (atomic publication word),
+  `NodePublished` (double-buffered side descriptors, degrees, sorted bits)
+  and `NodeHot` (writer claims, edge-id counter, padded `32 B` stride).
+- Edge blocks are struct-of-arrays (512 B forward / 256 B reverse, 64-byte
+  aligned); per-block live counts live in a one-cache-line sidecar page.
 
 ## Basic usage
 
@@ -169,6 +170,21 @@ const flush = try g.flushRepairs();
 _ = flush;
 ```
 
+## Batched Insertion
+
+`addEdges()` inserts a whole fan-out from one source with one claim cycle, a
+single rebuild of the source side, and one publish per touched node. It is
+all-or-nothing: duplicates (in simple-graph mode) or invalid destinations
+reject the entire batch before anything is published.
+
+```zig
+const inputs = [_]gz.EdgeInput{
+    .{ .destination = b },
+    .{ .destination = c, .relation = 7 },
+};
+_ = try g.addEdges(a, &inputs);
+```
+
 ## Point Reads Without Capture
 
 `readSession()` is the cheap counterpart to `snapshot()`: it opens in O(1) and
@@ -236,6 +252,29 @@ defer allocator.free(snap_dfs);
 `ReadSnapshot` is a reusable sealed in-memory graph view. Its algorithms run
 against that fixed captured view and do not perform repair or other hidden
 maintenance.
+
+Long traversals can be cancelled cooperatively. Attach a `CancelToken` to the
+`Context`; `bfs`, `dfs`, and `hasCycle` observe it once per visited node and
+abort with `error.Cancelled`. Cancelling is sticky and safe from any thread.
+Cancellation is best-effort: a call that finishes its work before reaching a
+cancellation checkpoint returns its normal result, so callers must treat
+`error.Cancelled` as an optimization for aborting long traversals, not as a
+guaranteed outcome. On `error.Cancelled` partial results are freed and the
+snapshot stays valid.
+
+```zig
+var token = gz.CancelToken.init();
+const ctx = gz.Context{ .allocator = allocator, .cancel_token = &token };
+
+// From a watchdog/timeout thread:
+token.cancel();
+
+const order = snapshot.bfs(start, ctx) catch |err| switch (err) {
+    error.Cancelled => return, // query aborted
+    else => return err,
+};
+defer allocator.free(order);
+```
 
 `Graph.validate()` remains the live fast-path structural check over the mutable
 engine state. `snapshot.validate()` is the fast logical/structural check over a

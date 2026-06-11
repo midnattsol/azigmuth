@@ -16,8 +16,7 @@ const node_validity = @import("../../core/node_validity.zig");
 pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeRemovalSummary {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 
-    const source_node = node_access.nodeAt(graph, node);
-    var source_claims = try common.tryClaimNodeSides(graph, source_node, node.index, true, true);
+    var source_claims = try common.tryClaimNodeSides(graph, node.index, true, true);
     defer source_claims.release();
 
     const source_adj_before = node_access.publishedAdjAtConst(graph, node);
@@ -29,15 +28,13 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     var scan = try remove_scan.scanNodeRemovalNeighborhood(graph, node);
     defer scan.deinit(graph.allocator);
 
-    try remove_validate.validateNodeRemovalNeighborhood(graph, node, source_node, &scan);
+    try remove_validate.validateNodeRemovalNeighborhood(graph, node, &scan);
 
     var related = try remove_plan.collectRelatedNodeUpdates(graph, node, &scan);
     defer related.deinit(graph.allocator);
 
     var writer_guard = common.beginWriter(graph);
     defer writer_guard.end();
-
-    const removed_visible_edge_count = scan.visible_forward + scan.visible_incoming;
 
     const source_staging_adj = remove_publish.buildRemovedAdjEmpty(source_adj_before);
 
@@ -52,7 +49,11 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // (RFC Phase 2 §concurrency note).
     const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
 
-    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), source_node, source_staging_adj, 0, 0, true, true);
+    // Edge accounting happens at publish time: a related endpoint that was
+    // concurrently removed after the scan already paid for the shared edge.
+    const removed_visible_edge_count = counts.applied_edge_removals + scan.self_edge_count;
+
+    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), source_staging_adj, 0, 0, true, true);
 
     try remove_publish.retireRemovedNodeStorage(graph, source_adj_before);
     _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);

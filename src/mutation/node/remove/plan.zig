@@ -17,19 +17,16 @@ fn markRelatedNode(
 ) !void {
     if (related_node_index.get(node_index)) |entry_idx| {
         const entry = &related_nodes.items[entry_idx];
-        try entry.claims.ensureFwd();
-        try entry.claims.ensureRev();
+        if (rev_degree_delta > 0) try entry.claims.ensureRev();
         entry.fwd_degree_delta += fwd_degree_delta;
         entry.rev_degree_delta += rev_degree_delta;
         return;
     }
 
-    const node_buffer = try node_access.ensureNodeAt(graph, .{ .index = node_index });
-    const claims = try common.tryClaimNodeSides(graph, node_buffer, node_index, true, true);
+    const claims = try common.tryClaimNodeSides(graph, node_index, false, rev_degree_delta > 0);
     try related_nodes.append(graph.allocator, .{
         .node_index = node_index,
         .node_meta = page_ops.nodeMetaAt(graph, .{ .index = node_index }),
-        .node_buffer = node_buffer,
         .claims = claims,
         .fwd_degree_delta = fwd_degree_delta,
         .rev_degree_delta = rev_degree_delta,

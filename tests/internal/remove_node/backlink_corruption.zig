@@ -18,7 +18,7 @@ test "removeNode corruption: missing reverse backlink is rejected" {
         try publish.writeReverseSource(&graph, destination_adj, 0, graph.graph.publishedNodeCount() + 10);
     } else if (destination_adj.block_count_rev > 0 and destination_adj.group_count_rev == 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, destination_adj.first_block_rev, .rev);
-        const live = @popCount(block.mask);
+        const live = page_ops.blockLiveCount(&graph.graph, destination_adj.first_block_rev, .rev);
         var found = false;
         for (0..live) |slot| {
             if (block.sources[slot] == source.index) {
@@ -62,7 +62,7 @@ test "removeNode corruption: missing incoming reverse backlink is rejected" {
         try publish.writeReverseSource(&graph, removed_node_adj, 0, graph.graph.publishedNodeCount() + 10);
     } else if (removed_node_adj.block_count_rev > 0 and removed_node_adj.group_count_rev == 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, removed_node_adj.first_block_rev, .rev);
-        const live = @popCount(block.mask);
+        const live = page_ops.blockLiveCount(&graph.graph, removed_node_adj.first_block_rev, .rev);
         var found = false;
         for (0..live) |slot| {
             if (block.sources[slot] == source.index) {

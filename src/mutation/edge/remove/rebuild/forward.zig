@@ -24,7 +24,7 @@ fn appendForwardBlockWithoutDestination(
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else undefined;
-    const live = @popCount(old_block.mask);
+    const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
     if (live == 0) return 0;
 
     var removed: u32 = 0;
@@ -55,7 +55,7 @@ fn appendForwardBlockWithoutDestination(
             write += 1;
         }
     }
-    new_block.mask = constants.denseMask(write);
+    page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));
     try block_list.append(graph.allocator, new_block_idx);
     try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
     return removed;
@@ -87,7 +87,7 @@ fn appendForwardBlockRemovingOneById(
 ) !bool {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-    const live: u7 = @intCast(@popCount(old_block.mask));
+    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, .fwd));
 
     for (0..live) |slot| {
         if (old_block.destinations[slot] != destination_idx or old_ids.ids[slot] != edge_id) continue;
@@ -108,7 +108,7 @@ fn appendForwardBlockRemovingOneById(
             new_ids.ids[write] = old_ids.ids[copy_slot];
             write += 1;
         }
-        new_block.mask = constants.denseMask(write);
+        page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));
         try block_list.append(graph.allocator, new_block_idx);
         try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
         return true;

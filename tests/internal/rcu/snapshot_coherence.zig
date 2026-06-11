@@ -6,6 +6,10 @@ const publish = @import("publish");
 
 const testing = std.testing;
 
+fn publishedOfTest(graph: *graph_mod.Graph, node: graph_mod.NodeId) *graph_mod.node_published_mod.NodePublished {
+    return graph_mod.page_ops_mod.ensureNodePublishedAt(&graph.graph, node) catch @panic("ensure published failed");
+}
+
 test "snapshot coherence: publishedAdjFromMeta can return stale side buffers after slot reuse" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
@@ -15,7 +19,7 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
 
     // ---- publish state A: slot 0 = {1 block, block_count=1}
     const b0 = try graph.allocBlockFwd();
-    node_buffer.fwd_buffers[0] = types.SideAdj{
+    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{
         .first_block = b0,
         .block_count = 1,
         .group_count = 0,
@@ -25,13 +29,13 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
     meta0.fwd_index = 0;
     node_buffer.storePublishedMeta(meta0);
 
-    const snapshot_a = node_buffer.publishedAdjFromMeta(meta0);
+    const snapshot_a = graph.nodeRefAny(node).publishedAdj();
     try testing.expectEqual(@as(u32, b0), snapshot_a.first_block_fwd);
     try testing.expectEqual(@as(u16, 1), snapshot_a.block_count_fwd);
 
     // ---- publish state B: flip to slot 1 = {2 blocks}
     const b1 = try graph.allocBlockFwd();
-    node_buffer.fwd_buffers[1] = types.SideAdj{
+    publishedOfTest(&graph, node).fwd[1] = types.SideAdj{
         .first_block = b1,
         .block_count = 1,
         .group_count = 0,
@@ -43,7 +47,7 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
 
     // ---- publish state C: flip back to slot 0, overwriting old state A
     const b3 = try graph.allocBlockFwd();
-    node_buffer.fwd_buffers[0] = types.SideAdj{
+    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{
         .first_block = b3,
         .block_count = 3,
         .group_count = 0,
@@ -72,7 +76,7 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
     const node_buffer = try graph.nodeAt(node);
 
     const r0 = try graph.allocBlockRev();
-    node_buffer.rev_buffers[0] = types.SideAdj{
+    publishedOfTest(&graph, node).rev[0] = types.SideAdj{
         .first_block = r0,
         .block_count = 1,
         .group_count = 0,
@@ -84,7 +88,7 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
 
     // Publish slot 1
     const r1 = try graph.allocBlockRev();
-    node_buffer.rev_buffers[1] = types.SideAdj{
+    publishedOfTest(&graph, node).rev[1] = types.SideAdj{
         .first_block = r1,
         .block_count = 2,
         .group_count = 0,
@@ -96,7 +100,7 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
 
     // Overwrite slot 0
     const r2 = try graph.allocBlockRev();
-    node_buffer.rev_buffers[0] = types.SideAdj{
+    publishedOfTest(&graph, node).rev[0] = types.SideAdj{
         .first_block = r2,
         .block_count = 3,
         .group_count = 0,
@@ -161,8 +165,8 @@ test "snapshot coherence: mixed fwd/rev slot reuse corrupts both sides simultane
     // State A: fwd=0 rev=0, side buffers at originals
     const fwd_a = try graph.allocBlockFwd();
     const rev_a = try graph.allocBlockRev();
-    node_buffer.fwd_buffers[0] = types.SideAdj{ .first_block = fwd_a, .block_count = 1, .group_count = 0, .first_group = 0 };
-    node_buffer.rev_buffers[0] = types.SideAdj{ .first_block = rev_a, .block_count = 1, .group_count = 0, .first_group = 0 };
+    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_a, .block_count = 1, .group_count = 0, .first_group = 0 };
+    publishedOfTest(&graph, node).rev[0] = types.SideAdj{ .first_block = rev_a, .block_count = 1, .group_count = 0, .first_group = 0 };
     var meta0 = node_buffer.loadPublishedMeta();
     meta0.fwd_index = 0;
     meta0.rev_index = 0;
@@ -179,8 +183,8 @@ test "snapshot coherence: mixed fwd/rev slot reuse corrupts both sides simultane
     // Now flip both: fwd→0, rev→1. This reuses fwd slot 0 which is stale.
     const fwd_b = try graph.allocBlockFwd();
     const rev_b = try graph.allocBlockRev();
-    node_buffer.fwd_buffers[0] = types.SideAdj{ .first_block = fwd_b, .block_count = 2, .group_count = 0, .first_group = 0 };
-    node_buffer.rev_buffers[1] = types.SideAdj{ .first_block = rev_b, .block_count = 2, .group_count = 0, .first_group = 0 };
+    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_b, .block_count = 2, .group_count = 0, .first_group = 0 };
+    publishedOfTest(&graph, node).rev[1] = types.SideAdj{ .first_block = rev_b, .block_count = 2, .group_count = 0, .first_group = 0 };
     var meta2 = meta1;
     meta2.fwd_index = 0;
     meta2.rev_index = 1;

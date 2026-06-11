@@ -49,6 +49,7 @@ pub const GraphOptions = graph.GraphOptions;
 pub const NodeRemovalSummary = graph.NodeRemovalSummary;
 pub const RepairFlushSummary = graph.RepairFlushSummary;
 pub const RepairNodeSummary = graph.RepairNodeSummary;
+pub const EdgeInput = graph.EdgeInput;
 pub const DebtStats = graph.DebtStats;
 pub const StorageStats = graph.StorageStats;
 
@@ -66,3 +67,4 @@ pub const Violation = graph.Violation;
 
 // ── Algorithms ────────────────────────────────────────────────────────
 pub const Context = @import("algorithms/context.zig").Context;
+pub const CancelToken = @import("algorithms/context.zig").CancelToken;

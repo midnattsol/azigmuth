@@ -28,8 +28,7 @@ pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeI
     const reader_token = try rcu.readerEnter(@constCast(graph));
     errdefer rcu.readerExit(@constCast(graph), reader_token);
 
-    const node_buffer = node_access.nodeAtConst(graph, node);
-    const meta = node_access.loadPublishedMeta(node_buffer);
+    const meta = node_access.loadPublishedMetaAtConst(graph, node);
     const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
     try node_validity.ensureLiveSnapshot(node_adj_snapshot);
 

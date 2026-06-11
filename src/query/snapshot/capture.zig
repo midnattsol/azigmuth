@@ -54,7 +54,6 @@ const empty_side = types.SideAdj{ .first_block = 0, .block_count = 0, .group_cou
 fn captureNodeFromPages(
     meta_ref: *const node_meta_mod.NodeMeta,
     published_ref: ?*const node_published_mod.NodePublished,
-    node_buffer_ref: *const types.NodeBuffer,
 ) CapturedNodeData {
     while (true) {
         const before = meta_ref.loadPublishedMeta();
@@ -73,11 +72,6 @@ fn captureNodeFromPages(
             rev_side = published.publishedRevFromMeta(before);
             degree_fwd = published.publishedFwdDegreeFromMeta(before);
             degree_rev = published.publishedRevDegreeFromMeta(before);
-        } else {
-            // Compat layer: sides may still live in the NodeBuffer staging
-            // copy until the published pool page exists.
-            fwd_side = node_buffer_ref.publishedFwdFromMeta(before);
-            rev_side = node_buffer_ref.publishedRevFromMeta(before);
         }
 
         const after = meta_ref.loadPublishedMeta();
@@ -129,14 +123,12 @@ pub fn captureStorage(core: *const graph_core.GraphCore, allocator: std.mem.Allo
         const page_end: u32 = @intCast(@min(node_count, (page_index + 1) * constants.NODES_PER_PAGE));
         const meta_page = page_ops.nodeMetaPageAtConst(core, page_index);
         const published_page = page_ops.nodePublishedPageAtConst(core, page_index);
-        const node_page = page_ops.nodePageAtConst(core, page_index);
 
         while (node_idx < page_end) : (node_idx += 1) {
             const slot = page_ops.slotOf(node_idx, constants.NODES_PER_PAGE);
             const captured = captureNodeFromPages(
                 &meta_page[slot],
                 if (published_page) |page| &page[slot] else null,
-                &node_page[slot],
             );
             const node_idx_usize: usize = node_idx;
             node_state[node_idx_usize] = captured.state;

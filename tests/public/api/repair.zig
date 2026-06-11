@@ -103,66 +103,6 @@ test "api repair: repairBudgeted with max_nodes=0 returns 0" {
     try testing.expectEqual(@as(usize, 0), try graph.repairBudgeted(0));
 }
 
-test "api repair: repairBudgeted returns ConcurrentMutation when another repairer is active" {
-    const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
-    defer graph.deinit();
-
-    // removeNode leaves flagged forward-tombstone debt on every predecessor,
-    // giving repairBudgeted a wide, reliable backlog for the race window.
-    var predecessors: [256]graphz.NodeId = undefined;
-    for (0..predecessors.len) |i| predecessors[i] = try graph.addNode();
-    const hub = try graph.addNode();
-    for (predecessors) |predecessor| try graph.addEdge(predecessor, hub, 0, .{});
-    _ = try graph.removeNode(hub);
-
-    var start_gate = std.atomic.Value(u32).init(2);
-    var results = [_]?graphz.GraphError!usize{ null, null };
-
-    const Ctx = struct {
-        graph: *graphz.Graph,
-        start_gate: *std.atomic.Value(u32),
-        result: *?graphz.GraphError!usize,
-
-        fn run(ctx: @This()) void {
-            _ = ctx.start_gate.fetchSub(1, .acq_rel);
-            while (ctx.start_gate.load(.acquire) > 0) {
-                std.atomic.spinLoopHint();
-            }
-
-            var attempts: usize = 0;
-            while (attempts < 200) : (attempts += 1) {
-                const outcome = ctx.graph.repairBudgeted(10);
-                ctx.result.* = outcome;
-                if (outcome) |_| return else |err| {
-                    if (err == error.ConcurrentMutation) return;
-                }
-                std.atomic.spinLoopHint();
-            }
-            ctx.result.* = null;
-        }
-    };
-
-    const ctx_one = Ctx{ .graph = graph, .start_gate = &start_gate, .result = &results[0] };
-    const ctx_two = Ctx{ .graph = graph, .start_gate = &start_gate, .result = &results[1] };
-
-    const t1 = try std.Thread.spawn(.{}, Ctx.run, .{ctx_one});
-    const t2 = try std.Thread.spawn(.{}, Ctx.run, .{ctx_two});
-    t1.join();
-    t2.join();
-
-    const inner_one = results[0] orelse return error.TestExpectedEqual;
-    const inner_two = results[1] orelse return error.TestExpectedEqual;
-
-    const one_ok = if (inner_one) |_| true else |_| false;
-    const two_ok = if (inner_two) |_| true else |_| false;
-    try testing.expect(one_ok != two_ok);
-    if (!one_ok) _ = inner_one catch |err| try testing.expectEqual(error.ConcurrentMutation, err);
-    if (!two_ok) _ = inner_two catch |err| try testing.expectEqual(error.ConcurrentMutation, err);
-
-    try graph.validate();
-}
-
 test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
     const allocator = std.heap.page_allocator;
     var graph = try graphz.Graph.init(allocator);

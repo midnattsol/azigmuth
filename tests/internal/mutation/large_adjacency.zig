@@ -17,14 +17,14 @@ fn fillBlock(graph: *graph_mod.Graph, block_index: u32, first_dest: u32, count: 
                 block.relations[i] = 0;
                 block.flags[i] = 0;
             }
-            block.mask = constants.denseMask(count);
+            page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
         },
         .rev => {
             var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
             for (0..count) |i| {
                 block.sources[i] = first_dest + @as(u32, @intCast(i));
             }
-            block.mask = constants.denseMask(count);
+            page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(count));
         },
     }
 }

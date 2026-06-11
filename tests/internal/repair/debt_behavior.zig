@@ -97,7 +97,7 @@ test "repair debt: updateRepairDebtSide flags forward tombstones immediately aft
 
     _ = try graph.removeNode(destination);
 
-    const source_meta = page_ops.nodeAtConst(&graph.graph, source).loadPublishedMeta();
+    const source_meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
     try testing.expect(source_meta.needs_repair_fwd);
     try graph.validate();
 }
@@ -147,13 +147,13 @@ test "repair debt: repairBudgeted processes queued repair debt" {
         first_block_edges.relations[edge_idx] = 0;
         first_block_edges.flags[edge_idx] = 0;
     }
-    first_block_edges.mask = constants.denseMask(47);
+    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
     for (0..36) |edge_idx| {
         second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 48);
         second_block_edges.relations[edge_idx] = 0;
         second_block_edges.flags[edge_idx] = 0;
     }
-    second_block_edges.mask = constants.denseMask(36);
+    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
 
     const node = try graph.nodeAt(source);
     publish.clearPublishedSides(node);
@@ -187,14 +187,14 @@ fn fillBlock(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u
         block.relations[i] = 0;
         block.flags[i] = 0;
     }
-    block.mask = constants.denseMask(count);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
     const block_index = try graph.allocBlockRev();
     var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
     block.sources[0] = source_index;
-    block.mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(1));
 
     const node_buffer = try graph.nodeAt(.{ .index = destination_index });
     publish.publishedRevSide(node_buffer).first_block = block_index;
@@ -229,13 +229,13 @@ test "repair debt: needs_repair flag is cleared after repairNode" {
         first_block_edges.relations[edge_index] = 0;
         first_block_edges.flags[edge_index] = 0;
     }
-    first_block_edges.mask = constants.denseMask(47);
+    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
     for (0..36) |edge_index| {
         second_block_edges.destinations[edge_index] = @intCast(edge_index + 48);
         second_block_edges.relations[edge_index] = 0;
         second_block_edges.flags[edge_index] = 0;
     }
-    second_block_edges.mask = constants.denseMask(36);
+    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
 
     const node_buffer = try graph.nodeAt(source);
     publish.clearPublishedSides(node_buffer);
@@ -274,7 +274,7 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
         first_block_edges.relations[edge_index] = 0;
         first_block_edges.flags[edge_index] = 0;
     }
-    first_block_edges.mask = constants.denseMask(20);
+    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(20));
 
     var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
     for (0..32) |edge_index| {
@@ -282,7 +282,7 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
         second_block_edges.relations[edge_index] = 0;
         second_block_edges.flags[edge_index] = 0;
     }
-    second_block_edges.mask = constants.denseMask(32);
+    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(32));
 
     const node_buffer = try graph.nodeAt(source);
     publish.clearPublishedSides(node_buffer);
@@ -324,7 +324,7 @@ test "repair debt: tail underfill remains logically valid and repair-safe" {
     // when only tail underfill occurred. Repair must preserve logical
     // correctness, but a grouped non-contiguous rebuild may still carry debt.
     _ = try graph.repairNode(source);
-    const node_buffer = try graph.nodeAtConst(source);
+    const node_buffer = try graph.nodeAt(source);
     try testing.expectEqual(@as(usize, destination_count - 2), try graph.outDegree(source));
     try graph.validate();
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
@@ -614,7 +614,7 @@ test "repair debt: repairNode canonicalizes single-block grouped adjacency preve
     // Reverse backlink so forward/reverse consistency holds.
     const rb = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, rb, .rev).sources[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, rb, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, rb, .rev, @intCast(1));
     {
         const d1 = try graph.nodeAt(.{ .index = 1 });
         publish.clearPublishedSides(d1);
@@ -665,7 +665,7 @@ test "repair debt: flushRepairs does not discover unflagged tombstone debt" {
     // Clear needs_repair_fwd and all repair-debt sources. flushRepairs should
     // drain only explicit debt, so the tombstone must remain untouched.
     {
-        var meta = page_ops.nodeAtConst(&graph.graph, source).loadPublishedMeta();
+        var meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
         var flags = meta.flags();
         flags.needs_repair_fwd = false;
         meta = meta.withFlags(flags);

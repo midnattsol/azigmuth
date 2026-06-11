@@ -117,8 +117,8 @@ fn planRemovalSide(
     comptime side: adjacency.AdjSide,
 ) !RemovalPlan {
     const live_before: u7 = switch (side) {
-        .fwd => @intCast(@popCount(page_ops.edgeBlockAtConst(graph, found.block_idx, .fwd).mask)),
-        .rev => @intCast(@popCount(page_ops.edgeBlockAtConst(graph, found.block_idx, .rev).mask)),
+        .fwd => @intCast(page_ops.blockLiveCount(graph, found.block_idx, .fwd)),
+        .rev => @intCast(page_ops.blockLiveCount(graph, found.block_idx, .rev)),
     };
     const new_live: u7 = live_before - 1;
     const tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, side_adj)) orelse return error.CorruptGraph;
@@ -164,7 +164,7 @@ fn copyForwardBlockWithoutSlot(
     }
 
     const new_live: u7 = live_before - 1;
-    block.mask = constants.denseMask(@intCast(new_live));
+    page_ops.setBlockLiveCount(graph, new_block, .fwd, @intCast(new_live));
     return new_live;
 }
 
@@ -183,6 +183,6 @@ fn copyReverseBlockWithoutSlot(
     while (shift < live_before - 1) : (shift += 1) block.sources[shift] = block.sources[shift + 1];
 
     const new_live: u7 = live_before - 1;
-    block.mask = constants.denseMask(@intCast(new_live));
+    page_ops.setBlockLiveCount(graph, new_block, .rev, @intCast(new_live));
     return new_live;
 }

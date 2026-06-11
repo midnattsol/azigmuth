@@ -18,7 +18,10 @@ fn countVisibleEntriesInBlockSnapshot(
         .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
         .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
     };
-    const live = @popCount(block.mask);
+    const live = switch (side) {
+        .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
+        .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+    };
     var total: u64 = 0;
     for (0..live) |slot| {
         const candidate_idx = switch (side) {
@@ -121,7 +124,10 @@ fn hasTombstoneSnapshot(
                     .fwd => page_ops.edgeBlockAtConst(inner_graph, block_idx, .fwd),
                     .rev => page_ops.edgeBlockAtConst(inner_graph, block_idx, .rev),
                 };
-                const live = @popCount(block.mask);
+                const live = switch (side) {
+                    .fwd => page_ops.blockLiveCount(inner_graph, block_idx, .fwd),
+                    .rev => page_ops.blockLiveCount(inner_graph, block_idx, .rev),
+                };
                 for (0..live) |slot| {
                     const candidate_idx = switch (side) {
                         .fwd => block.destinations[slot],
@@ -200,7 +206,7 @@ fn validateForwardEdgeIdsSnapshot(
             for (start..start + count) |block_idx_usize| {
                 const block_idx: u32 = @intCast(block_idx_usize);
                 const id_block = page_ops.edgeBlockFwdIdsAtConst(inner_graph, block_idx);
-                const live_count = @popCount(page_ops.edgeBlockAtConst(inner_graph, block_idx, .fwd).mask);
+                const live_count = @min(page_ops.blockLiveCount(inner_graph, block_idx, .fwd), 64);
                 for (0..live_count) |slot| {
                     if (id_block.ids[slot] == 0) return error.CorruptGraph;
                 }
@@ -254,7 +260,7 @@ fn validateForwardConsistencySnapshot(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .fwd);
-                const live = @popCount(block.mask);
+                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .fwd), 64);
                 for (0..live) |slot| {
                     const destination_idx = block.destinations[slot];
                     if (destination_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
@@ -312,7 +318,7 @@ fn validateReverseConsistencySnapshot(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .rev);
-                const live = @popCount(block.mask);
+                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .rev), 64);
                 for (0..live) |slot| {
                     const source_idx = block.sources[slot];
                     if (source_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;

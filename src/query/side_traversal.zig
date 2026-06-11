@@ -161,22 +161,26 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
     return true;
 }
 
-pub fn loadNextNeighborMask(iterator: anytype, graph: *const graph_core.GraphCore) bool {
+/// Loads the next non-empty block as a counted span: dense storage means
+/// iteration is a plain [0, live) loop — no mask, no loop-carried bit math.
+pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
         switch (iterator.direction) {
             .fwd => {
-                const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-                if (block.mask == 0) continue;
-                iterator.current_mask = block.mask;
-                iterator.cached_fwd_block = block;
+                const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
+                if (live == 0) continue;
+                iterator.current_slot = 0;
+                iterator.current_live = live;
+                iterator.cached_fwd_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
                 iterator.cached_rev_block = null;
             },
             .rev => {
-                const block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-                if (block.mask == 0) continue;
-                iterator.current_mask = block.mask;
-                iterator.cached_rev_block = block;
+                const live = page_ops.blockLiveCount(graph, block_idx, .rev);
+                if (live == 0) continue;
+                iterator.current_slot = 0;
+                iterator.current_live = live;
+                iterator.cached_rev_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
                 iterator.cached_fwd_block = null;
             },
         }
@@ -184,14 +188,15 @@ pub fn loadNextNeighborMask(iterator: anytype, graph: *const graph_core.GraphCor
     }
 }
 
-pub fn loadNextOutEdgeMask(iterator: anytype, graph: *const graph_core.GraphCore) bool {
+pub fn loadNextOutEdgeSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
-        const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-        if (block.mask == 0) continue;
+        const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
+        if (live == 0) continue;
 
-        iterator.current_mask = block.mask;
-        iterator.cached_fwd_block = block;
+        iterator.current_slot = 0;
+        iterator.current_live = live;
+        iterator.cached_fwd_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
         iterator.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
         return true;
     }

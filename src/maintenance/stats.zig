@@ -22,8 +22,7 @@ pub fn debtStats(graph: *const graph_core.GraphCore) !types.DebtStats {
     for (0..node_count) |node_index_usize| {
         const node_index: u32 = @intCast(node_index_usize);
         const node = types.NodeId{ .index = node_index };
-        const node_buffer = node_access.nodeAtConst(graph, node);
-        const meta = node_access.loadPublishedMeta(node_buffer);
+        const meta = node_access.loadPublishedMetaAtConst(graph, node);
         if (meta.removed) {
             stats.removed_nodes += 1;
             continue;

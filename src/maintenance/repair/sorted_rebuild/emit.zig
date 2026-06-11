@@ -39,13 +39,13 @@ const OutputState = struct {
         writeItem(graph, self.out_block_idx.?, self.out_slot, iter, side);
         self.out_slot += 1;
         if (self.out_slot == 64) {
-            page_ops.edgeBlockAt(graph, self.out_block_idx.?, side).mask = constants.FULL_BLOCK_MASK;
+            page_ops.setBlockLiveCount(graph, self.out_block_idx.?, side, 64);
         }
     }
 
     fn finish(self: *OutputState, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) void {
         if (self.out_block_idx) |block_idx| {
-            page_ops.edgeBlockAt(graph, block_idx, side).mask = constants.denseMask(self.out_slot);
+            page_ops.setBlockLiveCount(graph, block_idx, side, @intCast(self.out_slot));
         }
     }
 };

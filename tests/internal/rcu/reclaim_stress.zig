@@ -151,7 +151,7 @@ test "stress rcu: flushRepairs drains explicit debt safely under concurrent chur
     const target = try graph.addNode();
     try graph.addEdge(source, target, 0, 0);
     _ = try graph.removeNode(target);
-    try testing.expect((try graph.nodeAtConst(source)).publishedAdj().flags.needs_repair_fwd);
+    try testing.expect((try graph.nodeAt(source)).publishedAdj().flags.needs_repair_fwd);
 
     // Churn node: continuously add/remove edges + reclaim, creating
     // block retirement traffic that exercises the reclamation path

@@ -18,11 +18,11 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = dest_a.index;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).flags[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[0] = dest_b.index;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).flags[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const g0 = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
@@ -37,7 +37,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
-        page_ops.edgeBlockAt(&graph.graph, block, .rev).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
         const node = try graph.nodeAt(dest_a);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
@@ -48,7 +48,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
-        page_ops.edgeBlockAt(&graph.graph, block, .rev).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
         const node = try graph.nodeAt(dest_b);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
@@ -79,7 +79,7 @@ test "removeNode corruption: invalid forward first_group is rejected before trav
 
     const reverse_block = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, reverse_block, .rev).sources[0] = source.index;
-    page_ops.edgeBlockAt(&graph.graph, reverse_block, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, reverse_block, .rev, @intCast(1));
     const destination_node = try graph.nodeAt(destination);
     publish.clearPublishedSides(destination_node);
     publish.publishedRevSide(destination_node).first_block = reverse_block;
@@ -105,11 +105,11 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = dest_a.index;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).flags[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[0] = dest_b.index;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).flags[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const g0 = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
@@ -124,7 +124,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
-        page_ops.edgeBlockAt(&graph.graph, block, .rev).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
         const node = try graph.nodeAt(dest_a);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
@@ -135,7 +135,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
-        page_ops.edgeBlockAt(&graph.graph, block, .rev).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
         const node = try graph.nodeAt(dest_b);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
@@ -163,7 +163,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
         page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = target.index;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-        page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
         const node = try graph.nodeAt(src_a);
         publish.clearPublishedSides(node);
         publish.publishedFwdSide(node).first_block = block;
@@ -176,7 +176,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
         page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = target.index;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-        page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
         const node = try graph.nodeAt(src_b);
         publish.clearPublishedSides(node);
         publish.publishedFwdSide(node).first_block = block;
@@ -188,9 +188,9 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
     const r0 = try graph.allocBlockRev();
     const r1 = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, r0, .rev).sources[0] = src_a.index;
-    page_ops.edgeBlockAt(&graph.graph, r0, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, r0, .rev, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, r1, .rev).sources[0] = src_b.index;
-    page_ops.edgeBlockAt(&graph.graph, r1, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, r1, .rev, @intCast(1));
 
     const g0 = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = constants.END_OF_CHAIN };
@@ -220,7 +220,7 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
         page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = target.index;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-        page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
+        page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
         const node = try graph.nodeAt(predecessor);
         publish.clearPublishedSides(node);
         publish.publishedFwdSide(node).first_block = block;
@@ -232,9 +232,9 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     const r0 = try graph.allocBlockRev();
     const r1 = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, r0, .rev).sources[0] = predecessor.index;
-    page_ops.edgeBlockAt(&graph.graph, r0, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, r0, .rev, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, r1, .rev).sources[0] = predecessor.index;
-    page_ops.edgeBlockAt(&graph.graph, r1, .rev).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, r1, .rev, @intCast(1));
 
     const g0 = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = constants.END_OF_CHAIN };
@@ -261,7 +261,7 @@ test "removeNode corruption: out-of-range destination via grouped chain is rejec
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 0xFFFFFFFF;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).mask = constants.denseMask(1);
+    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
 
     const group = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };

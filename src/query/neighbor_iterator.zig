@@ -30,7 +30,8 @@ pub const NeighborIterator = struct {
     blocks_remaining: u32,
     current_group_index: u32,
 
-    current_mask: u64,
+    current_slot: u7 = 0,
+    current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
@@ -78,15 +79,15 @@ pub const NeighborIterator = struct {
 
     fn nextBlockNeighbor(self: *NeighborIterator) ?types.NodeId {
         while (true) {
-            while (self.current_mask == 0) {
-                if (!side_traversal.loadNextNeighborMask(self, self.core)) return null;
+            while (self.current_slot >= self.current_live) {
+                if (!side_traversal.loadNextNeighborSpan(self, self.core)) return null;
             }
 
-            const bit_index: u6 = @intCast(@ctz(self.current_mask));
-            self.current_mask &= self.current_mask - 1;
+            const slot = self.current_slot;
+            self.current_slot += 1;
             const candidate = switch (self.direction) {
-                .fwd => types.NodeId{ .index = self.cached_fwd_block.?.destinations[bit_index] },
-                .rev => types.NodeId{ .index = self.cached_rev_block.?.sources[bit_index] },
+                .fwd => types.NodeId{ .index = self.cached_fwd_block.?.destinations[slot] },
+                .rev => types.NodeId{ .index = self.cached_rev_block.?.sources[slot] },
             };
             if (self.candidateRemoved(candidate.index)) continue;
             return candidate;
@@ -169,7 +170,6 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .current_block_index = cursor_init.traversal.current_block_index,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_index = cursor_init.traversal.current_group_index,
-        .current_mask = 0,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
@@ -208,16 +208,14 @@ pub fn inNeighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-    const node_buffer = node_access.nodeAtConst(graph, node);
-    const meta = node_access.loadPublishedMeta(node_buffer);
+    const meta = node_access.loadPublishedMetaAtConst(graph, node);
     if (meta.removed) return error.InvalidNode;
     return node_access.publishedFwdDegreeAtConst(graph, node);
 }
 
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-    const node_buffer = node_access.nodeAtConst(graph, node);
-    const meta = node_access.loadPublishedMeta(node_buffer);
+    const meta = node_access.loadPublishedMetaAtConst(graph, node);
     if (meta.removed) return error.InvalidNode;
     return node_access.publishedRevDegreeAtConst(graph, node);
 }
