@@ -10,9 +10,28 @@ const adjacency = @import("../adjacency/mod.zig");
 
 pub const LiveReadSnapshot = struct {
     reader_token: rcu.ReaderToken,
+    /// True when `reader_token` is a retain on a longer-lived owner (a
+    /// ReadSession): release the retain on exit instead of closing the token.
+    token_retained: bool = false,
     meta: types.PublishedMeta,
     node_adj_snapshot: types.NodeAdj,
+    degree_fwd: u32,
+    degree_rev: u32,
+    fwd_sorted: bool,
+    rev_sorted: bool,
 };
+
+/// Undoes `captureNodeSnapshot`'s reader acquisition on error paths.
+pub fn releaseCapturedReader(graph: *const graph_core.GraphCore, capture: LiveReadSnapshot) void {
+    if (capture.token_retained) {
+        switch (rcu.releaseRetainedReaderToken(graph, capture.reader_token)) {
+            .alive, .closed => {},
+            .finalize => rcu.finalizeReaderExit(@constCast(graph), capture.reader_token),
+        }
+        return;
+    }
+    rcu.readerExit(@constCast(graph), capture.reader_token);
+}
 
 pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.SideAdj {
     return switch (direction) {
@@ -22,17 +41,70 @@ pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.Side
 }
 
 /// Captures a reader-guarded published node snapshot for live iteration.
+///
+/// The composed `NodeAdj` and degrees are read from the per-side
+/// double-buffers, which a subsequent writer may recycle as staging the
+/// moment one publish flips the side index. The seqlock-style re-read of
+/// `published_meta` below is therefore mandatory: it guarantees the slots
+/// were not overwritten while being read, so the snapshot is never a torn
+/// mix of two published versions (RFC §2.5 reader rule).
 pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!LiveReadSnapshot {
+    return captureNodeSnapshotImpl(graph, node, null);
+}
+
+/// Like captureNodeSnapshot, but retains `session_token` (one atomic
+/// increment) instead of allocating a fresh reader slot + tracked token —
+/// the cheap path for ReadSession point reads. Falls back to a fresh token
+/// when the retain fails (saturated or closing).
+pub fn captureNodeSnapshotRetained(graph: *const graph_core.GraphCore, node: types.NodeId, session_token: rcu.ReaderToken) types.GraphError!LiveReadSnapshot {
+    return captureNodeSnapshotImpl(graph, node, session_token);
+}
+
+fn captureNodeSnapshotImpl(graph: *const graph_core.GraphCore, node: types.NodeId, session_token: ?rcu.ReaderToken) types.GraphError!LiveReadSnapshot {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
 
-    const reader_token = try rcu.readerEnter(@constCast(graph));
-    errdefer rcu.readerExit(@constCast(graph), reader_token);
+    var token_retained = false;
+    const reader_token = blk: {
+        if (session_token) |token| {
+            if (rcu.tryRetainReaderToken(graph, token)) {
+                token_retained = true;
+                break :blk token;
+            }
+        }
+        break :blk try rcu.readerEnter(@constCast(graph));
+    };
+    errdefer if (token_retained) {
+        switch (rcu.releaseRetainedReaderToken(graph, reader_token)) {
+            .alive, .closed => {},
+            .finalize => rcu.finalizeReaderExit(@constCast(graph), reader_token),
+        }
+    } else rcu.readerExit(@constCast(graph), reader_token);
 
-    const meta = node_access.loadPublishedMetaAtConst(graph, node);
-    const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
-    try node_validity.ensureLiveSnapshot(node_adj_snapshot);
+    const published_ref = node_access.nodePublishedAtConst(graph, node);
+    var meta = node_access.loadPublishedMetaAtConst(graph, node);
+    while (true) {
+        const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
+        const degree_fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta);
+        const degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta);
+        const fwd_sorted = published_ref.publishedFwdSortedFromMeta(meta);
+        const rev_sorted = published_ref.publishedRevSortedFromMeta(meta);
 
-    return .{ .reader_token = reader_token, .meta = meta, .node_adj_snapshot = node_adj_snapshot };
+        const after = node_access.loadPublishedMetaAtConst(graph, node);
+        if (@as(u64, @bitCast(meta)) == @as(u64, @bitCast(after))) {
+            try node_validity.ensureLiveSnapshot(node_adj_snapshot);
+            return .{
+                .reader_token = reader_token,
+                .token_retained = token_retained,
+                .meta = meta,
+                .node_adj_snapshot = node_adj_snapshot,
+                .degree_fwd = degree_fwd,
+                .degree_rev = degree_rev,
+                .fwd_sorted = fwd_sorted,
+                .rev_sorted = rev_sorted,
+            };
+        }
+        meta = after;
+    }
 }
 
 pub fn validateForwardSideQuick(graph: *const graph_core.GraphCore, side_snapshot: types.SideAdj) types.GraphError!void {
@@ -61,6 +133,15 @@ pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, c
 /// Releases the reader token held by one live iterator, if still active.
 pub fn deinitReader(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (!iterator.reader_active) return;
+
+    if (iterator.reader_token_retained) {
+        switch (rcu.releaseRetainedReaderToken(graph, iterator.reader_token)) {
+            .alive, .closed => {},
+            .finalize => rcu.finalizeReaderExit(@constCast(graph), iterator.reader_token),
+        }
+        iterator.reader_active = false;
+        return;
+    }
 
     switch (rcu.beginCloseReaderToken(graph, iterator.reader_token)) {
         .inactive => {},

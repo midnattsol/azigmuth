@@ -4,6 +4,7 @@ const node_access = @import("../../../core/node_access.zig");
 const types = @import("../../../core/types.zig");
 const snapshot_view = @import("../../../query/snapshot/view.zig");
 const shared = @import("shared.zig");
+const prop_rows = @import("../prop_rows.zig");
 
 pub fn debugValidateLive(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator) ![]types.Violation {
     var list: std.ArrayList(types.Violation) = .empty;
@@ -22,8 +23,12 @@ pub fn debugValidateLive(graph: *const graph_core.GraphCore, allocator: std.mem.
         const node_totals = try shared.appendNodeViolations(graph, allocator, &list, &tracking, node_id, adjacency, node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta), node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta));
         totals.fwd += node_totals.fwd;
         totals.rev += node_totals.rev;
+        if (!adjacency.flags.removed) {
+            try prop_rows.appendForwardPropRowViolations(graph, allocator, &list, node_id, adjacency);
+        }
     }
 
+    try prop_rows.appendGlobalPropRowUniquenessViolations(graph, allocator, &list);
     try shared.appendRepairDebtAndReachabilityViolations(graph, allocator, &list, &tracking);
     try shared.appendTotalViolations(graph, allocator, &list, totals, true);
     return list.toOwnedSlice(allocator);

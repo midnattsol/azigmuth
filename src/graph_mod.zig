@@ -1,5 +1,5 @@
 //! Test-only facade exposing white-box internals. This is not part of the
-//! public `graphz` stability contract.
+//! public `azigmuth` stability contract.
 
 const constants = @import("core/constants.zig");
 const graph_core = @import("core/graph_core.zig");
@@ -38,8 +38,14 @@ pub const remove_fast_path_mod = @import("mutation/edge/remove/fast_path.zig");
 pub const remove_rebuild_common_mod = @import("mutation/edge/remove/rebuild/common.zig");
 pub const node_access_mod = @import("core/node_access.zig");
 pub const radix_directory_mod = @import("storage/radix_directory.zig");
+pub const persistence_mod = @import("storage/persistence.zig");
 pub const adjacency_runs_mod = @import("adjacency/runs.zig");
 pub const algorithms_context_mod = @import("algorithms/context.zig");
+
+pub const profile_mod = @import("core/profile.zig");
+pub const properties_mod = @import("properties.zig");
+pub const Profile = profile_mod.Profile;
+pub const Options = profile_mod.Options;
 
 pub const NodeId = types.NodeId;
 pub const GraphCore = graph_core.GraphCore;

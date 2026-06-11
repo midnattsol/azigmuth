@@ -10,6 +10,7 @@ const common = @import("../common.zig");
 const add_build = @import("add/build.zig");
 const add_finalize = @import("add/finalize.zig");
 const shared = @import("shared.zig");
+const side_runs = @import("../../adjacency/runs.zig");
 const local_repair = @import("../local_repair.zig");
 
 fn prepareAppendBlockSide(
@@ -28,16 +29,17 @@ fn prepareAppendBlockSide(
     switch (side) {
         .fwd => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .fwd);
-            if (page_ops.blockLiveCount(graph, tail_idx, .fwd) == 64) {
+            if (page_ops.blockLiveCount(graph, tail_idx, .fwd) == constants.EDGES_PER_BLOCK) {
                 return .{ .new_block = new_block, .tail_index = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = tail_block.*;
             page_ops.setBlockLiveCount(graph, new_block, .fwd, page_ops.blockLiveCount(graph, tail_idx, .fwd));
             if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block).* = page_ops.edgeBlockFwdIdsAtConst(graph, tail_idx).*;
+            if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block).* = page_ops.edgeBlockFwdPropsAtConst(graph, tail_idx).*;
         },
         .rev => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .rev);
-            if (page_ops.blockLiveCount(graph, tail_idx, .rev) == 64) {
+            if (page_ops.blockLiveCount(graph, tail_idx, .rev) == constants.EDGES_PER_BLOCK) {
                 return .{ .new_block = new_block, .tail_index = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .rev).* = tail_block.*;
@@ -71,13 +73,59 @@ fn applyPreparedAppendSideTracked(
     return try local_repair.replaceTailBlock(graph, side_adj, prepared, side, scratch) orelse error.RepairRequired;
 }
 
+const AddedEdge = struct { edge_id: types.EdgeId, prop_row: u32 };
+
+/// Block preceding `block_idx` in the side layout, or null when `block_idx`
+/// is the first block.
+fn previousBlockInSide(graph: *const graph_core.GraphCore, side_view: types.SideAdj, block_idx: u32) ?u32 {
+    const total_runs = side_runs.runCount(side_view);
+    var prev_run_last: ?u32 = null;
+    var run_idx: u16 = 0;
+    while (run_idx < total_runs) : (run_idx += 1) {
+        const run = side_runs.runAt(graph, side_view, run_idx) orelse return null;
+        if (block_idx >= run.start and block_idx < run.start + run.count) {
+            if (block_idx > run.start) return block_idx - 1;
+            return prev_run_last;
+        }
+        prev_run_last = run.start + run.count - 1;
+    }
+    return null;
+}
+
+/// Whether inserting `key` into `insertion_block` (always the layout's tail)
+/// keeps the side globally sorted. The hot path can preserve the published
+/// `sorted` bit — instead of conservatively clearing it — exactly when the
+/// side was already sorted and the new key is >= the last key of the block
+/// preceding the insertion block: blocks before the tail are unchanged, the
+/// in-block insert keeps per-block order, so the cross-block boundary is the
+/// only thing to re-check. Append-mostly workloads (ascending ids) therefore
+/// keep conclusive binary-search misses for duplicate checks and removals.
+fn appendKeepsGloballySorted(
+    graph: *const graph_core.GraphCore,
+    side_view: types.SideAdj,
+    insertion_block: u32,
+    key: u32,
+    sorted_before: bool,
+    comptime side: adjacency.AdjSide,
+) bool {
+    if (!sorted_before) return false;
+    const prev_block = previousBlockInSide(graph, side_view, insertion_block) orelse return true;
+    const live = page_ops.blockLiveCount(graph, prev_block, side);
+    if (live == 0) return false;
+    const last_key = switch (side) {
+        .fwd => page_ops.edgeBlockAtConst(graph, prev_block, .fwd).destinations[live - 1],
+        .rev => page_ops.edgeBlockAtConst(graph, prev_block, .rev).sources[live - 1],
+    };
+    return key >= last_key;
+}
+
 fn addEdgeImpl(
     graph: *graph_core.GraphCore,
     source: types.NodeId,
     destination: types.NodeId,
     relation: u16,
     flags: u16,
-) !types.EdgeId {
+) !AddedEdge {
     var endpoints = try shared.claimEndpoints(graph, source, destination);
     defer endpoints.claims.release();
 
@@ -106,6 +154,7 @@ fn addEdgeImpl(
     defer scratch.cleanup(graph);
 
     const edge_id = if (graph.multigraph_enabled) try endpoints.claims.source_hot.nextEdgeId() else types.EdgeId{ .local = 0 };
+    const prop_row: u32 = if (graph.edge_properties_enabled) try scratch.allocPropRow(graph) else 0;
 
     const old_forward_groups = shared.OldGroupChain.captureSide(&source_pub);
     const old_reverse_groups = shared.OldGroupChain.captureSide(&destination_pub);
@@ -114,22 +163,31 @@ fn addEdgeImpl(
     var reverse_prepared: shared.PreparedAppendBlock = .{ .new_block = 0 };
     var forward_applied: shared.AppliedAppend = .{ .block_idx = 0 };
     var reverse_applied: shared.AppliedAppend = .{ .block_idx = 0 };
+    var fwd_sorted_after = false;
+    var rev_sorted_after = false;
 
     if (add_build.canUseTinyFwdSide(graph, source_pub)) {
-        source_staging.* = try add_build.buildForwardTinyOrPromoted(graph, source_pub, destination, relation, flags, edge_id.local, &scratch);
+        source_staging.* = try add_build.buildForwardTinyOrPromoted(graph, source_pub, destination, relation, flags, edge_id.local, prop_row, &scratch);
+        // Tiny slots and single promoted blocks are trivially globally sorted.
+        fwd_sorted_after = true;
     } else {
+        const fwd_sorted_before = endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta);
         forward_prepared = try prepareAppendBlockSide(graph, source_staging, .fwd, &scratch);
         try local_repair.ensureTailCowGroupConstraint(graph, source_staging, forward_prepared);
         forward_applied = try applyPreparedAppendSideTracked(graph, source_staging, forward_prepared, .fwd, &scratch);
-        try add_build.insertForwardEdge(graph, forward_applied.block_idx, destination, relation, flags, edge_id.local);
+        fwd_sorted_after = appendKeepsGloballySorted(graph, source_staging.*, forward_applied.block_idx, destination.index, fwd_sorted_before, .fwd);
+        try add_build.insertForwardEdge(graph, forward_applied.block_idx, destination, relation, flags, edge_id.local, prop_row);
     }
 
     if (add_build.canUseTinyRevSide(destination_pub)) {
         destination_staging.* = try add_build.buildReverseTinyOrPromoted(graph, destination_pub, source, &scratch);
+        rev_sorted_after = true;
     } else {
+        const rev_sorted_before = endpoints.destination_published.publishedRevSortedFromMeta(endpoints.destination_meta);
         reverse_prepared = try prepareAppendBlockSide(graph, destination_staging, .rev, &scratch);
         try local_repair.ensureTailCowGroupConstraint(graph, destination_staging, reverse_prepared);
         reverse_applied = try applyPreparedAppendSideTracked(graph, destination_staging, reverse_prepared, .rev, &scratch);
+        rev_sorted_after = appendKeepsGloballySorted(graph, destination_staging.*, reverse_applied.block_idx, source.index, rev_sorted_before, .rev);
         add_build.insertReverseEdge(graph, reverse_applied.block_idx, source);
     }
 
@@ -155,6 +213,8 @@ fn addEdgeImpl(
         reverse_applied,
         old_forward_groups,
         old_reverse_groups,
+        fwd_sorted_after,
+        rev_sorted_after,
     );
     // Tiny sides COW into a fresh slot on every mutation; once the new side is
     // published the superseded slot must enter the retired stack or it leaks.
@@ -167,7 +227,7 @@ fn addEdgeImpl(
     rcu.bumpEpoch(graph);
     writer_guard.end();
 
-    return edge_id;
+    return .{ .edge_id = edge_id, .prop_row = prop_row };
 }
 
 /// Adds one edge between two live nodes, rejecting duplicates in simple-graph mode.
@@ -179,5 +239,12 @@ pub fn addEdge(graph: *graph_core.GraphCore, source: types.NodeId, destination: 
 /// Requires multigraph mode.
 pub fn addEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !types.EdgeId {
     if (!graph.multigraph_enabled) return error.UnsupportedOperation;
-    return addEdgeImpl(graph, source, destination, relation, flags);
+    return (try addEdgeImpl(graph, source, destination, relation, flags)).edge_id;
+}
+
+/// Adds one edge and returns its stable property row id.
+/// Requires edge_properties mode.
+pub fn addEdgeWithProperties(graph: *graph_core.GraphCore, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) !u32 {
+    if (!graph.edge_properties_enabled) return error.UnsupportedOperation;
+    return (try addEdgeImpl(graph, source, destination, relation, flags)).prop_row;
 }

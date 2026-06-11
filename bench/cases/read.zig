@@ -1,5 +1,5 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const harness = @import("../harness.zig");
 
 const scan_iterations: usize = 32;
@@ -7,8 +7,8 @@ const destination_count: usize = 4096;
 const sparse_node_count: usize = 131072;
 const sparse_edge_count: usize = 1024;
 
-fn buildSparseGraph(graph: *graphz.Graph) !void {
-    var previous: ?graphz.NodeId = null;
+fn buildSparseGraph(graph: *azigmuth.Graph) !void {
+    var previous: ?azigmuth.NodeId = null;
     for (0..sparse_node_count) |node_idx| {
         const node = try graph.addNode();
         if (node_idx < sparse_edge_count) {
@@ -19,7 +19,7 @@ fn buildSparseGraph(graph: *graphz.Graph) !void {
 }
 
 fn benchSnapshotNeighborsScanClean(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -44,11 +44,11 @@ fn benchSnapshotNeighborsScanClean(allocator: std.mem.Allocator) !harness.Result
 }
 
 fn benchSnapshotNeighborsScanTombstones(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    const destinations = try allocator.alloc(graphz.NodeId, destination_count);
+    const destinations = try allocator.alloc(azigmuth.NodeId, destination_count);
     defer allocator.free(destinations);
 
     for (destinations) |*destination| {
@@ -76,7 +76,7 @@ fn benchSnapshotNeighborsScanTombstones(allocator: std.mem.Allocator) !harness.R
 }
 
 fn benchSnapshotOutDegree(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -100,7 +100,7 @@ fn benchSnapshotOutDegree(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     try buildSparseGraph(graph);
@@ -117,13 +117,13 @@ fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.R
 }
 
 fn benchSnapshotOutEdgesMultigraph(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.initWithOptions(allocator, .{ .multigraph = true });
+    var graph = try azigmuth.Graph.initWithOptions(allocator, .{ .multigraph = true });
     defer graph.deinit();
 
     const source = try graph.addNode();
     const duplicate_count: usize = 1024;
     const destination_count_local: usize = 256;
-    const destinations = try allocator.alloc(graphz.NodeId, destination_count_local);
+    const destinations = try allocator.alloc(azigmuth.NodeId, destination_count_local);
     defer allocator.free(destinations);
     for (destinations) |*destination| destination.* = try graph.addNode();
 

@@ -2,6 +2,7 @@ const common = @import("common.zig");
 const run_search = @import("run_search.zig");
 const edge_ids = @import("edge_ids.zig");
 const std = @import("std");
+const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const node_access = @import("../../core/node_access.zig");
 const types = @import("../../core/types.zig");
@@ -88,7 +89,7 @@ pub fn appendForwardConsistencyViolations(graph: *const graph_core.GraphCore, al
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_index, .fwd)) continue;
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .fwd);
-        const live_count = @min(page_ops.blockLiveCount(graph, traversed_block.block_index, .fwd), 64);
+        const live_count = @min(page_ops.blockLiveCount(graph, traversed_block.block_index, .fwd), constants.EDGES_PER_BLOCK);
         for (0..live_count) |slot| {
             try appendForwardPairViolations(graph, allocator, violations, source_node, source_adjacency, block.destinations[slot]);
         }
@@ -100,7 +101,7 @@ pub fn appendReverseConsistencyViolations(graph: *const graph_core.GraphCore, al
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_index, .rev)) continue;
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_index, .rev);
-        const live_count = @min(page_ops.blockLiveCount(graph, traversed_block.block_index, .rev), 64);
+        const live_count = @min(page_ops.blockLiveCount(graph, traversed_block.block_index, .rev), constants.EDGES_PER_BLOCK);
         for (0..live_count) |slot| {
             try appendReversePairViolations(graph, allocator, violations, block.sources[slot], destination_node);
         }
@@ -128,10 +129,10 @@ pub fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source
         }.callback);
         return;
     }
-    try common.forEachForwardEntryInAdj(graph, adjacency, source_node, struct {
-        fn callback(inner_graph: *const graph_core.GraphCore, inner_source_node: u32, entry: common.ForwardEntryView) !void {
-            const source_adjacency = node_access.publishedAdjAtConst(inner_graph, .{ .index = inner_source_node });
-            try checkForwardPair(inner_graph, inner_source_node, source_adjacency, entry.destination);
+    // The source adjacency is loop-invariant: compose it once, not per entry.
+    try common.forEachForwardEntryInAdj(graph, adjacency, ForwardMultiplicityContext{ .source_node = source_node, .adjacency = adjacency }, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, context: ForwardMultiplicityContext, entry: common.ForwardEntryView) !void {
+            try checkForwardPair(inner_graph, context.source_node, context.adjacency, entry.destination);
         }
     }.callback);
 }

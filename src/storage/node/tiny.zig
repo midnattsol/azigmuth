@@ -6,6 +6,8 @@ pub const TinyFwdEntry = extern struct {
     relation: u16 = 0,
     flags: types.EdgeFlags = @bitCast(@as(u16, 0)),
     edge_id: u32 = 0,
+    /// Stable property row id (edge_properties mode); 0 = none.
+    prop_row: u32 = 0,
 };
 
 pub const TinyFwdSlot = extern struct {
@@ -23,7 +25,7 @@ pub fn fwdCap(multigraph_enabled: bool) u16 {
     return if (multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE;
 }
 
-pub fn insertFwd(slot: *TinyFwdSlot, count: u16, destination: u32, relation: u16, flags: types.EdgeFlags, edge_id: u32, multigraph_enabled: bool) !u16 {
+pub fn insertFwd(slot: *TinyFwdSlot, count: u16, destination: u32, relation: u16, flags: types.EdgeFlags, edge_id: u32, prop_row: u32, multigraph_enabled: bool) !u16 {
     var insertion_idx: u16 = 0;
     while (insertion_idx < count) : (insertion_idx += 1) {
         const current = slot.entries[insertion_idx];
@@ -43,6 +45,7 @@ pub fn insertFwd(slot: *TinyFwdSlot, count: u16, destination: u32, relation: u16
         .relation = relation,
         .flags = flags,
         .edge_id = edge_id,
+        .prop_row = prop_row,
     };
     return count + 1;
 }

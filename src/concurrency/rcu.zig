@@ -201,6 +201,14 @@ pub fn retireGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, group
     page_ops.retireGroupSpan(graph, first_group_idx, group_count, current_epoch);
 }
 
+/// Retires one property row (edge_properties mode): the row recycles only
+/// after every reader that could observe the dropped edge has exited.
+pub fn retirePropRow(graph: *graph_core.GraphCore, row: u32) void {
+    if (row == 0) return;
+    const current_epoch = graph.epoch.load(.acquire);
+    page_ops.retirePropRow(graph, row, current_epoch);
+}
+
 pub fn bumpEpoch(graph: *graph_core.GraphCore) void {
     _ = graph.epoch.fetchAdd(1, .release);
 }
@@ -231,4 +239,5 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
     page_ops.reclaimRetiredGroups(graph, safe_epoch);
     page_ops.reclaimRetiredTinySlots(graph, safe_epoch, .fwd);
     page_ops.reclaimRetiredTinySlots(graph, safe_epoch, .rev);
+    page_ops.reclaimRetiredPropRows(graph, safe_epoch);
 }

@@ -71,7 +71,7 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
     var counted_blocks: u32 = 0;
     const first_group_idx = common.firstGroup(adjacency, side);
     const end_group = std.math.add(u32, first_group_idx, groups) catch return error.CorruptGraph;
-    if (end_group > graph.group_count) return error.CorruptGraph;
+    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
 
     for (first_group_idx..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);

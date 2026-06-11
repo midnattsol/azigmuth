@@ -136,10 +136,10 @@ test "large adjacency: addEdge tail COW does not reject when MAX_GROUPS_PER_NODE
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
     const g3 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = g3 };
-    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);

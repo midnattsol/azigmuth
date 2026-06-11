@@ -54,7 +54,7 @@ pub fn collectAdjacencyBlocks(
         try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = first_group_idx } });
         return;
     };
-    if (end_group > graph.group_count) {
+    if (end_group > graph.loadGroupCount()) {
         try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = first_group_idx } });
         return;
     }

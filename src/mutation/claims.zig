@@ -69,8 +69,10 @@ pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
 }
 
 pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_index: u32, destination_index: u32) !ClaimedAdjacencies {
-    const source_hot = try page_ops.ensureNodeHotAt(graph, .{ .index = source_index });
-    const destination_hot = if (source_index == destination_index) source_hot else try page_ops.ensureNodeHotAt(graph, .{ .index = destination_index });
+    // addNode guarantees hot pages for every published node, so claims take
+    // the plain load path instead of the (heavier, fallible) ensure path.
+    const source_hot = page_ops.nodeHotAt(graph, .{ .index = source_index });
+    const destination_hot = if (source_index == destination_index) source_hot else page_ops.nodeHotAt(graph, .{ .index = destination_index });
     var claims = ClaimedAdjacencies{
         .source_hot = source_hot,
         .destination_hot = destination_hot,
@@ -87,7 +89,7 @@ pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_index: u32, dest
 }
 
 pub fn tryClaimNodeSides(graph: *graph_core.GraphCore, node_index: u32, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
-    var claims = ClaimedNodeSides{ .hot = try page_ops.ensureNodeHotAt(graph, .{ .index = node_index }) };
+    var claims = ClaimedNodeSides{ .hot = page_ops.nodeHotAt(graph, .{ .index = node_index }) };
     errdefer claims.release();
     if (want_fwd) try claims.ensureFwd();
     if (want_rev) try claims.ensureRev();

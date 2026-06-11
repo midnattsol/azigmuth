@@ -1,8 +1,8 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 test "read snapshot algorithms operate on a sealed captured view" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -34,7 +34,7 @@ test "read snapshot algorithms operate on a sealed captured view" {
 }
 
 test "read snapshot exposes neighbors and degrees from the sealed view" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();

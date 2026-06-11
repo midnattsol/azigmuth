@@ -1,4 +1,8 @@
 const std = @import("std");
+const profile = @import("profile.zig");
+
+/// Edges per adjacency block, fixed per compilation by the storage profile.
+const EDGES_PER_BLOCK: usize = profile.active.edges_per_block;
 
 // ── Basic types ──────────────────────────────────────────────────────
 
@@ -16,6 +20,8 @@ pub const EdgeRef = struct {
     destination: u32,
     relation: u16,
     flags: EdgeFlags,
+    /// Stable property row id (edge_properties mode); 0 = none/disabled.
+    property_row: u32 = 0,
 };
 
 /// One edge of a batched insertion (see `Graph.addEdges`).
@@ -30,6 +36,11 @@ pub const GraphOptions = struct {
     /// When true, multiple edges between the same (source,destination) pair
     /// are allowed and `EdgeId` disambiguates them.
     multigraph: bool = false,
+    /// When true, every forward edge carries a stable property row id
+    /// (`EdgeRef.property_row`) usable as an index into caller-owned
+    /// `EdgeColumn(T)` stores. Costs one u32 sidecar per edge slot plus
+    /// per-row lifecycle metadata; graphs without properties pay nothing.
+    edge_properties: bool = false,
 };
 
 pub const NodeRemovalSummary = struct {
@@ -224,23 +235,23 @@ pub const NodeAdj = extern struct {
 
 // ── Edge blocks ──────────────────────────────────────────────────────
 
-/// 64 outgoing edges (512 bytes, cache-line aligned), stored as
-/// struct-of-arrays: the 256-byte destination array fills exactly 4 cache
-/// lines, so neighbor scans never touch relation/flag metadata and in-block
-/// loops vectorize. Dense storage: live entries occupy slots
+/// One block of outgoing edges (profile-sized: 16/32/64 entries; 512 bytes
+/// cache-line aligned at the default 64), stored as struct-of-arrays: the
+/// contiguous destination array is the only thing neighbor scans touch, and
+/// in-block loops vectorize. Dense storage: live entries occupy slots
 /// [0, live_count) with no holes, sorted by destination. The live count
-/// lives in a per-block u8 sidecar (one 64-byte page covers 64 blocks).
-/// Access goes through `storage/edge_blocks.zig`.
+/// lives in a per-block u8 sidecar. Access goes through
+/// `storage/edge_blocks.zig`.
 pub const EdgeBlockFwd = extern struct {
-    destinations: [64]u32 align(64),
-    relations: [64]u16,
-    flags: [64]u16,
+    destinations: [EDGES_PER_BLOCK]u32 align(64),
+    relations: [EDGES_PER_BLOCK]u16,
+    flags: [EDGES_PER_BLOCK]u16,
 };
 
-/// 64 incoming source node IDs (256 bytes, cache-line aligned). Same dense
+/// One block of incoming source node IDs (cache-line aligned). Same dense
 /// model as EdgeBlockFwd; reverse adjacency only needs the source.
 pub const EdgeBlockRev = extern struct {
-    sources: [64]u32 align(64),
+    sources: [EDGES_PER_BLOCK]u32 align(64),
 };
 
 // ── Forward edge ID sidecar ──────────────────────────────────────────
@@ -248,18 +259,24 @@ pub const EdgeBlockRev = extern struct {
 /// Per-forward-block edge ID storage. Shares block_idx and lifecycle with
 /// the corresponding EdgeBlockFwd. 256 bytes.
 pub const EdgeBlockFwdIds = struct {
-    ids: [64]u32,
+    ids: [EDGES_PER_BLOCK]u32,
+};
+
+/// Per-forward-block property row sidecar (edge_properties mode). Shares
+/// block_idx and lifecycle with the corresponding EdgeBlockFwd. 256 bytes.
+/// Row 0 is reserved as invalid/unset.
+pub const EdgeBlockFwdProps = struct {
+    rows: [EDGES_PER_BLOCK]u32,
 };
 
 // ── Contiguous edge block group ──────────────────────────────────────
 
 /// One physically contiguous run of edge blocks within a grouped side.
 /// Grouped sides publish `group_count` consecutive descriptors starting at
-/// `first_group`; `next` is no longer structural and remains reserved so the
-/// layout stays 12 bytes.
+/// `first_group`. 8 bytes — chain linkage was removed once runs became
+/// consecutive spans.
 pub const EdgeBlockGroup = struct {
     start: u32,
-    next: u32,
     count: u32,
 };
 
@@ -284,6 +301,8 @@ pub const Violation = union(enum) {
     mask_bit_out_of_range: struct { node: u32, block: u32 },
     invalid_dst: struct { node: u32, block: u32, slot: u32, dst: u32 },
     invalid_edge_id: struct { node: u32, block: u32, slot: u32, edge_id: u32 },
+    invalid_prop_row: struct { node: u32, block: u32, slot: u32, row: u32 },
+    duplicate_prop_row: struct { node_a: u32, node_b: u32, row: u32 },
     forward_reverse_mismatch: struct { node: u32, dst: u32 },
     forward_reverse_multiplicity_mismatch: struct { node: u32, dst: u32, forward_count: u32, reverse_count: u32 },
     unsorted_block: struct { node: u32, block: u32, slot: u32 },

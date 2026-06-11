@@ -9,7 +9,7 @@ const remove_fast_path = @import("fast_path.zig");
 const remove_finalize = @import("finalize.zig");
 const shared = @import("../shared.zig");
 
-fn findReverseMatchForSingleRemoval(
+pub fn findReverseMatchForSingleRemoval(
     graph: *graph_core.GraphCore,
     remove_state: *const remove_common.RemoveState,
     source: types.NodeId,

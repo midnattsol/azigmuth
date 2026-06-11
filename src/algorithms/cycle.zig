@@ -33,6 +33,21 @@ pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, ctx: conte
         }
     }
 
+    const Relax = struct {
+        indegrees: []u32,
+        zero_indegree: []u32,
+        zero_count: *usize,
+
+        fn onNeighbor(self: *@This(), neighbor_idx: u32) !void {
+            std.debug.assert(self.indegrees[neighbor_idx] > 0);
+            self.indegrees[neighbor_idx] -= 1;
+            if (self.indegrees[neighbor_idx] == 0) {
+                self.zero_indegree[self.zero_count.*] = neighbor_idx;
+                self.zero_count.* += 1;
+            }
+        }
+    };
+
     var processed_live: usize = 0;
     var head: usize = 0;
     while (head < zero_count) : (head += 1) {
@@ -42,16 +57,9 @@ pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, ctx: conte
         const current_idx = zero_indegree[head];
         processed_live += 1;
 
-        var cursor = try snapshot_iterators.neighborsCursor(view, .{ .index = current_idx }) orelse continue;
-        while (cursor.next()) |neighbor| {
-            const neighbor_idx: usize = neighbor.index;
-            std.debug.assert(indegrees[neighbor_idx] > 0);
-            indegrees[neighbor_idx] -= 1;
-            if (indegrees[neighbor_idx] == 0) {
-                zero_indegree[zero_count] = neighbor.index;
-                zero_count += 1;
-            }
-        }
+        if (!view.isLiveIndex(current_idx)) continue;
+        var relax = Relax{ .indegrees = indegrees, .zero_indegree = zero_indegree, .zero_count = &zero_count };
+        try snapshot_iterators.forEachNeighborInView(view, current_idx, &relax, Relax.onNeighbor);
     }
 
     return processed_live != view.liveNodeCount();

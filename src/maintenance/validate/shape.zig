@@ -15,7 +15,7 @@ pub fn validateBlockDense(graph: *const graph_core.GraphCore, block_index: u32, 
 
     // Dense storage is structural now (entries occupy [0, live)); the only
     // representable corruption is a live count beyond block capacity.
-    if (common.blockLive(graph, block_index, side) > 64) return error.CorruptGraph;
+    if (common.blockLive(graph, block_index, side) > constants.EDGES_PER_BLOCK) return error.CorruptGraph;
 }
 
 pub fn validateDenseInContiguousBlocks(
@@ -36,7 +36,7 @@ pub fn validateDenseInGroupedRuns(
     comptime side: common.Side,
 ) !void {
     const end_group = std.math.add(u32, first_group, group_count) catch return error.CorruptGraph;
-    if (end_group > graph.group_count) return error.CorruptGraph;
+    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (first_group..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
@@ -66,7 +66,7 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
         const block = page_ops.edgeBlockAtConst(graph, block_index, .fwd);
         const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_index) else null;
         const live_count = page_ops.blockLiveCount(graph, block_index, .fwd);
-        if (live_count > 64) return error.CorruptGraph;
+        if (live_count > constants.EDGES_PER_BLOCK) return error.CorruptGraph;
         var prev: u32 = 0;
         var prev_id: u32 = 0;
         for (0..live_count) |slot| {
@@ -89,7 +89,7 @@ pub fn validateBlockShapeFast(graph: *const graph_core.GraphCore, block_index: u
     } else {
         const block = page_ops.edgeBlockAtConst(graph, block_index, .rev);
         const live_count = page_ops.blockLiveCount(graph, block_index, .rev);
-        if (live_count > 64) return error.CorruptGraph;
+        if (live_count > constants.EDGES_PER_BLOCK) return error.CorruptGraph;
         var prev: u32 = 0;
         for (0..live_count) |slot| {
             const key = block.sources[slot];
@@ -122,7 +122,7 @@ pub fn validateGroupedRunsFast(
 ) !u64 {
     var total: u64 = 0;
     const end_group = std.math.add(u32, first_group, expected_group_count) catch return error.CorruptGraph;
-    if (end_group > graph.group_count) return error.CorruptGraph;
+    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (first_group..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);

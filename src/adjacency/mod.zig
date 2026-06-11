@@ -34,8 +34,8 @@ pub fn validateSideAdjLayoutForSide(
         };
         if (count > max_count) return error.CorruptGraph;
         switch (side) {
-            .fwd => if (side_adj.first_block >= graph.tiny_fwd_count) return error.CorruptGraph,
-            .rev => if (side_adj.first_block >= graph.tiny_rev_count) return error.CorruptGraph,
+            .fwd => if (side_adj.first_block >= graph.loadTinyFwdCount()) return error.CorruptGraph,
+            .rev => if (side_adj.first_block >= graph.loadTinyRevCount()) return error.CorruptGraph,
         }
         return;
     }
@@ -54,9 +54,9 @@ pub fn validateSideAdjLayoutForSide(
     }
 
     var total_blocks: u32 = 0;
-    if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
+    if (side_adj.first_group >= graph.loadGroupCount()) return error.CorruptGraph;
     const end_group = std.math.add(u32, side_adj.first_group, side_adj.group_count) catch return error.CorruptGraph;
-    if (end_group > graph.group_count) return error.CorruptGraph;
+    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (side_adj.first_group..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
@@ -82,9 +82,9 @@ pub fn validateSideAdjLayout(graph: *const graph_core.GraphCore, side_adj: types
     if (side_adj.group_count == 0) return;
 
     var total_blocks: u32 = 0;
-    if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
+    if (side_adj.first_group >= graph.loadGroupCount()) return error.CorruptGraph;
     const end_group = std.math.add(u32, side_adj.first_group, side_adj.group_count) catch return error.CorruptGraph;
-    if (end_group > graph.group_count) return error.CorruptGraph;
+    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (side_adj.first_group..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);

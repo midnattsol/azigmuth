@@ -1,5 +1,5 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 
 const testing = std.testing;
@@ -13,8 +13,8 @@ fn spinFor(spin_count: *usize, max: usize) bool {
 }
 
 const ReaderCtx = struct {
-    graph: *graphz.Graph,
-    node: graphz.NodeId,
+    graph: *azigmuth.Graph,
+    node: azigmuth.NodeId,
     stop: *std.atomic.Value(bool),
     reads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
@@ -45,8 +45,8 @@ fn readerLoopCounted(ctx: *ReaderCtx) void {
 }
 
 const RemoveNodeCtx = struct {
-    graph: *graphz.Graph,
-    target: graphz.NodeId,
+    graph: *azigmuth.Graph,
+    target: azigmuth.NodeId,
     stop: *std.atomic.Value(bool),
     start_gate: *std.atomic.Value(u32),
     successes: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -68,9 +68,9 @@ fn removeNodeInLoop(ctx: *RemoveNodeCtx) void {
 }
 
 const ForwardMutatorCtx = struct {
-    graph: *graphz.Graph,
-    predecessor: graphz.NodeId,
-    other_node: graphz.NodeId,
+    graph: *azigmuth.Graph,
+    predecessor: azigmuth.NodeId,
+    other_node: azigmuth.NodeId,
     stop: *std.atomic.Value(bool),
     start_gate: *std.atomic.Value(u32),
     mutations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -92,7 +92,7 @@ fn forwardMutatorInLoop(ctx: *ForwardMutatorCtx) void {
 
 test "contract: removeNode tolerates unrelated predecessor forward mutation" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -142,7 +142,7 @@ test "contract: removeNode tolerates unrelated predecessor forward mutation" {
 
 test "contract: concurrent readers on disjoint nodes are lock-free" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const node_a = try graph.addNode();
@@ -177,7 +177,7 @@ test "contract: concurrent readers on disjoint nodes are lock-free" {
 
 test "contract: validate() tolerates concurrent multigraph addEdgeWithId/removeEdgeWithId" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.initWithOptions(allocator, .{ .multigraph = true });
+    var graph = try azigmuth.Graph.initWithOptions(allocator, .{ .multigraph = true });
     defer graph.deinit();
 
     const source = try graph.addNode();

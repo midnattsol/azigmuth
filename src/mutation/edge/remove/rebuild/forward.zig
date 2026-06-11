@@ -24,12 +24,16 @@ fn appendForwardBlockWithoutDestination(
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else undefined;
+    const old_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAtConst(graph, block_idx) else undefined;
     const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
     if (live == 0) return 0;
 
     var removed: u32 = 0;
     for (0..live) |slot| {
-        if (old_block.destinations[slot] == destination_idx) removed += 1;
+        if (old_block.destinations[slot] == destination_idx) {
+            removed += 1;
+            if (graph.edge_properties_enabled) try scratch.markRetirePropRow(graph.allocator, old_props.rows[slot]);
+        }
     }
     if (removed == 0) {
         // Published blocks are immutable under RCU, so the rebuilt side may
@@ -45,6 +49,7 @@ fn appendForwardBlockWithoutDestination(
     const new_block_idx = try scratch.allocBlock(graph, .fwd);
     const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .fwd);
     const new_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block_idx) else undefined;
+    const new_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block_idx) else undefined;
     var write: u7 = 0;
     for (0..live) |slot| {
         if (old_block.destinations[slot] != destination_idx) {
@@ -52,6 +57,7 @@ fn appendForwardBlockWithoutDestination(
             new_block.relations[write] = old_block.relations[slot];
             new_block.flags[write] = old_block.flags[slot];
             if (graph.multigraph_enabled) new_ids.ids[write] = old_ids.ids[slot];
+            if (graph.edge_properties_enabled) new_props.rows[write] = old_props.rows[slot];
             write += 1;
         }
     }
@@ -87,10 +93,12 @@ fn appendForwardBlockRemovingOneById(
 ) !bool {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+    const old_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAtConst(graph, block_idx) else undefined;
     const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, .fwd));
 
     for (0..live) |slot| {
         if (old_block.destinations[slot] != destination_idx or old_ids.ids[slot] != edge_id) continue;
+        if (graph.edge_properties_enabled) try scratch.markRetirePropRow(graph.allocator, old_props.rows[slot]);
         if (live == 1) {
             try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
             return true;
@@ -99,6 +107,7 @@ fn appendForwardBlockRemovingOneById(
         const new_block_idx = try scratch.allocBlock(graph, .fwd);
         const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .fwd);
         const new_ids = page_ops.edgeBlockFwdIdsAt(graph, new_block_idx);
+        const new_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block_idx) else undefined;
         var write: u7 = 0;
         for (0..live) |copy_slot| {
             if (copy_slot == slot) continue;
@@ -106,6 +115,7 @@ fn appendForwardBlockRemovingOneById(
             new_block.relations[write] = old_block.relations[copy_slot];
             new_block.flags[write] = old_block.flags[copy_slot];
             new_ids.ids[write] = old_ids.ids[copy_slot];
+            if (graph.edge_properties_enabled) new_props.rows[write] = old_props.rows[copy_slot];
             write += 1;
         }
         page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));

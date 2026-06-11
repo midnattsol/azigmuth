@@ -1,5 +1,6 @@
 comptime {
     _ = @import("adjacency_parity.zig");
+    _ = @import("csr_materialize.zig");
     _ = @import("degree_behavior.zig");
     _ = @import("edge_metadata.zig");
     _ = @import("iterator_lifecycle.zig");

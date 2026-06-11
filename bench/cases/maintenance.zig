@@ -1,9 +1,9 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const harness = @import("../harness.zig");
 
 fn benchRemoveNodeHub(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
@@ -29,14 +29,14 @@ fn benchRemoveNodeHub(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchRepairBudgetedFlagged(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source_count: usize = 64;
     const fanout: usize = 128;
-    const sources = try allocator.alloc(graphz.NodeId, source_count);
+    const sources = try allocator.alloc(azigmuth.NodeId, source_count);
     defer allocator.free(sources);
-    const targets = try allocator.alloc(graphz.NodeId, source_count * fanout);
+    const targets = try allocator.alloc(azigmuth.NodeId, source_count * fanout);
     defer allocator.free(targets);
 
     for (sources, 0..) |*source, source_idx| {

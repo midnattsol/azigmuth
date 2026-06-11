@@ -1,19 +1,30 @@
 const std = @import("std");
 
+const ProfilePreset = enum { default, embedded };
+
+fn profileOptionsModule(b: *std.Build, preset: ProfilePreset) *std.Build.Module {
+    const opts = b.addOptions();
+    opts.addOption([]const u8, "profile_preset", @tagName(preset));
+    return opts.createModule();
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const include_stress = b.option(bool, "stress", "Include long-running stress tests in the 'test' step") orelse false;
+    const profile_preset = b.option(ProfilePreset, "profile", "azigmuth storage profile preset") orelse .default;
+    const profile_options = profileOptionsModule(b, profile_preset);
 
-    const mod = b.addModule("graphz", .{
+    const mod = b.addModule("azigmuth", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
+    mod.addImport("azigmuth_options", profile_options);
 
     // ---- check: compile the library ----
     const lib_check = b.addLibrary(.{
         .linkage = .static,
-        .name = "graphz",
+        .name = "azigmuth",
         .root_module = mod,
     });
     const check_step = b.step("check", "Check that the library compiles");
@@ -26,6 +37,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    graph_mod.addImport("azigmuth_options", profile_options);
+
+    // Embedded-profile variant of the test facade, used only by the
+    // profile smoke-test runner.
+    const graph_mod_embedded = b.createModule(.{
+        .root_source_file = b.path("src/graph_mod.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    graph_mod_embedded.addImport("azigmuth_options", profileOptionsModule(b, .embedded));
 
     // ---- test helper modules ----
     const publish_mod = b.createModule(.{
@@ -54,10 +75,22 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    public_snapshot_support_mod.addImport("graphz", mod);
+    public_snapshot_support_mod.addImport("azigmuth", mod);
 
     const test_step = b.step("test", "Run the default test suite");
     addTestRunners(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod);
+
+    // Embedded-profile smoke tests run against the embedded facade.
+    {
+        const profile_test_mod = b.createModule(.{
+            .root_source_file = b.path("tests/internal/profile/all.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        profile_test_mod.addImport("graph_mod", graph_mod_embedded);
+        const profile_tests = b.addTest(.{ .root_module = profile_test_mod });
+        test_step.dependOn(&b.addRunArtifact(profile_tests).step);
+    }
     if (include_stress) {
         addStressFiles(b, test_step, target, optimize, graph_mod, mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod);
     }
@@ -67,9 +100,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    bench_mod.addImport("graphz", mod);
+    bench_mod.addImport("azigmuth", mod);
     const bench_exe = b.addExecutable(.{
-        .name = "graphz-bench",
+        .name = "azigmuth-bench",
         .root_module = bench_mod,
     });
     const bench_run = b.addRunArtifact(bench_exe);
@@ -87,7 +120,7 @@ fn addTestModule(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_mod: *std.Build.Module,
-    graphz_mod: *std.Build.Module,
+    azigmuth_mod: *std.Build.Module,
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
@@ -99,7 +132,7 @@ fn addTestModule(
         .target = target,
         .optimize = optimize,
     });
-    test_mod.addImport("graphz", graphz_mod);
+    test_mod.addImport("azigmuth", azigmuth_mod);
     test_mod.addImport("snapshot_support", public_snapshot_support_mod);
 
     if (testNeedsInternals(module_path)) {
@@ -133,6 +166,7 @@ const test_runners = [_][]const u8{
     "internal/fuzz/all.zig",
     "internal/mutation/all.zig",
     "internal/oom/all.zig",
+    "internal/properties/all.zig",
     "internal/query/all.zig",
     "internal/rcu/all.zig",
     "internal/remove_node/all.zig",
@@ -147,7 +181,7 @@ fn addRunnerList(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_mod: *std.Build.Module,
-    graphz_mod: *std.Build.Module,
+    azigmuth_mod: *std.Build.Module,
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
@@ -155,7 +189,7 @@ fn addRunnerList(
     comptime runner_paths: []const []const u8,
 ) void {
     inline for (runner_paths) |runner_path| {
-        addTestModule(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, runner_path);
+        addTestModule(b, test_step, target, optimize, graph_mod, azigmuth_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, runner_path);
     }
 }
 
@@ -165,13 +199,13 @@ fn addTestRunners(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_mod: *std.Build.Module,
-    graphz_mod: *std.Build.Module,
+    azigmuth_mod: *std.Build.Module,
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
     public_snapshot_support_mod: *std.Build.Module,
 ) void {
-    addRunnerList(b, test_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, &test_runners);
+    addRunnerList(b, test_step, target, optimize, graph_mod, azigmuth_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, &test_runners);
 }
 
 fn isStressTest(test_path: []const u8) bool {
@@ -186,7 +220,7 @@ fn addStressFiles(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_mod: *std.Build.Module,
-    graphz_mod: *std.Build.Module,
+    azigmuth_mod: *std.Build.Module,
     publish_mod: *std.Build.Module,
     graph_helpers_mod: *std.Build.Module,
     neighbors_mod: *std.Build.Module,
@@ -212,6 +246,6 @@ fn addStressFiles(
         if (std.mem.endsWith(u8, entry.path, "/all.zig")) continue;
         if (!isStressTest(entry.path)) continue;
 
-        addTestModule(b, stress_step, target, optimize, graph_mod, graphz_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, entry.path);
+        addTestModule(b, stress_step, target, optimize, graph_mod, azigmuth_mod, publish_mod, graph_helpers_mod, neighbors_mod, public_snapshot_support_mod, entry.path);
     }
 }

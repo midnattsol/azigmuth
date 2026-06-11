@@ -377,9 +377,9 @@ test "repair debt: grouped non-tail runs below 4 blocks are valid layout" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
@@ -414,9 +414,9 @@ test "repair debt: validate accepts run fragmentation without repair flag" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
 
     try publishReverseSourcesForForwardRange(&graph, node.index, 1, 64);
     try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
@@ -455,10 +455,10 @@ test "repair debt: contiguous MAX_GROUPS_PER_NODE groups do not trigger canonica
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
     const g3 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = g3 };
-    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
@@ -488,9 +488,9 @@ test "repair debt: repairNode canonicalizes grouped contiguous layout preventive
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
 
     try publishReverseSourcesForForwardRange(&graph, node.index, 1, 64);
     try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
@@ -609,7 +609,7 @@ test "repair debt: repairNode canonicalizes single-block grouped adjacency preve
     fillBlock(&graph, b0, 1, 1);
 
     const g0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     // Reverse backlink so forward/reverse consistency holds.
     const rb = try graph.allocBlockRev();
@@ -719,8 +719,8 @@ test "repair debt: valid two-run grouped forward adjacency does not set spurious
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 4, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b5, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 4 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b5, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
@@ -750,7 +750,13 @@ test "repair debt: globally sorted bit gates conclusive lookup" {
         try graph.addEdge(source, destination, 0, 0);
     }
 
-    // Hot-path adds publish the side conservatively unsorted.
+    // Ascending hot-path appends preserve the sorted bit; an out-of-order
+    // insert (a destination below every prior one) clears it conservatively.
+    const ascending_published = page_ops.nodePublishedAtConst(&graph.graph, source);
+    const ascending_meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
+    try testing.expect(ascending_published.publishedFwdSortedFromMeta(ascending_meta));
+
+    try graph.addEdge(source, .{ .index = 0 }, 0, 0);
     const node_published_before = page_ops.nodePublishedAtConst(&graph.graph, source);
     const meta_before = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
     try testing.expect(!node_published_before.publishedFwdSortedFromMeta(meta_before));

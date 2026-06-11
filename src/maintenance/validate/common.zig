@@ -71,7 +71,7 @@ pub fn forEachLiveSlotInAdj(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block_idx: u32 = @intCast(block_idx_usize);
-                const live_count = @min(blockLive(inner_graph, block_idx, side), 64);
+                const live_count = @min(blockLive(inner_graph, block_idx, side), constants.EDGES_PER_BLOCK);
                 for (0..live_count) |slot| {
                     try callback(inner_graph, inner_context, block_idx, slot);
                 }
@@ -132,6 +132,7 @@ pub fn forEachForwardEntryInAdj(
                 .relation = entry.relation,
                 .flags = entry.flags,
                 .edge_id = entry.edge_id,
+                .prop_row = entry.prop_row,
             });
         }
         return;
@@ -201,10 +202,15 @@ pub fn reverseHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
 pub const Side = enum { fwd, rev };
 pub const StackKindFast = enum { free, retired };
 
-pub const MAX_TRACKED_BLOCKS: usize = constants.MAX_EDGE_BLOCK_PAGES * constants.EDGE_BLOCKS_PER_PAGE;
+/// Fast-path ownership tracking is exact within a fixed low-index window so
+/// the allocation-free validator keeps a bounded stack frame even under
+/// profiles with multi-billion-block ceilings. Indices beyond the window are
+/// skipped by the fast ownership/orphan checks; `debugValidate` (allocating)
+/// remains the exhaustive path.
+pub const MAX_TRACKED_BLOCKS: usize = @min(constants.MAX_EDGE_BLOCK_PAGES * constants.EDGE_BLOCKS_PER_PAGE, 1 << 18);
 pub const TRACKED_BLOCK_BITMAP_WORDS: usize = (MAX_TRACKED_BLOCKS + 63) / 64;
 
-pub const MAX_TRACKED_GROUPS: usize = constants.MAX_EDGE_GROUP_PAGES * constants.EDGE_GROUPS_PER_PAGE;
+pub const MAX_TRACKED_GROUPS: usize = @min(constants.MAX_EDGE_GROUP_PAGES * constants.EDGE_GROUPS_PER_PAGE, 1 << 19);
 pub const TRACKED_GROUP_BITMAP_WORDS: usize = (MAX_TRACKED_GROUPS + 63) / 64;
 
 pub const TraversedBlock = struct {
@@ -213,6 +219,8 @@ pub const TraversedBlock = struct {
 
 pub fn bitmapSet(bitmap: []u64, block_index: u32) bool {
     const bit_index: usize = @intCast(block_index);
+    // Beyond the tracked window: untracked, never reported as a duplicate.
+    if (bit_index >= bitmap.len * 64) return true;
     const word_index = bit_index / 64;
     const mask = @as(u64, 1) << @as(u6, @intCast(bit_index % 64));
     const already = (bitmap[word_index] & mask) != 0;
@@ -222,6 +230,8 @@ pub fn bitmapSet(bitmap: []u64, block_index: u32) bool {
 
 pub fn bitmapIsSet(bitmap: []const u64, block_index: u32) bool {
     const bit_index: usize = @intCast(block_index);
+    // Beyond the tracked window: pure membership query answers false.
+    if (bit_index >= bitmap.len * 64) return false;
     const word_index = bit_index / 64;
     const mask = @as(u64, 1) << @as(u6, @intCast(bit_index % 64));
     return (bitmap[word_index] & mask) != 0;

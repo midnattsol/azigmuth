@@ -1,10 +1,10 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 
 test "graph_builder: freeze twice returns UnsupportedOperation" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -14,7 +14,7 @@ test "graph_builder: freeze twice returns UnsupportedOperation" {
 }
 
 test "graph_builder: addNode after freeze returns UnsupportedOperation" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -24,7 +24,7 @@ test "graph_builder: addNode after freeze returns UnsupportedOperation" {
 }
 
 test "graph_builder: addEdge after freeze returns UnsupportedOperation" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
@@ -36,7 +36,7 @@ test "graph_builder: addEdge after freeze returns UnsupportedOperation" {
 
 test "graph_builder: freeze OutOfMemory leaves builder usable" {
     var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
-    var builder = try graphz.GraphBuilder.init(failing_allocator.allocator());
+    var builder = try azigmuth.GraphBuilder.init(failing_allocator.allocator());
     defer builder.deinit();
 
     failing_allocator.fail_index = failing_allocator.alloc_index;
@@ -50,7 +50,7 @@ test "graph_builder: freeze OutOfMemory leaves builder usable" {
 
 test "graph_builder: freeze internal OutOfMemory leaves builder usable" {
     var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
-    var builder = try graphz.GraphBuilder.init(failing_allocator.allocator());
+    var builder = try azigmuth.GraphBuilder.init(failing_allocator.allocator());
     defer builder.deinit();
 
     const source = try builder.addNode();
@@ -68,7 +68,7 @@ test "graph_builder: freeze internal OutOfMemory leaves builder usable" {
 }
 
 test "graph_builder: graph from freeze has correct adjacency" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const a = try b.addNode();
@@ -93,7 +93,7 @@ test "graph_builder: graph from freeze has correct adjacency" {
 }
 
 test "graph_builder: builder deinit without freeze frees graph" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     _ = try b.addNode();
@@ -101,11 +101,11 @@ test "graph_builder: builder deinit without freeze frees graph" {
 }
 
 test "graph_builder: edge ordering sorted after freeze" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const source = try b.addNode();
-    var targets: [20]graphz.NodeId = undefined;
+    var targets: [20]azigmuth.NodeId = undefined;
     for (0..20) |i| targets[i] = try b.addNode();
 
     const insertion_order = [_]usize{ 15, 3, 8, 1, 19, 7, 12, 0, 5, 17, 2, 14, 9, 11, 6, 18, 4, 13, 16, 10 };
@@ -130,11 +130,11 @@ test "graph_builder: edge ordering sorted after freeze" {
 }
 
 test "graph_builder: reverse adjacency sorted after freeze" {
-    var b = try graphz.GraphBuilder.init(testing.allocator);
+    var b = try azigmuth.GraphBuilder.init(testing.allocator);
     defer b.deinit();
 
     const target = try b.addNode();
-    var sources: [20]graphz.NodeId = undefined;
+    var sources: [20]azigmuth.NodeId = undefined;
     for (0..20) |i| sources[i] = try b.addNode();
 
     const insertion_order = [_]usize{ 15, 3, 8, 1, 19, 7, 12, 0, 5, 17, 2, 14, 9, 11, 6, 18, 4, 13, 16, 10 };

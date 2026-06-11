@@ -120,14 +120,14 @@ pub fn validateReadSideQuick(
         return;
     }
 
-    if (side_adj.first_group >= graph.group_count) return error.CorruptGraph;
+    if (side_adj.first_group >= graph.loadGroupCount()) return error.CorruptGraph;
 }
 
 /// Initializes a grouped traversal so the first block range is ready to consume.
 pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (iterator.contiguous_mode) return;
     if (iterator.current_group_index == constants.END_OF_CHAIN) return;
-    if (iterator.current_group_index >= graph.group_count) {
+    if (iterator.current_group_index >= graph.loadGroupCount()) {
         iterator.current_group_index = constants.END_OF_CHAIN;
         return;
     }
@@ -142,7 +142,7 @@ pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCo
 pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     if (iterator.contiguous_mode) return false;
     if (iterator.current_group_index == constants.END_OF_CHAIN) return false;
-    if (iterator.current_group_index >= graph.group_count) {
+    if (iterator.current_group_index >= graph.loadGroupCount()) {
         iterator.current_group_index = constants.END_OF_CHAIN;
         return false;
     }
@@ -161,26 +161,48 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
     return true;
 }
 
+/// Refreshes one iterator's cached block/live page pointers when the walk
+/// crosses a 64-block page boundary. Blocks within a run are consecutive, so
+/// sequential traversal resolves the directory once per page instead of
+/// twice per block.
+fn refreshSpanPages(iterator: anytype, graph: *const graph_core.GraphCore, page_index: u32, comptime side: adjacency.AdjSide) void {
+    if (iterator.cached_span_page_index == page_index) return;
+    iterator.cached_span_page_index = page_index;
+    iterator.cached_span_blocks_raw = page_ops.edgeBlockPageRaw(graph, page_index, side);
+    iterator.cached_span_live_raw = page_ops.blockLivePageRaw(graph, page_index, side);
+}
+
+inline fn spanLiveCount(iterator: anytype, slot_in_page: u32) u7 {
+    const live_page: [*]const u8 = @ptrFromInt(iterator.cached_span_live_raw);
+    return @intCast(live_page[slot_in_page]);
+}
+
 /// Loads the next non-empty block as a counted span: dense storage means
 /// iteration is a plain [0, live) loop — no mask, no loop-carried bit math.
 pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
+        const page_index = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
+        const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
         switch (iterator.direction) {
             .fwd => {
-                const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
+                refreshSpanPages(iterator, graph, page_index, .fwd);
+                const live = spanLiveCount(iterator, slot_in_page);
                 if (live == 0) continue;
                 iterator.current_slot = 0;
                 iterator.current_live = live;
-                iterator.cached_fwd_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
+                const blocks: [*]const types.EdgeBlockFwd = @ptrFromInt(iterator.cached_span_blocks_raw);
+                iterator.cached_fwd_block = &blocks[slot_in_page];
                 iterator.cached_rev_block = null;
             },
             .rev => {
-                const live = page_ops.blockLiveCount(graph, block_idx, .rev);
+                refreshSpanPages(iterator, graph, page_index, .rev);
+                const live = spanLiveCount(iterator, slot_in_page);
                 if (live == 0) continue;
                 iterator.current_slot = 0;
                 iterator.current_live = live;
-                iterator.cached_rev_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
+                const blocks: [*]const types.EdgeBlockRev = @ptrFromInt(iterator.cached_span_blocks_raw);
+                iterator.cached_rev_block = &blocks[slot_in_page];
                 iterator.cached_fwd_block = null;
             },
         }
@@ -191,13 +213,18 @@ pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCor
 pub fn loadNextOutEdgeSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
-        const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
+        const page_index = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
+        const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
+        refreshSpanPages(iterator, graph, page_index, .fwd);
+        const live = spanLiveCount(iterator, slot_in_page);
         if (live == 0) continue;
 
         iterator.current_slot = 0;
         iterator.current_live = live;
-        iterator.cached_fwd_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
-        iterator.cached_fwd_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
+        const blocks: [*]const types.EdgeBlockFwd = @ptrFromInt(iterator.cached_span_blocks_raw);
+        iterator.cached_fwd_block = &blocks[slot_in_page];
+        iterator.cached_fwd_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else null;
+        iterator.cached_fwd_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAtConst(graph, block_idx) else null;
         return true;
     }
 }

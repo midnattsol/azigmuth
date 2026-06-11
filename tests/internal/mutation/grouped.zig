@@ -110,9 +110,9 @@ fn buildGroupedForwardGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
     const group0 = try graph.allocGroup();
     const group1 = try graph.allocGroup();
     const group2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1, .next = group1 };
-    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1, .next = group2 };
-    page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1 };
+    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1 };
+    page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1 };
     try publishForwardGroups(graph, source, &[_]u32{ group0, group1, group2 }, 3);
 
     for (1..100) |destination_index| {
@@ -136,9 +136,9 @@ fn buildGroupedReverseGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
     const group0 = try graph.allocGroup();
     const group1 = try graph.allocGroup();
     const group2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1, .next = group1 };
-    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1, .next = group2 };
-    page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1 };
+    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1 };
+    page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1 };
     try publishReverseGroups(graph, destination, &[_]u32{ group0, group1, group2 }, 3);
 
     for (1..100) |source_index| {
@@ -240,8 +240,8 @@ test "mutation grouped: addEdge clones forward group chain before tail mutation"
     const source = try buildGroupedForwardGraph(&graph);
     const before_adj = try graph.publishedNodeAdj(source);
     const first_group = before_adj.first_group_fwd;
-    const second_group = page_ops.groupAtConst(&graph.graph, first_group).next;
-    const tail_group = page_ops.groupAtConst(&graph.graph, second_group).next;
+    const second_group = first_group + 1;
+    const tail_group = second_group + 1;
     const tail_before = page_ops.groupAtConst(&graph.graph, tail_group).*;
 
     const new_destination = try graph.addNode();
@@ -250,7 +250,6 @@ test "mutation grouped: addEdge clones forward group chain before tail mutation"
     const tail_after = page_ops.groupAtConst(&graph.graph, tail_group).*;
     try testing.expectEqual(tail_before.start, tail_after.start);
     try testing.expectEqual(tail_before.count, tail_after.count);
-    try testing.expectEqual(tail_before.next, tail_after.next);
     try testing.expect((try graph.publishedNodeAdj(source)).first_group_fwd != first_group);
     try graph.validate();
 }
@@ -262,8 +261,8 @@ test "mutation grouped: addEdge clones reverse group chain before tail mutation"
     const destination = try buildGroupedReverseGraph(&graph);
     const before_adj = try graph.publishedNodeAdj(destination);
     const first_group = before_adj.first_group_rev;
-    const second_group = page_ops.groupAtConst(&graph.graph, first_group).next;
-    const tail_group = page_ops.groupAtConst(&graph.graph, second_group).next;
+    const second_group = first_group + 1;
+    const tail_group = second_group + 1;
     const tail_before = page_ops.groupAtConst(&graph.graph, tail_group).*;
 
     const new_source = try graph.addNode();
@@ -272,7 +271,6 @@ test "mutation grouped: addEdge clones reverse group chain before tail mutation"
     const tail_after = page_ops.groupAtConst(&graph.graph, tail_group).*;
     try testing.expectEqual(tail_before.start, tail_after.start);
     try testing.expectEqual(tail_before.count, tail_after.count);
-    try testing.expectEqual(tail_before.next, tail_after.next);
     try testing.expect((try graph.publishedNodeAdj(destination)).first_group_rev != first_group);
     try graph.validate();
 }
@@ -284,8 +282,8 @@ test "mutation grouped: removeEdge tail block clones chain without mutating publ
     const source = try buildGroupedForwardGraph(&graph);
     const before = try graph.publishedNodeAdj(source);
     const first_group = before.first_group_fwd;
-    const second_group = page_ops.groupAtConst(&graph.graph, first_group).next;
-    const tail_group = page_ops.groupAtConst(&graph.graph, second_group).next;
+    const second_group = first_group + 1;
+    const tail_group = second_group + 1;
     const tail_before = page_ops.groupAtConst(&graph.graph, tail_group).*;
 
     try testing.expect(try graph.removeEdge(source, .{ .index = 99 }));
@@ -293,7 +291,6 @@ test "mutation grouped: removeEdge tail block clones chain without mutating publ
     const tail_after_old = page_ops.groupAtConst(&graph.graph, tail_group).*;
     try testing.expectEqual(tail_before.start, tail_after_old.start);
     try testing.expectEqual(tail_before.count, tail_after_old.count);
-    try testing.expectEqual(tail_before.next, tail_after_old.next);
 
     const after = try graph.publishedNodeAdj(source);
     try testing.expect(after.first_group_fwd != first_group);
@@ -310,7 +307,7 @@ fn publishSingleBlockGroupedForward(
     const block = try graph.allocBlockFwd();
     setForwardBlock(graph, block, destination_index, 1);
     const group = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
 
     const node_buffer = try graph.nodeAt(source);
     publish.clearPublishedSides(node_buffer);
@@ -331,7 +328,7 @@ fn publishSingleBlockGroupedReverse(
     const block = try graph.allocBlockRev();
     setReverseBlock(graph, block, source_index, 1);
     const group = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
 
     const node_buffer = try graph.nodeAt(destination);
     publish.clearPublishedSides(node_buffer);
@@ -373,7 +370,7 @@ test "mutation grouped: addEdge COW on single-block grouped forward updates grou
     try neighbors.expectOutNeighbors(&graph, testing.allocator, source, &[_]u32{ old_dest.index, new_dest.index });
 }
 
-test "mutation grouped: removeEdge returns RepairRequired when COW split exceeds MAX_GROUPS_PER_NODE" {
+test "mutation grouped: removeEdge repacks in-call when COW split exceeds MAX_GROUPS_PER_NODE" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -408,10 +405,10 @@ test "mutation grouped: removeEdge returns RepairRequired when COW split exceeds
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
     const g3 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 3, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b6, .count = 1, .next = g3 };
-    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b8, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 3 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b6, .count = 1 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b8, .count = 1 };
 
     try publishForwardGroups(&graph, source, &[_]u32{ g0, g1, g2, g3 }, 6);
 
@@ -422,15 +419,20 @@ test "mutation grouped: removeEdge returns RepairRequired when COW split exceeds
     graph.graph.edge_count.store(242, .release);
 
     // Block 3 has 49 edges. Removing one from a non-tail middle block
-    // forces a COW replacement. The new block lands at index 1 (LIFO
-    // from the free stack), which breaks both physical contiguity
-    // of the [2..4] run and creates 6 groups from the original 4.
-    try testing.expectError(error.RepairRequired, graph.removeEdge(source, .{ .index = 97 }));
+    // forces a COW replacement. The new block lands at index 1 (LIFO from
+    // the free stack), which would break contiguity of the [2..4] run and
+    // push the side past MAX_GROUPS_PER_NODE. The removal performs the
+    // synchronous in-call dense repack (RFC §5.1a/§3.6) and succeeds
+    // instead of bouncing RepairRequired to the caller.
+    try testing.expect(try graph.removeEdge(source, .{ .index = 97 }));
 
-    // Verify that the mutation did not publish partial state.
     try graph.validate();
-    try testing.expectEqual(@as(u64, 242), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 242), try graph.outDegree(source));
+    try testing.expectEqual(@as(u64, 241), graph.edgeCount());
+    try testing.expectEqual(@as(usize, 241), try graph.outDegree(source));
+
+    // The repacked side satisfies the run bound again.
+    const adjacency_after = try graph.publishedNodeAdj(source);
+    try testing.expect(adjacency_after.group_count_fwd <= 4);
 }
 
 test "mutation grouped: addEdge COW on single-block grouped reverse updates group.start" {
@@ -493,10 +495,10 @@ test "mutation grouped: addEdge appends past four runs without structural rebuil
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
     const g3 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = g3 };
-    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b6, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b6, .count = 1 };
     try publishForwardGroups(&graph, source, &[_]u32{ g0, g1, g2, g3 }, 4);
 
     for (1..257) |destination_idx| {
@@ -539,10 +541,10 @@ test "mutation grouped: addEdge replaces partial tail within four-run limit" {
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
     const g3 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = g3 };
-    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 2, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g3).* = .{ .start = b3, .count = 2 };
     try publishForwardGroups(&graph, source, &[_]u32{ g0, g1, g2, g3 }, 5);
 
     for (1..258) |destination_idx| {

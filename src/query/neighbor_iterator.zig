@@ -41,6 +41,9 @@ pub const NeighborIterator = struct {
     cached_rev_block: ?*const types.EdgeBlockRev = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
+    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_blocks_raw: usize = 0,
+    cached_span_live_raw: usize = 0,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
 
@@ -49,6 +52,7 @@ pub const NeighborIterator = struct {
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
+    reader_token_retained: bool = false,
 
     /// Safeguard against corrupt cyclic group chains: stop advancing
     /// after visiting more groups than the adjacency snapshot declares.
@@ -80,6 +84,14 @@ pub const NeighborIterator = struct {
     fn nextBlockNeighbor(self: *NeighborIterator) ?types.NodeId {
         while (true) {
             while (self.current_slot >= self.current_live) {
+                // Token liveness is validated once per block span, not per
+                // neighbor: a span's cached block pointer stays valid while
+                // the token pins its epoch, so the per-element atomic load
+                // would only re-confirm the same fact 64 times.
+                if (!rcu.readerTokenActive(self.core, self.reader_token)) {
+                    self.reader_active = false;
+                    return null;
+                }
                 if (!side_traversal.loadNextNeighborSpan(self, self.core)) return null;
             }
 
@@ -96,11 +108,13 @@ pub const NeighborIterator = struct {
 
     pub fn next(self: *NeighborIterator) ?types.NodeId {
         if (!self.reader_active) return null;
-        if (!rcu.readerTokenActive(self.core, self.reader_token)) {
-            self.reader_active = false;
-            return null;
+        if (self.tiny_mode) {
+            if (!rcu.readerTokenActive(self.core, self.reader_token)) {
+                self.reader_active = false;
+                return null;
+            }
+            return self.nextTinyNeighbor();
         }
-        if (self.tiny_mode) return self.nextTinyNeighbor();
         return self.nextBlockNeighbor();
     }
 
@@ -149,8 +163,11 @@ pub fn materializeExactConsuming(iterator: *NeighborIterator, allocator: std.mem
 }
 
 fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, direction: Direction) types.GraphError!NeighborIterator {
-    const capture = try live_read_common.captureNodeSnapshot(graph, node);
-    errdefer rcu.readerExit(@constCast(graph), capture.reader_token);
+    return initNeighborIteratorWithCapture(graph, try live_read_common.captureNodeSnapshot(graph, node), direction);
+}
+
+fn initNeighborIteratorWithCapture(graph: *const graph_core.GraphCore, capture: live_read_common.LiveReadSnapshot, direction: Direction) types.GraphError!NeighborIterator {
+    errdefer live_read_common.releaseCapturedReader(graph, capture);
     const side_snapshot = live_read_common.sideAdj(switch (direction) {
         .fwd => .fwd,
         .rev => .rev,
@@ -174,8 +191,8 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
         .degree_snapshot = switch (direction) {
-            .fwd => node_access.publishedFwdDegreeFromMetaAtConst(graph, node, capture.meta),
-            .rev => node_access.publishedRevDegreeFromMetaAtConst(graph, node, capture.meta),
+            .fwd => capture.degree_fwd,
+            .rev => capture.degree_rev,
         },
         .check_removed_candidates = switch (direction) {
             .fwd => capture.node_adj_snapshot.flags.needs_repair_fwd,
@@ -183,6 +200,7 @@ fn initNeighborIterator(graph: *const graph_core.GraphCore, node: types.NodeId, 
         },
         .reader_active = true,
         .reader_token = capture.reader_token,
+        .reader_token_retained = capture.token_retained,
         .groups_visited = 0,
         .group_count_bound = cursor_init.group_count_bound,
     };
@@ -204,6 +222,16 @@ pub fn neighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types.G
 
 pub fn inNeighbors(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!NeighborIterator {
     return initNeighborIterator(graph, node, .rev);
+}
+
+/// Session point-read entry: the iterator retains the session's reader token
+/// (one atomic increment) instead of opening its own reader critical section.
+pub fn neighborsRetained(graph: *const graph_core.GraphCore, node: types.NodeId, session_token: rcu.ReaderToken) types.GraphError!NeighborIterator {
+    return initNeighborIteratorWithCapture(graph, try live_read_common.captureNodeSnapshotRetained(graph, node, session_token), .fwd);
+}
+
+pub fn inNeighborsRetained(graph: *const graph_core.GraphCore, node: types.NodeId, session_token: rcu.ReaderToken) types.GraphError!NeighborIterator {
+    return initNeighborIteratorWithCapture(graph, try live_read_common.captureNodeSnapshotRetained(graph, node, session_token), .rev);
 }
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {

@@ -1,10 +1,12 @@
 const std = @import("std");
+const constants = @import("../../core/constants.zig");
 const types = @import("../../core/types.zig");
 const adjacency = @import("../../adjacency/mod.zig");
 const side_ops = @import("../../adjacency/side_ops.zig");
 const side_traversal = @import("../side_traversal.zig");
 const snapshot_capture = @import("capture.zig");
 const snapshot_view = @import("view.zig");
+const node_published = @import("../../storage/node/published.zig");
 const node_tiny = @import("../../storage/node/tiny.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 
@@ -90,6 +92,9 @@ pub const SnapshotNeighborIterator = struct {
     cached_rev_block: ?*const types.EdgeBlockRev = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
+    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_blocks_raw: usize = 0,
+    cached_span_live_raw: usize = 0,
 
     check_removed_candidates: bool,
     groups_visited: u16 = 0,
@@ -212,7 +217,11 @@ pub const SnapshotOutEdgeIterator = struct {
     tiny_index: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+    cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_blocks_raw: usize = 0,
+    cached_span_live_raw: usize = 0,
 
     check_removed_destinations: bool,
     groups_visited: u16 = 0,
@@ -237,7 +246,7 @@ pub const SnapshotOutEdgeIterator = struct {
             const entry = self.cached_tiny_fwd.?.entries[self.tiny_index];
             if (self.destinationExcluded(entry.destination)) continue;
             self.tiny_index += 1;
-            return .{ .id = .{ .local = entry.edge_id }, .destination = entry.destination, .relation = entry.relation, .flags = entry.flags };
+            return .{ .id = .{ .local = entry.edge_id }, .destination = entry.destination, .relation = entry.relation, .flags = entry.flags, .property_row = entry.prop_row };
         }
         return null;
     }
@@ -252,11 +261,16 @@ pub const SnapshotOutEdgeIterator = struct {
             self.current_slot += 1;
 
             const fwd_block = self.cached_fwd_block.?;
-            const fwd_ids = self.cached_fwd_ids.?;
             const destination_idx = fwd_block.destinations[slot];
             if (self.destinationExcluded(destination_idx)) continue;
 
-            return .{ .id = .{ .local = fwd_ids.ids[slot] }, .destination = destination_idx, .relation = fwd_block.relations[slot], .flags = @bitCast(fwd_block.flags[slot]) };
+            return .{
+                .id = .{ .local = if (self.cached_fwd_ids) |fwd_ids| fwd_ids.ids[slot] else 0 },
+                .destination = destination_idx,
+                .relation = fwd_block.relations[slot],
+                .flags = @bitCast(fwd_block.flags[slot]),
+                .property_row = if (self.cached_fwd_props) |fwd_props| fwd_props.rows[slot] else 0,
+            };
         }
     }
 
@@ -279,8 +293,130 @@ pub fn inNeighborsCursor(view: *const snapshot_view.CapturedGraphView, node: typ
 }
 
 pub fn outEdges(view: *const snapshot_view.CapturedGraphView, node: types.NodeId) !?SnapshotOutEdgeIterator {
-    if (!view.core.multigraph_enabled) return error.UnsupportedOperation;
+    if (!view.core.multigraph_enabled and !view.core.edge_properties_enabled) return error.UnsupportedOperation;
     const node_idx = ensureLiveSnapshotNode(view, node) orelse return null;
     const side_snapshot = snapshot_capture.sideAdjOfSnapshot(view.fwdSide(node_idx));
     return initOutEdgeCursor(view, side_snapshot, view.needsRepairFwd(node_idx));
 }
+
+/// Lean full-drain forward-neighbor walk over a captured view: no iterator
+/// struct, no per-node zero-init — the BFS/Kahn expansion hot path. Applies
+/// the same frontier and tombstone filters as SnapshotNeighborIterator.
+pub fn forEachNeighborInView(
+    view: *const snapshot_view.CapturedGraphView,
+    node_idx: u32,
+    context: anytype,
+    comptime callback: anytype,
+) !void {
+    const side = view.fwdSide(node_idx);
+    if (side.block_count == 0) return;
+    const len_bound: u32 = @intCast(view.node_state.len);
+    const check_removed = view.needsRepairFwd(node_idx);
+
+    if (node_published.NodePublished.isTiny(&side)) {
+        const slot = page_ops.tinyFwdAtConst(view.core, side.first_block);
+        const count = node_published.NodePublished.tinyCount(&side);
+        for (0..count) |entry_idx| {
+            const candidate = slot.entries[entry_idx].destination;
+            if (candidate >= len_bound) continue;
+            if (check_removed and !view.isLiveIndex(candidate)) continue;
+            try callback(context, candidate);
+        }
+        return;
+    }
+
+    var cursor = side_ops.BlockCursor.init(side);
+    var cached_page: u32 = constants.END_OF_CHAIN;
+    var blocks_raw: usize = 0;
+    var live_raw: usize = 0;
+    while (cursor.next(view.core)) |block_idx| {
+        const page_index = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
+        const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
+        if (page_index != cached_page) {
+            cached_page = page_index;
+            blocks_raw = page_ops.edgeBlockPageRaw(view.core, page_index, .fwd);
+            live_raw = page_ops.blockLivePageRaw(view.core, page_index, .fwd);
+        }
+        const live_page: [*]const u8 = @ptrFromInt(live_raw);
+        const live: usize = @min(live_page[slot_in_page], constants.EDGES_PER_BLOCK);
+        if (live == 0) continue;
+        const blocks: [*]const types.EdgeBlockFwd = @ptrFromInt(blocks_raw);
+        for (blocks[slot_in_page].destinations[0..live]) |candidate| {
+            if (candidate >= len_bound) continue;
+            if (check_removed and !view.isLiveIndex(candidate)) continue;
+            try callback(context, candidate);
+        }
+    }
+}
+
+/// Compact resumable forward-neighbor cursor for DFS frames: a fraction of
+/// SnapshotNeighborIterator's size and construction cost, with the same
+/// frontier and tombstone filters. One frame per stack level, advanced one
+/// neighbor at a time.
+pub const FrameNeighborCursor = struct {
+    block_cursor: side_ops.BlockCursor,
+    destinations: [*]const u32 = undefined,
+    tiny_entries: [*]const node_tiny.TinyFwdEntry = undefined,
+    current_slot: u16 = 0,
+    current_live: u16 = 0,
+    tiny_mode: bool = false,
+    check_removed: bool = false,
+
+    pub fn init(view: *const snapshot_view.CapturedGraphView, node_idx: u32) FrameNeighborCursor {
+        const side = view.fwdSide(node_idx);
+        const check_removed = view.needsRepairFwd(node_idx);
+
+        if (side.block_count != 0 and node_published.NodePublished.isTiny(&side)) {
+            const slot = page_ops.tinyFwdAtConst(view.core, side.first_block);
+            return .{
+                .block_cursor = side_ops.BlockCursor.init(.{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 }),
+                .tiny_entries = &slot.entries,
+                .current_live = node_published.NodePublished.tinyCount(&side),
+                .tiny_mode = true,
+                .check_removed = check_removed,
+            };
+        }
+
+        return .{
+            .block_cursor = side_ops.BlockCursor.init(side),
+            .check_removed = check_removed,
+        };
+    }
+
+    fn loadNextBlock(self: *FrameNeighborCursor, view: *const snapshot_view.CapturedGraphView) bool {
+        while (self.block_cursor.next(view.core)) |block_idx| {
+            const live = page_ops.blockLiveCount(view.core, block_idx, .fwd);
+            if (live == 0) continue;
+            self.destinations = &page_ops.edgeBlockFwdAtConst(view.core, block_idx).destinations;
+            self.current_slot = 0;
+            self.current_live = live;
+            return true;
+        }
+        return false;
+    }
+
+    pub fn next(self: *FrameNeighborCursor, view: *const snapshot_view.CapturedGraphView) ?u32 {
+        const len_bound: u32 = @intCast(view.node_state.len);
+        if (self.tiny_mode) {
+            while (self.current_slot < self.current_live) {
+                const candidate = self.tiny_entries[self.current_slot].destination;
+                self.current_slot += 1;
+                if (candidate >= len_bound) continue;
+                if (self.check_removed and !view.isLiveIndex(candidate)) continue;
+                return candidate;
+            }
+            return null;
+        }
+
+        while (true) {
+            while (self.current_slot >= self.current_live) {
+                if (!self.loadNextBlock(view)) return null;
+            }
+            const candidate = self.destinations[self.current_slot];
+            self.current_slot += 1;
+            if (candidate >= len_bound) continue;
+            if (self.check_removed and !view.isLiveIndex(candidate)) continue;
+            return candidate;
+        }
+    }
+};

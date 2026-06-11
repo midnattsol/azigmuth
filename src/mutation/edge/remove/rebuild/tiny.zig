@@ -20,10 +20,17 @@ pub fn rebuildTinyForwardRemoveAll(
         if (slot.entries[entry_idx].destination == destination_idx) removed += 1;
     }
     if (removed == 0) return .{ .new_side = published_side.*, .removed = 0 };
+    if (graph.edge_properties_enabled) {
+        for (0..count) |entry_idx| {
+            if (slot.entries[entry_idx].destination == destination_idx) {
+                try scratch.markRetirePropRow(graph.allocator, slot.entries[entry_idx].prop_row);
+            }
+        }
+    }
     const remaining = count - @as(u16, @intCast(removed));
     if (remaining == 0) return .{ .new_side = std.mem.zeroes(types.SideAdj), .removed = removed };
 
-    const new_slot_idx = try scratch.allocTinySlot(graph, .fwd);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
     const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
@@ -52,7 +59,7 @@ pub fn rebuildTinyReverseRemoveCount(
     const remaining = count - @as(u16, @intCast(remove_count));
     if (remaining == 0) return std.mem.zeroes(types.SideAdj);
 
-    const new_slot_idx = try scratch.allocTinySlot(graph, .rev);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
     const new_slot = page_ops.tinyRevAt(graph, new_slot_idx);
     var skipped: u32 = 0;
     var write_idx: u16 = 0;
@@ -78,9 +85,12 @@ pub fn rebuildTinyForwardRemoveOneById(
     const count = node_published.NodePublished.tinyCount(published_side);
     const slot = page_ops.tinyFwdAtConst(graph, published_side.first_block);
     const removal_idx = adjacency.findTinyForwardSlotById(graph, published_side.*, destination_idx, edge_id) orelse return null;
+    if (graph.edge_properties_enabled) {
+        try scratch.markRetirePropRow(graph.allocator, slot.entries[removal_idx].prop_row);
+    }
     if (count == 1) return std.mem.zeroes(types.SideAdj);
 
-    const new_slot_idx = try scratch.allocTinySlot(graph, .fwd);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
     const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {

@@ -28,7 +28,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print(
-        "graphz bench v2 optimize={s} reps={} warmup={}\n\n",
+        "azigmuth bench v2 optimize={s} reps={} warmup={}\n\n",
         .{ @tagName(builtin.mode), options.reps, options.warmup },
     );
 

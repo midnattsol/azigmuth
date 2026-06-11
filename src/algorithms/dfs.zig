@@ -6,13 +6,13 @@ const types = @import("../core/types.zig");
 
 const DfsFrame = struct {
     node_idx: u32,
-    cursor: snapshot_iterators.SnapshotNeighborIterator,
+    cursor: snapshot_iterators.FrameNeighborCursor,
 };
 
 fn initFrameLive(view: *const snapshot_view.CapturedGraphView, node_idx: u32) DfsFrame {
     return .{
         .node_idx = node_idx,
-        .cursor = snapshot_iterators.neighborsCursor(view, .{ .index = node_idx }) catch unreachable orelse unreachable,
+        .cursor = snapshot_iterators.FrameNeighborCursor.init(view, node_idx),
     };
 }
 
@@ -45,16 +45,16 @@ pub fn dfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
         const current = &stack.items[stack.items.len - 1];
 
         var pushed = false;
-        while (current.cursor.next()) |neighbor| {
-            if (visited.isSet(neighbor.index)) continue;
+        while (current.cursor.next(view)) |neighbor_idx| {
+            if (visited.isSet(neighbor_idx)) continue;
 
-            visited.set(neighbor.index);
-            order.appendAssumeCapacity(neighbor);
-            if (view.degree_fwd[neighbor.index] != 0) {
+            visited.set(neighbor_idx);
+            order.appendAssumeCapacity(.{ .index = neighbor_idx });
+            if (view.degree_fwd[neighbor_idx] != 0) {
                 if (view.degree_fwd[current.node_idx] == 1) {
-                    current.* = initFrameLive(view, neighbor.index);
+                    current.* = initFrameLive(view, neighbor_idx);
                 } else {
-                    stack.appendAssumeCapacity(initFrameLive(view, neighbor.index));
+                    stack.appendAssumeCapacity(initFrameLive(view, neighbor_idx));
                 }
             }
             pushed = true;

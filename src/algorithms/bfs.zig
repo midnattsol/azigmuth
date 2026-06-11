@@ -21,19 +21,27 @@ pub fn bfsCaptured(view: *const snapshot_view.CapturedGraphView, start: types.No
     visited.set(start.index);
     try queue.append(allocator, start);
 
+    const Expand = struct {
+        visited: *std.DynamicBitSetUnmanaged,
+        queue: *std.ArrayList(types.NodeId),
+
+        fn onNeighbor(self: *@This(), neighbor_idx: u32) !void {
+            if (self.visited.isSet(neighbor_idx)) return;
+            self.visited.set(neighbor_idx);
+            // Dedup bounds the queue by node_count, reserved up front.
+            self.queue.appendAssumeCapacity(.{ .index = neighbor_idx });
+        }
+    };
+    var expand = Expand{ .visited = &visited, .queue = &queue };
+
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         if (ctx.cancel_token) |token| {
             if (token.isCancelled()) return error.Cancelled;
         }
         const current = queue.items[head];
-        var cursor = try snapshot_iterators.neighborsCursor(view, current) orelse continue;
-        while (cursor.next()) |neighbor| {
-            if (!visited.isSet(neighbor.index)) {
-                visited.set(neighbor.index);
-                try queue.append(allocator, neighbor);
-            }
-        }
+        if (!view.isLiveIndex(current.index)) continue;
+        try snapshot_iterators.forEachNeighborInView(view, current.index, &expand, Expand.onNeighbor);
     }
 
     return queue.toOwnedSlice(allocator);

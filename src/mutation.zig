@@ -10,6 +10,7 @@ const node = @import("mutation/node/mod.zig");
 
 pub const addEdge = edge.addEdge;
 pub const addEdgeWithId = edge.addEdgeWithId;
+pub const addEdgeWithProperties = edge.addEdgeWithProperties;
 pub const addEdges = edge.addEdges;
 pub const addNode = node.addNode;
 pub const removeEdge = edge.removeEdge;

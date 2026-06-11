@@ -69,6 +69,11 @@ pub const MutationScratch = struct {
     /// finalize path retires them via `retireMarked`.
     retire_fwd_blocks: InlineList(u32, 8) = .{},
     retire_rev_blocks: InlineList(u32, 8) = .{},
+
+    /// Property rows allocated by this mutation (freed on failure cleanup) and
+    /// published rows whose edges this mutation drops (retired after publish).
+    prop_rows: InlineList(u32, 4) = .{},
+    retire_prop_rows: InlineList(u32, 8) = .{},
     active: bool = true,
 
     /// Marks one currently-published block for retirement after publish.
@@ -85,6 +90,24 @@ pub const MutationScratch = struct {
     pub fn retireMarked(self: *MutationScratch, graph: *graph_core.GraphCore) !void {
         for (self.retire_fwd_blocks.items()) |block_idx| try rcu.retireBlockFwd(graph, block_idx);
         for (self.retire_rev_blocks.items()) |block_idx| try rcu.retireBlockRev(graph, block_idx);
+        for (self.retire_prop_rows.items()) |row| rcu.retirePropRow(graph, row);
+    }
+
+    /// Allocates one property row and tracks it for cleanup if the mutation
+    /// fails before publishing.
+    pub fn allocPropRow(self: *MutationScratch, graph: *graph_core.GraphCore) !u32 {
+        const row = try page_ops.allocPropRow(graph);
+        self.prop_rows.append(graph.allocator, row) catch |err| {
+            page_ops.freePropRow(graph, row);
+            return err;
+        };
+        return row;
+    }
+
+    /// Marks one published property row for retirement after publish.
+    pub fn markRetirePropRow(self: *MutationScratch, allocator: std.mem.Allocator, row: u32) !void {
+        if (row == 0) return;
+        try self.retire_prop_rows.append(allocator, row);
     }
 
     /// Returns whether this mutation allocated `block_idx` (vs sharing a
@@ -119,6 +142,24 @@ pub const MutationScratch = struct {
         return slot_idx;
     }
 
+    /// Tracked tiny-slot allocation without zero-init, for callers that
+    /// fully overwrite the slot (clone-and-mutate paths).
+    pub fn allocTinySlotRaw(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+        const slot_idx = switch (side) {
+            .fwd => try page_ops.allocTinyFwdSlotRaw(graph),
+            .rev => try page_ops.allocTinyRevSlotRaw(graph),
+        };
+        const list = switch (side) {
+            .fwd => &self.tiny_fwd_slots,
+            .rev => &self.tiny_rev_slots,
+        };
+        list.append(graph.allocator, slot_idx) catch |err| {
+            page_ops.freeTinySlot(graph, slot_idx, side);
+            return err;
+        };
+        return slot_idx;
+    }
+
     pub fn allocBlock(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
         const block = try page_ops.allocBlock(graph, side);
         const list = switch (side) {
@@ -132,8 +173,17 @@ pub const MutationScratch = struct {
         return block;
     }
 
+    pub fn allocFreshBlockSpanRaw(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_count: u32) !u32 {
+        const first_block_idx = try page_ops.allocFreshBlockSpanRaw(graph, block_count, side);
+        return self.trackSpan(graph, side, first_block_idx, block_count);
+    }
+
     pub fn allocFreshBlockSpan(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_count: u32) !u32 {
         const first_block_idx = try page_ops.allocFreshBlockSpan(graph, block_count, side);
+        return self.trackSpan(graph, side, first_block_idx, block_count);
+    }
+
+    fn trackSpan(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, first_block_idx: u32, block_count: u32) !u32 {
         const list = switch (side) {
             .fwd => &self.fwd_blocks,
             .rev => &self.rev_blocks,
@@ -186,6 +236,8 @@ pub const MutationScratch = struct {
         for (self.groups.items()) |group_span| page_ops.freeGroupSpan(graph, group_span.first_group_idx, group_span.group_count);
         for (self.tiny_fwd_slots.items()) |slot_idx| page_ops.freeTinySlot(graph, slot_idx, .fwd);
         for (self.tiny_rev_slots.items()) |slot_idx| page_ops.freeTinySlot(graph, slot_idx, .rev);
+        // Never-published rows go straight back to the free stack.
+        for (self.prop_rows.items()) |row| page_ops.freePropRow(graph, row);
     }
 
     pub fn deinit(self: *MutationScratch, allocator: std.mem.Allocator) void {
@@ -196,6 +248,8 @@ pub const MutationScratch = struct {
         self.tiny_rev_slots.deinit(allocator);
         self.retire_fwd_blocks.deinit(allocator);
         self.retire_rev_blocks.deinit(allocator);
+        self.prop_rows.deinit(allocator);
+        self.retire_prop_rows.deinit(allocator);
     }
 
     pub fn freeTrackedBlock(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide, block_idx: u32) void {

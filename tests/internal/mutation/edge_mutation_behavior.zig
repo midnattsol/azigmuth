@@ -697,9 +697,9 @@ test "mutation: empty block between live blocks in grouped adjacency" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -876,9 +876,9 @@ test "mutation: hasEdgeInAdj grouped with interleaved block ranges" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -945,9 +945,9 @@ test "mutation: findSlotInAdj grouped with interleaved key ranges" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1, .next = g2 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
 
     const node = try graph.nodeAt(src);
     clearPublished(node);

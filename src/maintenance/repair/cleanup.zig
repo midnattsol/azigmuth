@@ -57,6 +57,7 @@ fn fillLiveTinyForwardEntries(
                 .relation = entry.relation,
                 .flags = entry.flags,
                 .edge_id = entry.edge_id,
+                .prop_row = entry.prop_row,
             };
             inner_fill.write_idx += 1;
         }
@@ -82,12 +83,28 @@ pub const ForwardTombstoneCompaction = struct {
     staging_adj: types.NodeAdj,
     live_after: usize,
     removed_count: usize,
+    /// Rows of dropped forward entries; retire after publish, then deinit.
+    dropped_prop_rows: std.ArrayList(u32) = .empty,
 };
 
 pub const ReverseTombstoneCompaction = struct {
     staging_adj: types.NodeAdj,
     live_after: usize,
 };
+
+fn collectDroppedTinyForwardRows(
+    graph: *const graph_core.GraphCore,
+    published_side: types.SideAdj,
+    dropped: *std.ArrayList(u32),
+) !void {
+    if (!graph.edge_properties_enabled) return;
+    try side_adj.forEachForwardEntryInSide(graph, published_side, dropped, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_dropped: *std.ArrayList(u32), entry: side_adj.ForwardEntryView) !void {
+            const keep = entry.destination < inner_graph.publishedNodeCount() and !node_validity.isNodeRemovedIndex(inner_graph, entry.destination);
+            if (!keep and entry.prop_row != 0) try inner_dropped.append(inner_graph.allocator, entry.prop_row);
+        }
+    }.callback);
+}
 
 fn rebuildTinyForwardLive(
     graph: *graph_core.GraphCore,
@@ -98,22 +115,25 @@ fn rebuildTinyForwardLive(
     const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
     const live_after = try countLiveTinyForwardEntries(graph, published_side);
 
+    var dropped_rows: std.ArrayList(u32) = .empty;
+    errdefer dropped_rows.deinit(graph.allocator);
+    try collectDroppedTinyForwardRows(graph, published_side, &dropped_rows);
+
     var staging_adj = published_adj;
     const original_count = node_published.NodePublished.tinyCount(&published_side);
     if (live_after == 0) {
         clearForwardSide(&staging_adj);
         debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
-        return .{ .staging_adj = staging_adj, .live_after = 0, .removed_count = original_count };
+        return .{ .staging_adj = staging_adj, .live_after = 0, .removed_count = original_count, .dropped_prop_rows = dropped_rows };
     }
 
-    const new_slot_idx = try allocs.allocTinySlot(graph, .fwd);
+    const new_slot_idx = try allocs.allocTinySlotRaw(graph, .fwd);
     const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
-    new_slot.* = std.mem.zeroes(node_tiny.TinyFwdSlot);
     const copied_live_count = try fillLiveTinyForwardEntries(graph, published_side, new_slot);
 
     writeTinyForwardSide(&staging_adj, new_slot_idx, copied_live_count);
     debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
-    return .{ .staging_adj = staging_adj, .live_after = copied_live_count, .removed_count = original_count - copied_live_count };
+    return .{ .staging_adj = staging_adj, .live_after = copied_live_count, .removed_count = original_count - copied_live_count, .dropped_prop_rows = dropped_rows };
 }
 
 pub fn rebuildForwardLive(
@@ -134,6 +154,7 @@ pub fn rebuildForwardLive(
         graph.allocator,
     );
     defer result.new_blocks.deinit(graph.allocator);
+    errdefer result.dropped_prop_rows.deinit(graph.allocator);
 
     const rebuilt_side = side_rebuild_apply.adoptSortedRebuildSide(graph, .fwd, &result, allocs) catch |err| {
         for (result.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, .fwd);
@@ -147,7 +168,9 @@ pub fn rebuildForwardLive(
     staging_adj.first_group_fwd = rebuilt_side.first_group;
     debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
 
-    return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0 };
+    const dropped_rows = result.dropped_prop_rows;
+    result.dropped_prop_rows = .empty;
+    return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0, .dropped_prop_rows = dropped_rows };
 }
 
 pub fn countReverseMatches(
@@ -201,6 +224,7 @@ pub fn rebuildReverseDrop(
         graph.allocator,
     );
     defer result.new_blocks.deinit(graph.allocator);
+    defer result.dropped_prop_rows.deinit(graph.allocator);
 
     const rebuilt_side = side_rebuild_apply.adoptSortedRebuildSide(graph, .rev, &result, allocs) catch |err| {
         for (result.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, .rev);

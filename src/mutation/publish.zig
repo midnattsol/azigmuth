@@ -1,14 +1,27 @@
+const std = @import("std");
 const node_access = @import("../core/node_access.zig");
 const node_meta_mod = @import("../storage/node/meta.zig");
 const node_published_mod = @import("../storage/node/published.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 
+
+/// Applies a signed delta to a published degree. A negative result means the
+/// published state is corrupt (a removal accounted twice); saturate at zero
+/// instead of invoking checked-arithmetic UB in release builds. The debug
+/// assert keeps the invariant loud during development.
+fn applyDegreeDelta(current: u32, delta: i23) u32 {
+    const wide = @as(i64, current) + delta;
+    std.debug.assert(wide >= 0);
+    if (wide < 0) return 0;
+    return @intCast(wide);
+}
+
 pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23, fwd_sorted: bool) types.PublishedMeta {
     node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
     var expected = expected_meta;
     while (true) {
-        const new_degree: u32 = @intCast(@as(i64, @intCast(node_published.publishedFwdDegreeFromMeta(expected))) + delta);
+        const new_degree: u32 = applyDegreeDelta(node_published.publishedFwdDegreeFromMeta(expected), delta);
         node_published.stagingFwdDegree(expected).* = new_degree;
         const desired = node_meta_mod.desiredMetaForPublishFwd(expected, needs_repair_fwd or expected.needs_repair_fwd, new_degree);
         const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse return desired;
@@ -20,7 +33,7 @@ pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
     node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
     var expected = expected_meta;
     while (true) {
-        const new_degree: u32 = @intCast(@as(i64, @intCast(node_published.publishedRevDegreeFromMeta(expected))) + delta);
+        const new_degree: u32 = applyDegreeDelta(node_published.publishedRevDegreeFromMeta(expected), delta);
         node_published.stagingRevDegree(expected).* = new_degree;
         const desired = node_meta_mod.desiredMetaForPublishRev(expected, needs_repair_rev or expected.needs_repair_rev, new_degree);
         const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse return desired;
@@ -46,8 +59,8 @@ pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
     node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
     var expected = expected_meta;
     while (true) {
-        const new_fwd: u32 = @intCast(@as(i64, @intCast(node_published.publishedFwdDegreeFromMeta(expected))) + fwd_delta);
-        const new_rev: u32 = @intCast(@as(i64, @intCast(node_published.publishedRevDegreeFromMeta(expected))) + rev_delta);
+        const new_fwd: u32 = applyDegreeDelta(node_published.publishedFwdDegreeFromMeta(expected), fwd_delta);
+        const new_rev: u32 = applyDegreeDelta(node_published.publishedRevDegreeFromMeta(expected), rev_delta);
         node_published.stagingFwdDegree(expected).* = new_fwd;
         node_published.stagingRevDegree(expected).* = new_rev;
         var merged_flags = flags;
@@ -66,7 +79,7 @@ pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
 pub fn publishMetaFwdDeltaNoFlip(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, needs_repair_fwd: bool, delta: i23) types.PublishedMeta {
     var expected = node_meta.loadPublishedMeta();
     while (true) {
-        const new_degree: u32 = @intCast(@as(i64, @intCast(node_published.publishedFwdDegreeFromMeta(expected))) + delta);
+        const new_degree: u32 = applyDegreeDelta(node_published.publishedFwdDegreeFromMeta(expected), delta);
         const desired = node_meta_mod.desiredMetaForUpdateFwd(expected, needs_repair_fwd or expected.needs_repair_fwd, new_degree);
         const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
@@ -76,7 +89,7 @@ pub fn publishMetaFwdDeltaNoFlip(node_meta: *node_meta_mod.NodeMeta, node_publis
 pub fn publishMetaRevDeltaNoFlip(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, needs_repair_rev: bool, delta: i23) types.PublishedMeta {
     var expected = node_meta.loadPublishedMeta();
     while (true) {
-        const new_degree: u32 = @intCast(@as(i64, @intCast(node_published.publishedRevDegreeFromMeta(expected))) + delta);
+        const new_degree: u32 = applyDegreeDelta(node_published.publishedRevDegreeFromMeta(expected), delta);
         const desired = node_meta_mod.desiredMetaForUpdateRev(expected, needs_repair_rev or expected.needs_repair_rev, new_degree);
         const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse return desired;
         expected = actual;
@@ -86,8 +99,8 @@ pub fn publishMetaRevDeltaNoFlip(node_meta: *node_meta_mod.NodeMeta, node_publis
 pub fn publishMetaBothDeltaNoFlip(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23) types.PublishedMeta {
     var expected = node_meta.loadPublishedMeta();
     while (true) {
-        const new_fwd: u32 = @intCast(@as(i64, @intCast(node_published.publishedFwdDegreeFromMeta(expected))) + fwd_delta);
-        const new_rev: u32 = @intCast(@as(i64, @intCast(node_published.publishedRevDegreeFromMeta(expected))) + rev_delta);
+        const new_fwd: u32 = applyDegreeDelta(node_published.publishedFwdDegreeFromMeta(expected), fwd_delta);
+        const new_rev: u32 = applyDegreeDelta(node_published.publishedRevDegreeFromMeta(expected), rev_delta);
         var merged_flags = flags;
         merged_flags.needs_repair_fwd = merged_flags.needs_repair_fwd or expected.needs_repair_fwd;
         merged_flags.needs_repair_rev = merged_flags.needs_repair_rev or expected.needs_repair_rev;

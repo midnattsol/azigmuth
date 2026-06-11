@@ -1,53 +1,87 @@
+//! Lazy two-level radix directory for atomically-published page pointers.
+//!
+//! Layout: the first `INLINE` pages live in slots embedded in the directory
+//! itself (zero heap cost for small graphs); every further page resolves
+//! through a lazily allocated root array of leaf pointers, each leaf covering
+//! `L2` pages. Both levels are published once via CAS and never move, so
+//! lock-free readers only ever observe absent (0) or fully initialized
+//! pointers. Fixed inline footprint is `INLINE × @sizeOf(usize)` plus one
+//! root pointer — capacity ceilings are paid only when actually used.
+
 const std = @import("std");
 
-pub fn RadixDirectory(comptime L1: usize, comptime L2: usize) type {
+pub fn RadixDirectory(comptime INLINE: usize, comptime L1: usize, comptime L2: usize) type {
     return struct {
         const Self = @This();
 
-        first_leaf: [L2]std.atomic.Value(usize) =
-            [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** L2,
-        root: [L1]std.atomic.Value(usize) =
-            [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** L1,
+        inline_slots: [INLINE]std.atomic.Value(usize) =
+            [_]std.atomic.Value(usize){std.atomic.Value(usize).init(0)} ** INLINE,
+        /// 0 while unallocated; otherwise `@intFromPtr` of a `[L1]` array of
+        /// leaf pointers (each 0 or `@intFromPtr` of a `[L2]` slot array).
+        root: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
+        pub const inline_count: usize = INLINE;
         pub const l1_count: usize = L1;
         pub const l2_count: usize = L2;
-        pub const max_pages: usize = L1 * L2;
+        pub const max_pages: usize = INLINE + L1 * L2;
+        /// Iteration domain for `leafSliceAtConst`: index 0 is the inline
+        /// slot block, indices 1..=L1 are the lazily allocated leaves.
+        pub const leaf_count: usize = 1 + L1;
 
-        fn leafFromRaw(raw: usize) []std.atomic.Value(usize) {
-            const leaf_ptr: [*]std.atomic.Value(usize) = @ptrFromInt(raw);
-            return leaf_ptr[0..L2];
+        fn sliceFromRaw(raw: usize) []std.atomic.Value(usize) {
+            const ptr: [*]std.atomic.Value(usize) = @ptrFromInt(raw);
+            return ptr[0..L2];
         }
 
-        fn leafFromRawConst(raw: usize) []const std.atomic.Value(usize) {
-            const leaf_ptr: [*]const std.atomic.Value(usize) = @ptrFromInt(raw);
-            return leaf_ptr[0..L2];
+        fn sliceFromRawConst(raw: usize) []const std.atomic.Value(usize) {
+            const ptr: [*]const std.atomic.Value(usize) = @ptrFromInt(raw);
+            return ptr[0..L2];
         }
 
-        fn split(page_index: u32) struct { leaf_idx: usize, slot_idx: usize } {
-            const flat_idx: usize = @intCast(page_index);
-            return .{
-                .leaf_idx = flat_idx / L2,
-                .slot_idx = flat_idx % L2,
-            };
+        fn rootFromRaw(raw: usize) []std.atomic.Value(usize) {
+            const ptr: [*]std.atomic.Value(usize) = @ptrFromInt(raw);
+            return ptr[0..L1];
         }
 
-        fn ensureLeaf(self: *Self, allocator: std.mem.Allocator, leaf_idx: usize) ![]std.atomic.Value(usize) {
-            if (leaf_idx == 0) return self.first_leaf[0..];
+        fn rootFromRawConst(raw: usize) []const std.atomic.Value(usize) {
+            const ptr: [*]const std.atomic.Value(usize) = @ptrFromInt(raw);
+            return ptr[0..L1];
+        }
 
-            const existing = self.root[leaf_idx].load(.acquire);
-            if (existing != 0) return leafFromRaw(existing);
+        fn allocLevel(allocator: std.mem.Allocator, comptime len: usize) ![]std.atomic.Value(usize) {
+            const level = try allocator.alloc(std.atomic.Value(usize), len);
+            for (level) |*slot| slot.* = std.atomic.Value(usize).init(0);
+            return level;
+        }
 
-            const new_leaf = try allocator.alloc(std.atomic.Value(usize), L2);
-            errdefer allocator.free(new_leaf);
-            for (new_leaf) |*slot| slot.* = std.atomic.Value(usize).init(0);
-
-            const new_raw = @intFromPtr(new_leaf.ptr);
-            if (self.root[leaf_idx].cmpxchgStrong(0, new_raw, .acq_rel, .acquire)) |published_raw| {
-                allocator.free(new_leaf);
-                return leafFromRaw(published_raw);
+        /// Publish-once helper: install `candidate` into `slot` unless another
+        /// thread already published a level there, in which case the candidate
+        /// is freed and the published level wins.
+        fn publishLevel(
+            allocator: std.mem.Allocator,
+            slot: *std.atomic.Value(usize),
+            candidate: []std.atomic.Value(usize),
+        ) usize {
+            const candidate_raw = @intFromPtr(candidate.ptr);
+            if (slot.cmpxchgStrong(0, candidate_raw, .acq_rel, .acquire)) |published_raw| {
+                allocator.free(candidate);
+                return published_raw;
             }
+            return candidate_raw;
+        }
 
-            return new_leaf;
+        fn ensureRoot(self: *Self, allocator: std.mem.Allocator) ![]std.atomic.Value(usize) {
+            const existing = self.root.load(.acquire);
+            if (existing != 0) return rootFromRaw(existing);
+            const candidate = try allocLevel(allocator, L1);
+            return rootFromRaw(publishLevel(allocator, &self.root, candidate));
+        }
+
+        fn ensureLeaf(allocator: std.mem.Allocator, leaf_slot: *std.atomic.Value(usize)) ![]std.atomic.Value(usize) {
+            const existing = leaf_slot.load(.acquire);
+            if (existing != 0) return sliceFromRaw(existing);
+            const candidate = try allocLevel(allocator, L2);
+            return sliceFromRaw(publishLevel(allocator, leaf_slot, candidate));
         }
 
         pub fn maxPages(self: *const Self) usize {
@@ -57,43 +91,54 @@ pub fn RadixDirectory(comptime L1: usize, comptime L2: usize) type {
 
         pub fn load(self: *const Self, page_index: u32) usize {
             const flat_idx: usize = @intCast(page_index);
-            if (flat_idx >= max_pages) return 0;
+            if (flat_idx < INLINE) return self.inline_slots[flat_idx].load(.acquire);
+            const tree_idx = flat_idx - INLINE;
+            if (tree_idx >= L1 * L2) return 0;
 
-            const indices = split(page_index);
-            if (indices.leaf_idx == 0) return self.first_leaf[indices.slot_idx].load(.acquire);
-
-            const leaf_raw = self.root[indices.leaf_idx].load(.acquire);
+            const root_raw = self.root.load(.acquire);
+            if (root_raw == 0) return 0;
+            const leaf_raw = rootFromRawConst(root_raw)[tree_idx / L2].load(.acquire);
             if (leaf_raw == 0) return 0;
-
-            return leafFromRawConst(leaf_raw)[indices.slot_idx].load(.acquire);
+            return sliceFromRawConst(leaf_raw)[tree_idx % L2].load(.acquire);
         }
 
         pub fn slotPtr(self: *Self, allocator: std.mem.Allocator, page_index: u32) !*std.atomic.Value(usize) {
             const flat_idx: usize = @intCast(page_index);
-            if (flat_idx >= max_pages) return error.OutOfMemory;
+            if (flat_idx < INLINE) return &self.inline_slots[flat_idx];
+            const tree_idx = flat_idx - INLINE;
+            if (tree_idx >= L1 * L2) return error.OutOfMemory;
 
-            const indices = split(page_index);
-            const leaf = try ensureLeaf(self, allocator, indices.leaf_idx);
-            return &leaf[indices.slot_idx];
+            const root_slice = try self.ensureRoot(allocator);
+            const leaf = try ensureLeaf(allocator, &root_slice[tree_idx / L2]);
+            return &leaf[tree_idx % L2];
         }
 
+        /// Returns one block of page slots for teardown/diagnostic iteration:
+        /// index 0 is the inline block, indices 1..=L1 the allocated leaves
+        /// (null when absent). Slices differ in length (INLINE vs L2).
         pub fn leafSliceAtConst(self: *const Self, leaf_idx: usize) ?[]const std.atomic.Value(usize) {
-            if (leaf_idx >= L1) return null;
-            if (leaf_idx == 0) return self.first_leaf[0..];
+            if (leaf_idx == 0) return self.inline_slots[0..];
+            if (leaf_idx > L1) return null;
 
-            const raw = self.root[leaf_idx].load(.acquire);
-            if (raw == 0) return null;
-            return leafFromRawConst(raw);
+            const root_raw = self.root.load(.acquire);
+            if (root_raw == 0) return null;
+            const leaf_raw = rootFromRawConst(root_raw)[leaf_idx - 1].load(.acquire);
+            if (leaf_raw == 0) return null;
+            return sliceFromRawConst(leaf_raw);
         }
 
         pub fn deinitLeaves(self: *Self, allocator: std.mem.Allocator) void {
-            var leaf_idx: usize = 1;
-            while (leaf_idx < L1) : (leaf_idx += 1) {
-                const raw = self.root[leaf_idx].load(.acquire);
-                if (raw == 0) continue;
-                allocator.free(leafFromRaw(raw));
-                self.root[leaf_idx].store(0, .release);
+            const root_raw = self.root.load(.acquire);
+            if (root_raw == 0) return;
+            const root_slice = rootFromRaw(root_raw);
+            for (root_slice) |*leaf_slot| {
+                const leaf_raw = leaf_slot.load(.acquire);
+                if (leaf_raw == 0) continue;
+                allocator.free(sliceFromRaw(leaf_raw));
+                leaf_slot.store(0, .release);
             }
+            allocator.free(root_slice);
+            self.root.store(0, .release);
         }
     };
 }

@@ -5,9 +5,12 @@ const context_mod = @import("context.zig");
 const dfs_mod = @import("dfs.zig");
 const validate_mod = @import("../maintenance/validate.zig");
 const read_session = @import("../query/read_session.zig");
+const snapshot_csr = @import("../query/snapshot/csr.zig");
 const snapshot_iterators = @import("../query/snapshot/iterators.zig");
 const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
+
+pub const CsrView = snapshot_csr.CsrView;
 
 pub const ReadSnapshot = struct {
     allocator: std.mem.Allocator,
@@ -83,5 +86,12 @@ pub const ReadSnapshot = struct {
 
     pub fn hasCycle(self: *const ReadSnapshot, ctx: context_mod.Context) types.GraphError!bool {
         return cycle_mod.hasCycleCaptured(&self.view, ctx);
+    }
+
+    /// Copies the snapshot's logical forward adjacency into caller-owned flat
+    /// CSR arrays. The result is fully detached: it survives `deinit()` of
+    /// this snapshot and of the graph, and it does not pin retired storage.
+    pub fn materializeCsr(self: *const ReadSnapshot, ctx: context_mod.Context) types.GraphError!snapshot_csr.CsrView {
+        return snapshot_csr.materializeForwardCsr(&self.view, ctx.allocator);
     }
 };

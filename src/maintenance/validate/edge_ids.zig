@@ -97,7 +97,7 @@ fn edgeIdAppearsLater(
         for (common.firstBlock(adjacency, .fwd)..common.firstBlock(adjacency, .fwd) + common.blockCount(adjacency, .fwd)) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-            const live_count = @min(page_ops.blockLiveCount(graph, block_idx, .fwd), 64);
+            const live_count = @min(page_ops.blockLiveCount(graph, block_idx, .fwd), constants.EDGES_PER_BLOCK);
             const slot_start: usize = if (block_idx == current_block_idx) current_slot + 1 else 0;
             for (slot_start..live_count) |slot| {
                 if (id_block.ids[slot] == edge_id) return true;
@@ -108,14 +108,14 @@ fn edgeIdAppearsLater(
 
     const first_group_idx = common.firstGroup(adjacency, .fwd);
     const end_group = first_group_idx + common.groupCount(adjacency, .fwd);
-    if (end_group > graph.group_count) return false;
+    if (end_group > graph.loadGroupCount()) return false;
     for (first_group_idx..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.groupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
-            const live_count = @min(page_ops.blockLiveCount(graph, block_idx, .fwd), 64);
+            const live_count = @min(page_ops.blockLiveCount(graph, block_idx, .fwd), constants.EDGES_PER_BLOCK);
             const slot_start: usize = if (block_idx == current_block_idx) current_slot + 1 else 0;
             for (slot_start..live_count) |slot| {
                 if (id_block.ids[slot] == edge_id) return true;

@@ -1,6 +1,7 @@
 const common = @import("common.zig");
 const run_search = @import("run_search.zig");
 const shape = @import("shape.zig");
+const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const snapshot_view = @import("../../query/snapshot/view.zig");
 const types = @import("../../core/types.zig");
@@ -206,7 +207,7 @@ fn validateForwardEdgeIdsSnapshot(
             for (start..start + count) |block_idx_usize| {
                 const block_idx: u32 = @intCast(block_idx_usize);
                 const id_block = page_ops.edgeBlockFwdIdsAtConst(inner_graph, block_idx);
-                const live_count = @min(page_ops.blockLiveCount(inner_graph, block_idx, .fwd), 64);
+                const live_count = @min(page_ops.blockLiveCount(inner_graph, block_idx, .fwd), constants.EDGES_PER_BLOCK);
                 for (0..live_count) |slot| {
                     if (id_block.ids[slot] == 0) return error.CorruptGraph;
                 }
@@ -260,7 +261,7 @@ fn validateForwardConsistencySnapshot(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .fwd);
-                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .fwd), 64);
+                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .fwd), constants.EDGES_PER_BLOCK);
                 for (0..live) |slot| {
                     const destination_idx = block.destinations[slot];
                     if (destination_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
@@ -318,7 +319,7 @@ fn validateReverseConsistencySnapshot(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .rev);
-                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .rev), 64);
+                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .rev), constants.EDGES_PER_BLOCK);
                 for (0..live) |slot| {
                     const source_idx = block.sources[slot];
                     if (source_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;

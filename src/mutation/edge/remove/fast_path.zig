@@ -72,6 +72,13 @@ pub fn applyRemovalPlanSide(
 ) !remove_finalize.RemovalBuild {
     try ensureRemovalFastPathAllowed(graph, published_side, plan.found, allow_structural_rebuild);
 
+    // The dropped slot's property row dies with the edge; retire it after
+    // publish via the scratch list.
+    if (side == .fwd and graph.edge_properties_enabled) {
+        const removed_row = page_ops.edgeBlockFwdPropsAtConst(graph, plan.found.block_idx).rows[plan.found.slot];
+        try scratch.markRetirePropRow(graph.allocator, removed_row);
+    }
+
     const old_block = plan.found.block_idx;
     const new_block = try scratch.allocBlock(graph, side);
     if (new_block == old_block) return error.CorruptGraph;
@@ -105,12 +112,12 @@ pub fn applyRemovalPlanSide(
 
     if (!allow_structural_rebuild) return error.RepairRequired;
 
-    try structural_rebuild.rebuildAfterSingleRemoval(graph, staging_side, published_side, old_block, if (new_live > 0) new_block else null, scratch);
+    try structural_rebuild.rebuildAfterSingleRemoval(graph, staging_side, published_side, old_block, if (new_live > 0) new_block else null, side, scratch);
 
     return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
 }
 
-fn planRemovalSide(
+pub fn planRemovalSide(
     graph: *graph_core.GraphCore,
     side_adj: *const types.SideAdj,
     found: common.AdjSlot,
@@ -152,15 +159,20 @@ fn copyForwardBlockWithoutSlot(
         const ids_before = page_ops.edgeBlockFwdIdsAtConst(graph, old_block);
         page_ops.edgeBlockFwdIdsAt(graph, new_block).* = ids_before.*;
     }
+    if (graph.edge_properties_enabled) {
+        page_ops.edgeBlockFwdPropsAt(graph, new_block).* = page_ops.edgeBlockFwdPropsAtConst(graph, old_block).*;
+    }
 
     const block = page_ops.edgeBlockAt(graph, new_block, .fwd);
     const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block) else undefined;
+    const prop_block = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block) else undefined;
     var shift: u7 = slot;
     while (shift < live_before - 1) : (shift += 1) {
         block.destinations[shift] = block.destinations[shift + 1];
         block.relations[shift] = block.relations[shift + 1];
         block.flags[shift] = block.flags[shift + 1];
         if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift + 1];
+        if (graph.edge_properties_enabled) prop_block.rows[shift] = prop_block.rows[shift + 1];
     }
 
     const new_live: u7 = live_before - 1;

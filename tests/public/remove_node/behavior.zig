@@ -2,17 +2,17 @@
 //! tombstone visibility, and explicit repair compaction.
 
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 
 const testing = std.testing;
 
 test "tombstone regression: removeNode decrements destination inDegree without immediate reverse cleanup" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
-    var destinations: [6]graphz.NodeId = undefined;
+    var destinations: [6]azigmuth.NodeId = undefined;
     for (0..destinations.len) |destination_idx| {
         destinations[destination_idx] = try graph.addNode();
         try graph.addEdge(hub, destinations[destination_idx], 0, .{});
@@ -30,11 +30,11 @@ test "tombstone regression: removeNode decrements destination inDegree without i
 }
 
 test "tombstone regression: removeNode leaves invisible incoming tombstones" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
-    var sources: [6]graphz.NodeId = undefined;
+    var sources: [6]azigmuth.NodeId = undefined;
     for (0..sources.len) |source_idx| {
         sources[source_idx] = try graph.addNode();
         try graph.addEdge(sources[source_idx], target, 0, .{});
@@ -53,11 +53,11 @@ test "tombstone regression: removeNode leaves invisible incoming tombstones" {
 }
 
 test "tombstone regression: removed node publishes empty reverse side immediately" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
-    var sources: [5]graphz.NodeId = undefined;
+    var sources: [5]azigmuth.NodeId = undefined;
     for (0..sources.len) |source_idx| {
         sources[source_idx] = try graph.addNode();
         try graph.addEdge(sources[source_idx], target, 0, .{});
@@ -82,7 +82,7 @@ test "tombstone regression: removed node publishes empty reverse side immediatel
 }
 
 test "tombstone regression: removeNode self-edge works correctly" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -103,7 +103,7 @@ test "tombstone regression: removeNode self-edge works correctly" {
 }
 
 test "tombstone regression: removeNode with incoming from already-removed nodes" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const removed_source = try graph.addNode();
@@ -131,11 +131,11 @@ test "tombstone regression: removeNode with incoming from already-removed nodes"
 }
 
 test "tombstone compaction: removeNode + repairBudgeted eliminates structural tombstones" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
-    var sources: [4]graphz.NodeId = undefined;
+    var sources: [4]azigmuth.NodeId = undefined;
     for (0..sources.len) |source_idx| {
         sources[source_idx] = try graph.addNode();
         try graph.addEdge(sources[source_idx], target, 0, .{});
@@ -162,12 +162,12 @@ test "tombstone compaction: removeNode + repairBudgeted eliminates structural to
 }
 
 test "tombstone stress: removeNode on hub with many incoming and outgoing" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
     const peer_count: usize = 15;
-    var peers: [peer_count]graphz.NodeId = undefined;
+    var peers: [peer_count]azigmuth.NodeId = undefined;
     for (0..peer_count) |peer_idx| {
         peers[peer_idx] = try graph.addNode();
         try graph.addEdge(hub, peers[peer_idx], 0, .{});

@@ -1,11 +1,11 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const harness = @import("../harness.zig");
-const Context = graphz.Context;
+const Context = azigmuth.Context;
 
-fn buildBinaryTree(graph: *graphz.Graph, allocator: std.mem.Allocator, depth: usize) ![]graphz.NodeId {
+fn buildBinaryTree(graph: *azigmuth.Graph, allocator: std.mem.Allocator, depth: usize) ![]azigmuth.NodeId {
     const node_count: usize = (@as(usize, 1) << @as(u6, @intCast(depth + 1))) - 1;
-    const nodes = try allocator.alloc(graphz.NodeId, node_count);
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
     for (nodes) |*node| node.* = try graph.addNode();
     for (0..((@as(usize, 1) << @as(u6, @intCast(depth))) - 1)) |parent_idx| {
         try graph.addEdge(nodes[parent_idx], nodes[parent_idx * 2 + 1], 0, .{});
@@ -23,13 +23,13 @@ fn fillPreorder(order: []usize, next_idx: *usize, logical_idx: usize, node_count
 }
 
 fn buildBinaryTreeWithOrder(
-    graph: *graphz.Graph,
+    graph: *azigmuth.Graph,
     allocator: std.mem.Allocator,
     depth: usize,
     order: []const usize,
-) ![]graphz.NodeId {
+) ![]azigmuth.NodeId {
     const node_count: usize = (@as(usize, 1) << @as(u6, @intCast(depth + 1))) - 1;
-    const nodes = try allocator.alloc(graphz.NodeId, node_count);
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
     errdefer allocator.free(nodes);
 
     for (order) |logical_idx| {
@@ -42,7 +42,7 @@ fn buildBinaryTreeWithOrder(
     return nodes;
 }
 
-fn buildBinaryTreePreorder(graph: *graphz.Graph, allocator: std.mem.Allocator, depth: usize) ![]graphz.NodeId {
+fn buildBinaryTreePreorder(graph: *azigmuth.Graph, allocator: std.mem.Allocator, depth: usize) ![]azigmuth.NodeId {
     const node_count: usize = (@as(usize, 1) << @as(u6, @intCast(depth + 1))) - 1;
     const order = try allocator.alloc(usize, node_count);
     defer allocator.free(order);
@@ -52,7 +52,7 @@ fn buildBinaryTreePreorder(graph: *graphz.Graph, allocator: std.mem.Allocator, d
     return buildBinaryTreeWithOrder(graph, allocator, depth, order);
 }
 
-fn buildBinaryTreePermuted(graph: *graphz.Graph, allocator: std.mem.Allocator, depth: usize) ![]graphz.NodeId {
+fn buildBinaryTreePermuted(graph: *azigmuth.Graph, allocator: std.mem.Allocator, depth: usize) ![]azigmuth.NodeId {
     const node_count: usize = (@as(usize, 1) << @as(u6, @intCast(depth + 1))) - 1;
     const order = try allocator.alloc(usize, node_count);
     defer allocator.free(order);
@@ -69,8 +69,8 @@ fn buildBinaryTreePermuted(graph: *graphz.Graph, allocator: std.mem.Allocator, d
     return buildBinaryTreeWithOrder(graph, allocator, depth, order);
 }
 
-fn buildChain(graph: *graphz.Graph, allocator: std.mem.Allocator, node_count: usize) ![]graphz.NodeId {
-    const nodes = try allocator.alloc(graphz.NodeId, node_count);
+fn buildChain(graph: *azigmuth.Graph, allocator: std.mem.Allocator, node_count: usize) ![]azigmuth.NodeId {
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
     for (nodes) |*node| node.* = try graph.addNode();
     for (0..node_count - 1) |node_idx| {
         try graph.addEdge(nodes[node_idx], nodes[node_idx + 1], 0, .{});
@@ -78,8 +78,8 @@ fn buildChain(graph: *graphz.Graph, allocator: std.mem.Allocator, node_count: us
     return nodes;
 }
 
-fn buildStar(graph: *graphz.Graph, allocator: std.mem.Allocator, node_count: usize) ![]graphz.NodeId {
-    const nodes = try allocator.alloc(graphz.NodeId, node_count);
+fn buildStar(graph: *azigmuth.Graph, allocator: std.mem.Allocator, node_count: usize) ![]azigmuth.NodeId {
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
     for (nodes) |*node| node.* = try graph.addNode();
     for (1..node_count) |node_idx| {
         try graph.addEdge(nodes[0], nodes[node_idx], 0, .{});
@@ -87,7 +87,7 @@ fn buildStar(graph: *graphz.Graph, allocator: std.mem.Allocator, node_count: usi
     return nodes;
 }
 
-fn runBfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context) !harness.Result {
+fn runBfsBench(graph: *azigmuth.Graph, nodes: []const azigmuth.NodeId, ctx: Context) !harness.Result {
     var snapshot = try graph.snapshot(ctx);
     defer snapshot.deinit();
 
@@ -109,7 +109,7 @@ fn runBfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context)
     return .{ .ops = iterations, .elapsed_ns = elapsed_ns };
 }
 
-fn runDfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context) !harness.Result {
+fn runDfsBench(graph: *azigmuth.Graph, nodes: []const azigmuth.NodeId, ctx: Context) !harness.Result {
     var snapshot = try graph.snapshot(ctx);
     defer snapshot.deinit();
 
@@ -132,7 +132,7 @@ fn runDfsBench(graph: *graphz.Graph, nodes: []const graphz.NodeId, ctx: Context)
 }
 
 fn benchAlgorithmsBfs(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTreePermuted(graph, allocator, 10);
@@ -141,7 +141,7 @@ fn benchAlgorithmsBfs(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsDfs(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTreePermuted(graph, allocator, 10);
@@ -151,7 +151,7 @@ fn benchAlgorithmsDfs(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsBfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);
@@ -161,7 +161,7 @@ fn benchAlgorithmsBfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Res
 }
 
 fn benchAlgorithmsDfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);
@@ -171,7 +171,7 @@ fn benchAlgorithmsDfsBinaryLevelorder(allocator: std.mem.Allocator) !harness.Res
 }
 
 fn benchAlgorithmsBfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTreePreorder(graph, allocator, 10);
@@ -181,7 +181,7 @@ fn benchAlgorithmsBfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Resul
 }
 
 fn benchAlgorithmsDfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTreePreorder(graph, allocator, 10);
@@ -191,7 +191,7 @@ fn benchAlgorithmsDfsBinaryPreorder(allocator: std.mem.Allocator) !harness.Resul
 }
 
 fn benchAlgorithmsBfsChain(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildChain(graph, allocator, 2048);
@@ -201,7 +201,7 @@ fn benchAlgorithmsBfsChain(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsDfsChain(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildChain(graph, allocator, 2048);
@@ -211,7 +211,7 @@ fn benchAlgorithmsDfsChain(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsBfsStar(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildStar(graph, allocator, 2048);
@@ -221,7 +221,7 @@ fn benchAlgorithmsBfsStar(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsDfsStar(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildStar(graph, allocator, 2048);
@@ -231,7 +231,7 @@ fn benchAlgorithmsDfsStar(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsHasCycleAcyclic(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);
@@ -257,7 +257,7 @@ fn benchAlgorithmsHasCycleAcyclic(allocator: std.mem.Allocator) !harness.Result 
 }
 
 fn benchAlgorithmsHasCycleCyclic(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);
@@ -284,7 +284,7 @@ fn benchAlgorithmsHasCycleCyclic(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAlgorithmsHasCycleCyclicEarly(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);
@@ -311,7 +311,7 @@ fn benchAlgorithmsHasCycleCyclicEarly(allocator: std.mem.Allocator) !harness.Res
 }
 
 fn benchSnapshotCapture(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);
@@ -333,10 +333,10 @@ fn benchSnapshotCaptureDenseBinary(allocator: std.mem.Allocator) !harness.Result
 }
 
 fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
-    var previous: ?graphz.NodeId = null;
+    var previous: ?azigmuth.NodeId = null;
     const node_count: usize = 131072;
     const linked_prefix: usize = 1024;
     for (0..node_count) |node_idx| {
@@ -359,7 +359,7 @@ fn benchSnapshotCaptureSparseEmptyHeavy(allocator: std.mem.Allocator) !harness.R
 }
 
 fn benchSnapshotBundleForwardQueries(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const nodes = try buildBinaryTree(graph, allocator, 10);

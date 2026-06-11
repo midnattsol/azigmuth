@@ -2,11 +2,11 @@
 //! after each step.  Catches accumulative structural degradation.
 
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
-fn expectNoStructuralViolations(violations: []const graphz.Violation) !void {
+fn expectNoStructuralViolations(violations: []const azigmuth.Violation) !void {
     for (violations) |v| {
         switch (v) {
             .block_double_owned,
@@ -28,7 +28,7 @@ fn expectNoStructuralViolations(violations: []const graphz.Violation) !void {
 }
 
 test "fuzz: sequential add/remove/repair with validate after each step" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     var state: u64 = 0xDEADBEEF_CAFE1234;
@@ -63,7 +63,7 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
             },
             3 => {
                 const idx: u32 = @intCast((state >> 12) % node_limit);
-                _ = graph.repairNode(.{ .index = idx }) catch graphz.RepairNodeSummary{};
+                _ = graph.repairNode(.{ .index = idx }) catch azigmuth.RepairNodeSummary{};
             },
             4 => {
                 _ = graph.repairBudgeted(2) catch {};
@@ -86,7 +86,7 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
 }
 
 test "fuzz: sequential hot-node add/remove with periodic validate" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     for (0..20) |_| _ = try graph.addNode();
@@ -123,7 +123,7 @@ test "fuzz: sequential hot-node add/remove with periodic validate" {
 test "fuzz: OOM injection on addEdge/removeEdge/removeNode leaves stable graph" {
     for (0..16) |failure_offset| {
         var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
-        var graph = try graphz.Graph.init(failing_allocator.allocator());
+        var graph = try azigmuth.Graph.init(failing_allocator.allocator());
         defer graph.deinit();
 
         const a = try graph.addNode();
@@ -150,7 +150,7 @@ test "fuzz: OOM injection on addEdge/removeEdge/removeNode leaves stable graph" 
 }
 
 test "fuzz: stress addEdge on same pair 100 times with interleaved repair" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();

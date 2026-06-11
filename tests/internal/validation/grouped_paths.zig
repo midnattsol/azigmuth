@@ -49,8 +49,8 @@ fn setUpGroupedForward(graph: *graph_mod.Graph) !GroupedFixture {
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = blk0, .count = 1, .next = g1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = blk1, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = blk0, .count = 1 };
+    page_ops.groupAt(&graph.graph, g1).* = .{ .start = blk1, .count = 1 };
 
     const node = nodes[69];
     const ref = try graph.nodeAt(node);

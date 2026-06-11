@@ -35,7 +35,7 @@ pub fn publishRelatedNodeUpdates(graph: *graph_core.GraphCore, related_nodes: []
         if (meta.removed) continue;
         counts.applied_edge_removals += @as(u64, related.fwd_degree_delta) + @as(u64, related.rev_degree_delta);
         const node_id = types.NodeId{ .index = related.node_index };
-        const node_published = page_ops.ensureNodePublishedAt(graph, node_id) catch @panic("failed to ensure published page");
+        const node_published = page_ops.nodePublishedAt(graph, node_id);
         if (related.fwd_degree_delta > 0 and related.rev_degree_delta > 0) {
             _ = common.publishMetaBothDeltaNoFlip(related.node_meta, node_published, .{
                 .needs_repair_fwd = true,

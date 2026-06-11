@@ -39,10 +39,10 @@ test "invalid shape: block_count == 1 with group_count > 1 fails validate" {
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
 
     page_ops.groupAt(&graph.graph, g0).* = .{
-        .start = block, .count = 1, .next = g1,
+        .start = block, .count = 1,
     };
     page_ops.groupAt(&graph.graph, g1).* = .{
-        .start = block, .count = 1, .next = constants.END_OF_CHAIN,
+        .start = block, .count = 1,
     };
 
     const buf = try graph.nodeAt(node);
@@ -72,7 +72,7 @@ test "shape: grouped single-block adjacency is accepted as valid layout" {
 
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
     page_ops.groupAt(&graph.graph, group).* = .{
-        .start = block, .count = 1, .next = constants.END_OF_CHAIN,
+        .start = block, .count = 1,
     };
 
     const buf = try graph.nodeAt(node);
@@ -117,7 +117,7 @@ test "shape: grouped contiguous run layout is accepted without repair flag" {
     try publishReverseSources(&graph, node.index, 1, 97);
 
     page_ops.groupAt(&graph.graph, g0).* = .{
-        .start = b0, .count = 3, .next = constants.END_OF_CHAIN,
+        .start = b0, .count = 3,
     };
 
     const buf = try graph.nodeAt(node);
@@ -155,11 +155,11 @@ test "invalid shape: too many groups without needs_repair fails validate" {
 
     for (0..groups.len - 1) |i| {
         page_ops.groupAt(&graph.graph, groups[i]).* = .{
-            .start = blocks[i], .count = 1, .next = groups[i + 1],
+            .start = blocks[i], .count = 1,
         };
     }
     page_ops.groupAt(&graph.graph, groups[groups.len - 1]).* = .{
-        .start = blocks[blocks.len - 1], .count = 1, .next = constants.END_OF_CHAIN,
+        .start = blocks[blocks.len - 1], .count = 1,
     };
 
     const buf = try graph.nodeAt(node);
@@ -201,10 +201,10 @@ test "shape: short non-tail run without needs_repair is accepted as valid layout
     try publishReverseSources(&graph, node.index, 1, 97);
 
     page_ops.groupAt(&graph.graph, short_run_group).* = .{
-        .start = head_block, .count = 2, .next = tail_group,
+        .start = head_block, .count = 2,
     };
     page_ops.groupAt(&graph.graph, tail_group).* = .{
-        .start = tail_block, .count = 1, .next = constants.END_OF_CHAIN,
+        .start = tail_block, .count = 1,
     };
 
     const buf = try graph.nodeAt(node);

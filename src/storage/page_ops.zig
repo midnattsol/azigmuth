@@ -171,6 +171,102 @@ pub fn reclaimRetiredTinySlots(graph: *graph_core.GraphCore, safe_epoch: u64, co
     }
 }
 
+// ── Property-row lifecycle (edge_properties mode) ────────────────────
+// Rows follow the same retire/reclaim discipline as edge blocks and tiny
+// slots: removal retires the row with the current epoch; reclaim moves
+// epoch-safe rows back to the free stack for reuse.
+
+fn propRowMetaAt(graph: *graph_core.GraphCore, row: u32) *types.BlockMeta {
+    return metaEntryAt(&graph.prop_row_meta_pages, row, constants.PROP_ROWS_PER_PAGE);
+}
+
+fn ensurePropRowMetaPage(graph: *graph_core.GraphCore, page_index: u32) ![]types.BlockMeta {
+    return ensureMetaPageSized(graph, &graph.prop_row_meta_pages, page_index, constants.PROP_ROWS_PER_PAGE);
+}
+
+fn propRowStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind) *std.atomic.Value(u64) {
+    return switch (kind) {
+        .free => &graph.free_prop_rows_head,
+        .retired => &graph.retired_prop_rows_head,
+    };
+}
+
+fn popPropRowStack(graph: *graph_core.GraphCore, comptime kind: StackKind) ?u32 {
+    const head = propRowStackHead(graph, kind);
+    while (true) {
+        const old_head = head.load(.acquire);
+        const row = headIndex(old_head);
+        if (row == EMPTY_INDEX) return null;
+        const meta = propRowMetaAt(graph, row);
+        const next = meta.next.load(.acquire);
+        const new_head = packHead(next, headTag(old_head) +% 1);
+        if (head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return row;
+    }
+}
+
+/// Returns one property row to the free stack (never-published rows only).
+pub fn freePropRow(graph: *graph_core.GraphCore, row: u32) void {
+    pushHeadIndex(propRowStackHead(graph, .free), propRowMetaAt(graph, row), row);
+}
+
+/// Moves one property row to the retired stack with its retirement epoch.
+pub fn retirePropRow(graph: *graph_core.GraphCore, row: u32, epoch: u64) void {
+    const meta = propRowMetaAt(graph, row);
+    meta.epoch.store(epoch, .release);
+    pushHeadIndex(propRowStackHead(graph, .retired), meta, row);
+}
+
+/// Reclaims retired property rows whose epoch is now safe for reuse.
+pub fn reclaimRetiredPropRows(graph: *graph_core.GraphCore, safe_epoch: u64) void {
+    var row = detachHeadIndex(propRowStackHead(graph, .retired));
+    while (row != EMPTY_INDEX) {
+        const meta = propRowMetaAt(graph, row);
+        const next = meta.next.load(.acquire);
+        const retired_epoch = meta.epoch.load(.acquire);
+        if (retired_epoch < safe_epoch) {
+            freePropRow(graph, row);
+        } else {
+            pushHeadIndex(propRowStackHead(graph, .retired), meta, row);
+        }
+        row = next;
+    }
+}
+
+fn allocFreshPropRow(graph: *graph_core.GraphCore) !u32 {
+    while (true) {
+        const row = @atomicLoad(u32, &graph.prop_row_count, .acquire);
+        if (row == std.math.maxInt(u32)) return error.OutOfMemory;
+        const page_index = pageOf(row, constants.PROP_ROWS_PER_PAGE);
+        _ = try ensurePropRowMetaPage(graph, page_index);
+        if (@cmpxchgWeak(u32, &graph.prop_row_count, row, row + 1, .acq_rel, .acquire) == null) {
+            return row;
+        }
+    }
+}
+
+/// Ensures lifecycle metadata pages exist for rows below `required_row_count`
+/// (builder bulk assignment bypasses allocPropRow's lazy page growth).
+pub fn ensurePropRowCapacity(graph: *graph_core.GraphCore, required_row_count: u32) !void {
+    if (required_row_count == 0) return;
+    const last_page_index = pageOf(required_row_count - 1, constants.PROP_ROWS_PER_PAGE);
+    var page_index: u32 = pageOf(graph.loadPropRowCount(), constants.PROP_ROWS_PER_PAGE);
+    while (page_index <= last_page_index) : (page_index += 1) {
+        _ = try ensurePropRowMetaPage(graph, page_index);
+    }
+}
+
+/// Allocates one property row, reusing the free stack when available.
+/// Falls back to a last-resort reclaim pass before failing (see allocBlock).
+pub fn allocPropRow(graph: *graph_core.GraphCore) !u32 {
+    if (popPropRowStack(graph, .free)) |row| return row;
+    return allocFreshPropRow(graph) catch |err| switch (err) {
+        error.OutOfMemory => {
+            rcu.reclaimRetired(graph);
+            return popPropRowStack(graph, .free) orelse err;
+        },
+    };
+}
+
 pub fn tinyFwdAt(graph: *graph_core.GraphCore, slot_idx: u32) *node_tiny.TinyFwdSlot {
     return pageEntryAt(node_tiny.TinyFwdSlot, &graph.tiny_fwd_pages, slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
 }
@@ -188,17 +284,21 @@ pub fn tinyRevAtConst(graph: *const graph_core.GraphCore, slot_idx: u32) *const 
 }
 
 pub fn allocTinyFwdSlot(graph: *graph_core.GraphCore) !u32 {
-    if (popTinyStack(graph, .free, .fwd)) |slot_idx| {
-        tinyFwdAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyFwdSlot);
-        return slot_idx;
-    }
+    const slot_idx = try allocTinyFwdSlotRaw(graph);
+    tinyFwdAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyFwdSlot);
+    return slot_idx;
+}
+
+/// Like allocTinyFwdSlot but skips zero-initialization. Safe when the caller
+/// fully overwrites the slot (clone) or only entries [0, count) are ever
+/// read by the published descriptor.
+pub fn allocTinyFwdSlotRaw(graph: *graph_core.GraphCore) !u32 {
+    if (popTinyStack(graph, .free, .fwd)) |slot_idx| return slot_idx;
 
     return allocFreshTinyFwdSlot(graph) catch |err| switch (err) {
         error.OutOfMemory => {
             rcu.reclaimRetired(graph);
-            const slot_idx = popTinyStack(graph, .free, .fwd) orelse return err;
-            tinyFwdAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyFwdSlot);
-            return slot_idx;
+            return popTinyStack(graph, .free, .fwd) orelse err;
         },
     };
 }
@@ -209,24 +309,25 @@ fn allocFreshTinyFwdSlot(graph: *graph_core.GraphCore) !u32 {
         const page_index = pageOf(slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
         _ = try ensureTinyFwdPage(graph, page_index);
         if (@cmpxchgWeak(u32, &graph.tiny_fwd_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
-            tinyFwdAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyFwdSlot);
             return slot_idx;
         }
     }
 }
 
 pub fn allocTinyRevSlot(graph: *graph_core.GraphCore) !u32 {
-    if (popTinyStack(graph, .free, .rev)) |slot_idx| {
-        tinyRevAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyRevSlot);
-        return slot_idx;
-    }
+    const slot_idx = try allocTinyRevSlotRaw(graph);
+    tinyRevAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyRevSlot);
+    return slot_idx;
+}
+
+/// See allocTinyFwdSlotRaw.
+pub fn allocTinyRevSlotRaw(graph: *graph_core.GraphCore) !u32 {
+    if (popTinyStack(graph, .free, .rev)) |slot_idx| return slot_idx;
 
     return allocFreshTinyRevSlot(graph) catch |err| switch (err) {
         error.OutOfMemory => {
             rcu.reclaimRetired(graph);
-            const slot_idx = popTinyStack(graph, .free, .rev) orelse return err;
-            tinyRevAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyRevSlot);
-            return slot_idx;
+            return popTinyStack(graph, .free, .rev) orelse err;
         },
     };
 }
@@ -237,7 +338,6 @@ fn allocFreshTinyRevSlot(graph: *graph_core.GraphCore) !u32 {
         const page_index = pageOf(slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
         _ = try ensureTinyRevPage(graph, page_index);
         if (@cmpxchgWeak(u32, &graph.tiny_rev_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
-            tinyRevAt(graph, slot_idx).* = std.mem.zeroes(node_tiny.TinyRevSlot);
             return slot_idx;
         }
     }
@@ -479,6 +579,30 @@ fn pageEntryAtConst(
     return &page[slotOf(index, entries_per_page)];
 }
 
+/// Raw page-pointer lookups for traversal hot loops: iterators cache these
+/// per 64-block page so sequential block walks skip the directory entirely.
+pub fn edgeBlockPageRaw(graph: *const graph_core.GraphCore, page_index: u32, comptime side: adjacency.AdjSide) usize {
+    return switch (side) {
+        .fwd => graph.edge_blocks_fwd_pages.load(page_index),
+        .rev => graph.edge_blocks_rev_pages.load(page_index),
+    };
+}
+
+pub fn blockLivePageRaw(graph: *const graph_core.GraphCore, page_index: u32, comptime side: adjacency.AdjSide) usize {
+    return switch (side) {
+        .fwd => graph.edge_blocks_fwd_live_pages.load(page_index),
+        .rev => graph.edge_blocks_rev_live_pages.load(page_index),
+    };
+}
+
+pub fn edgeBlockFwdIdsPageRaw(graph: *const graph_core.GraphCore, page_index: u32) usize {
+    return graph.edge_blocks_fwd_id_pages.load(page_index);
+}
+
+pub fn edgeBlockFwdPropsPageRaw(graph: *const graph_core.GraphCore, page_index: u32) usize {
+    return graph.edge_blocks_fwd_prop_pages.load(page_index);
+}
+
 /// Returns mutable access to one forward edge block.
 pub fn edgeBlockFwdAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwd {
     return pageEntryAt(types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
@@ -497,6 +621,16 @@ pub fn edgeBlockFwdIdsAt(graph: *graph_core.GraphCore, block_index: u32) *types.
 /// Returns read-only access to one forward edge-id block.
 pub fn edgeBlockFwdIdsAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwdIds {
     return pageEntryAtConst(types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
+}
+
+/// Returns mutable access to one forward property-row sidecar block.
+pub fn edgeBlockFwdPropsAt(graph: *graph_core.GraphCore, block_index: u32) *types.EdgeBlockFwdProps {
+    return pageEntryAt(types.EdgeBlockFwdProps, &graph.edge_blocks_fwd_prop_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
+}
+
+/// Returns read-only access to one forward property-row sidecar block.
+pub fn edgeBlockFwdPropsAtConst(graph: *const graph_core.GraphCore, block_index: u32) *const types.EdgeBlockFwdProps {
+    return pageEntryAtConst(types.EdgeBlockFwdProps, &graph.edge_blocks_fwd_prop_pages, block_index, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
 /// Returns mutable access to one reverse edge block.
@@ -549,10 +683,10 @@ fn ensureGroupPage(graph: *graph_core.GraphCore, page_index: u32) !void {
 fn ensureGroupCapacity(graph: *graph_core.GraphCore, required_group_count: u32) !void {
     if (required_group_count == 0) return;
 
-    const last_group_index = required_group_count - 1;
-    const last_page_index = pageOf(last_group_index, constants.EDGE_GROUPS_PER_PAGE);
-
-    var page_index: u32 = 0;
+    const last_page_index = pageOf(required_group_count - 1, constants.EDGE_GROUPS_PER_PAGE);
+    // Frontier invariant: every page covering [0, group_count) was ensured
+    // when those groups were allocated, so only the new tail pages need work.
+    var page_index: u32 = pageOf(graph.loadGroupCount(), constants.EDGE_GROUPS_PER_PAGE);
     while (page_index <= last_page_index) : (page_index += 1) {
         try ensureGroupPage(graph, page_index);
     }
@@ -563,6 +697,7 @@ fn ensureBlockPage(graph: *graph_core.GraphCore, page_index: u32, comptime side:
         .fwd => {
             _ = try ensurePage(graph, types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
             if (graph.multigraph_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
+            if (graph.edge_properties_enabled) _ = try ensurePage(graph, types.EdgeBlockFwdProps, &graph.edge_blocks_fwd_prop_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
             _ = try ensureMetaPage(graph, &graph.edge_blocks_fwd_meta_pages, page_index);
             _ = try ensurePage(graph, u8, &graph.edge_blocks_fwd_live_pages, page_index, constants.EDGE_BLOCKS_PER_PAGE);
         },
@@ -590,24 +725,17 @@ pub fn setBlockLiveCount(graph: *graph_core.GraphCore, block_index: u32, comptim
     blockLiveCountPtr(graph, block_index, side).* = live_count;
 }
 
-fn zeroForwardIdsIfNeeded(graph: *graph_core.GraphCore, block_idx: u32) void {
-    if (!graph.multigraph_enabled) return;
-    edgeBlockFwdIdsAt(graph, block_idx).* = std.mem.zeroes(types.EdgeBlockFwdIds);
-}
-
-fn zeroBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) void {
-    edgeBlockAt(graph, block_idx, side).* = std.mem.zeroes(switch (side) {
-        .fwd => types.EdgeBlockFwd,
-        .rev => types.EdgeBlockRev,
-    });
+/// Dense-storage block reset: only the live count needs clearing. Slots
+/// beyond [0, live) — including the id/property sidecars — are never read
+/// under the dense contract, so the 0.5–1 KB per-block memset is skipped.
+fn resetBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) void {
     setBlockLiveCount(graph, block_idx, side, 0);
-    if (side == .fwd) zeroForwardIdsIfNeeded(graph, block_idx);
 }
 
 fn zeroBlockRange(graph: *graph_core.GraphCore, first_block_idx: u32, end_block_idx: u32, comptime side: adjacency.AdjSide) void {
     for (first_block_idx..end_block_idx) |block_idx_usize| {
         const block_idx: u32 = @intCast(block_idx_usize);
-        zeroBlock(graph, block_idx, side);
+        resetBlock(graph, block_idx, side);
     }
 }
 
@@ -690,14 +818,32 @@ pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u32, compti
     }
 }
 
+/// Like allocFreshBlockSpan but without zero-initialization. Safe when the
+/// caller fully writes the dense prefix [0, live) of every block (plus its
+/// sidecars and live count) before publish; stale bytes beyond the live
+/// count are never read under the dense-storage contract.
+pub fn allocFreshBlockSpanRaw(graph: *graph_core.GraphCore, span_count: u32, comptime side: adjacency.AdjSide) !u32 {
+    std.debug.assert(span_count > 0);
+
+    while (true) {
+        const reservation = (try reserveFreshBlockSpan(graph, span_count, side)) orelse continue;
+        return reservation.first_block_idx;
+    }
+}
+
 /// Ensures backing pages exist for blocks up to `required_block_count` on one side.
 pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u32, comptime side: adjacency.AdjSide) !void {
     if (required_block_count == 0) return;
 
-    const last_block_index = required_block_count - 1;
-    const last_page_index = pageOf(last_block_index, constants.EDGE_BLOCKS_PER_PAGE);
-
-    var page_index: u32 = 0;
+    const last_page_index = pageOf(required_block_count - 1, constants.EDGE_BLOCKS_PER_PAGE);
+    // Frontier invariant: every page covering [0, block_count) was ensured
+    // when those blocks were allocated, so only the new tail pages need work
+    // — span allocation must not walk the whole page directory.
+    const frontier = switch (side) {
+        .fwd => graph.loadBlockFwdCount(),
+        .rev => graph.loadBlockRevCount(),
+    };
+    var page_index: u32 = pageOf(frontier, constants.EDGE_BLOCKS_PER_PAGE);
     while (page_index <= last_page_index) : (page_index += 1) {
         try ensureBlockPage(graph, page_index, side);
     }
@@ -712,7 +858,7 @@ pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u
 /// is returning error.OutOfMemory.
 pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
     if (popStack(graph, .free, side)) |block_index| {
-        zeroBlock(graph, block_index, side);
+        resetBlock(graph, block_index, side);
         return block_index;
     }
 
@@ -720,7 +866,7 @@ pub fn allocBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide
         error.OutOfMemory => {
             rcu.reclaimRetired(graph);
             const block_index = popStack(graph, .free, side) orelse return err;
-            zeroBlock(graph, block_index, side);
+            resetBlock(graph, block_index, side);
             return block_index;
         },
     };
@@ -747,6 +893,85 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime si
         requeueOrFreeRetiredBlock(graph, block_index, safe_epoch, side);
         block_index = next;
     }
+
+    rollbackFreeFrontier(graph, side);
+}
+
+/// Frontier recycling: fresh contiguous spans (run coalescing, dense repack)
+/// can only come from the allocation frontier, so remove-heavy churn grows
+/// the block pool while the free stack swells with scattered singles. During
+/// explicit reclaim, drain the free stack and roll the frontier counter back
+/// over any suffix of free blocks ending at the frontier — those indices
+/// become fresh span space again, bounding pool growth under churn.
+///
+/// Best-effort: needs a transient sort buffer; on OutOfMemory the stack is
+/// left untouched (reclaim stays infallible). Safe against concurrent
+/// allocators: rolled-back blocks are held privately (detached from every
+/// stack) with their live counts reset BEFORE the frontier CAS, and a
+/// concurrent fresh reservation racing the CAS simply retries on its own
+/// failed compare-exchange.
+fn rollbackFreeFrontier(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) void {
+    var head = detachStack(graph, .free, side);
+    if (head == EMPTY_INDEX) return;
+
+    var free_blocks: std.ArrayList(u32) = .empty;
+    defer free_blocks.deinit(graph.allocator);
+
+    while (head != EMPTY_INDEX) {
+        const next = metaAt(graph, head, side).next.load(.acquire);
+        free_blocks.append(graph.allocator, head) catch {
+            // Out of memory: push everything collected (and the rest of the
+            // chain) straight back and bail.
+            pushStack(graph, head, .free, side);
+            var rest = next;
+            while (rest != EMPTY_INDEX) {
+                const rest_next = metaAt(graph, rest, side).next.load(.acquire);
+                pushStack(graph, rest, .free, side);
+                rest = rest_next;
+            }
+            for (free_blocks.items) |block_idx| pushStack(graph, block_idx, .free, side);
+            return;
+        };
+        head = next;
+    }
+
+    std.sort.pdq(u32, free_blocks.items, {}, std.sort.asc(u32));
+
+    while (true) {
+        const frontier = switch (side) {
+            .fwd => @atomicLoad(u32, &graph.block_fwd_count, .acquire),
+            .rev => @atomicLoad(u32, &graph.block_rev_count, .acquire),
+        };
+
+        // Longest suffix of the sorted free list that ends exactly at the
+        // frontier: free_blocks[keep..] == [new_frontier, frontier).
+        var keep = free_blocks.items.len;
+        var expected = frontier;
+        while (keep > 0 and free_blocks.items[keep - 1] == expected - 1) {
+            keep -= 1;
+            expected -= 1;
+        }
+        if (keep == free_blocks.items.len) break;
+
+        // Fresh allocations skip zero-init, so recycled frontier blocks must
+        // present zeroed live counts before they become reachable again.
+        for (free_blocks.items[keep..]) |block_idx| {
+            setBlockLiveCount(graph, block_idx, side, 0);
+        }
+
+        const cas_result = switch (side) {
+            .fwd => @cmpxchgStrong(u32, &graph.block_fwd_count, frontier, expected, .acq_rel, .acquire),
+            .rev => @cmpxchgStrong(u32, &graph.block_rev_count, frontier, expected, .acq_rel, .acquire),
+        };
+        if (cas_result == null) {
+            free_blocks.items.len = keep;
+            break;
+        }
+        // Frontier moved (concurrent fresh allocation): retry against the
+        // new frontier — our suffix may no longer touch it.
+    }
+
+    for (free_blocks.items) |block_idx| pushStack(graph, block_idx, .free, side);
 }
 
 fn allocFreshGroupSpan(graph: *graph_core.GraphCore, span_count: u16) !u32 {

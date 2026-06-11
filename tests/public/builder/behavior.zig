@@ -1,11 +1,11 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 
 const testing = std.testing;
 
 test "GraphBuilder: build empty graph" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     var graph = try builder.freeze();
@@ -17,7 +17,7 @@ test "GraphBuilder: build empty graph" {
 }
 
 test "GraphBuilder: build graph with nodes and edges" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const source = try builder.addNode();
@@ -38,7 +38,7 @@ test "GraphBuilder: build graph with nodes and edges" {
 }
 
 test "GraphBuilder: duplicate edge returns EdgeAlreadyExists" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const source = try builder.addNode();
@@ -49,7 +49,7 @@ test "GraphBuilder: duplicate edge returns EdgeAlreadyExists" {
 }
 
 test "GraphBuilder: deinit after freeze is safe" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
 
     _ = try builder.addNode();
     var graph = try builder.freeze();
@@ -59,7 +59,7 @@ test "GraphBuilder: deinit after freeze is safe" {
 }
 
 test "GraphBuilder: frozen graph passes validation and algorithms" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const node0 = try builder.addNode();
@@ -85,18 +85,18 @@ test "GraphBuilder: frozen graph passes validation and algorithms" {
 }
 
 test "GraphBuilder: addEdge with non-existent source returns InvalidNode" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const destination = try builder.addNode();
-    const dangling_node = graphz.NodeId{ .index = 999 };
+    const dangling_node = azigmuth.NodeId{ .index = 999 };
 
     try testing.expectError(error.InvalidNode, builder.addEdge(dangling_node, destination, 0, .{}));
     try testing.expectError(error.InvalidNode, builder.addEdge(destination, dangling_node, 0, .{}));
 }
 
 test "GraphBuilder: addEdge with self-loop works correctly" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const node = try builder.addNode();
@@ -112,7 +112,7 @@ test "GraphBuilder: addEdge with self-loop works correctly" {
 }
 
 test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const a = try builder.addNode();
@@ -130,10 +130,10 @@ test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
 }
 
 test "graph_builder: freeze produces valid graph (validate passthrough)" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
-    var nodes: [6]graphz.NodeId = undefined;
+    var nodes: [6]azigmuth.NodeId = undefined;
     for (0..6) |i| nodes[i] = try builder.addNode();
 
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
@@ -165,7 +165,7 @@ test "graph_builder: freeze produces valid graph (validate passthrough)" {
 }
 
 test "graph_builder: degree cache is correct after freeze" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const source = try builder.addNode();
@@ -183,7 +183,7 @@ test "graph_builder: degree cache is correct after freeze" {
 }
 
 test "graph_builder: empty graph validates" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     var graph = try builder.freeze();
@@ -193,7 +193,7 @@ test "graph_builder: empty graph validates" {
 }
 
 test "graph_builder: single edge bidirectional check" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const a = try builder.addNode();
@@ -211,7 +211,7 @@ test "graph_builder: single edge bidirectional check" {
 }
 
 test "graph_builder: degree cache matches edge count for large graph" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const n = try builder.addNode();
@@ -233,7 +233,7 @@ test "graph_builder: degree cache matches edge count for large graph" {
 }
 
 test "graph_builder: freeze transfers ownership and builder becomes inert" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const a = try builder.addNode();
@@ -251,7 +251,7 @@ test "graph_builder: freeze transfers ownership and builder becomes inert" {
 }
 
 test "graph_builder: frozen graph lifetime is independent of builder" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     const node = try builder.addNode();
 
     var graph = try builder.freeze();
@@ -262,7 +262,7 @@ test "graph_builder: frozen graph lifetime is independent of builder" {
 }
 
 test "graph_builder: frozen graph remains mutable after freeze" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     const source = try builder.addNode();
     const destination = try builder.addNode();
     try builder.addEdge(source, destination, 0, .{});
@@ -286,11 +286,11 @@ test "graph_builder: frozen graph remains mutable after freeze" {
 }
 
 test "graph_builder: 500+ edges freeze produces a valid graph with zero debug violations" {
-    var builder = try graphz.GraphBuilder.init(testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
     const node_count: u32 = 100;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try builder.addNode();
 
     var edge_count: usize = 0;

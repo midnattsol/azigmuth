@@ -25,7 +25,7 @@ pub fn runAt(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, run_id
     }
     if (run_idx >= side_adj.group_count) return null;
     const group_idx = side_adj.first_group + run_idx;
-    if (group_idx >= graph.group_count) return null;
+    if (group_idx >= graph.loadGroupCount()) return null;
     const group = page_ops.groupAtConst(graph, group_idx);
     return .{ .start = group.start, .count = group.count };
 }
@@ -112,7 +112,7 @@ pub const BlockCursor = struct {
                 self.done = true;
                 return null;
             }
-            if (self.group_idx >= graph.group_count) {
+            if (self.group_idx >= graph.loadGroupCount()) {
                 self.done = true;
                 return null;
             }
@@ -208,7 +208,6 @@ pub const SideBuilder = struct {
         while (run_idx < self.run_count) : (run_idx += 1) {
             page_ops.groupAt(graph, first_group_idx + run_idx).* = .{
                 .start = self.runs[run_idx].start,
-                .next = constants.END_OF_CHAIN,
                 .count = self.runs[run_idx].count,
             };
         }

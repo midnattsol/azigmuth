@@ -1,9 +1,9 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const harness = @import("../harness.zig");
 
-fn prefillSource(graph: *graphz.Graph, source: graphz.NodeId, count: usize, allocator: std.mem.Allocator) ![]graphz.NodeId {
-    const destinations = try allocator.alloc(graphz.NodeId, count);
+fn prefillSource(graph: *azigmuth.Graph, source: azigmuth.NodeId, count: usize, allocator: std.mem.Allocator) ![]azigmuth.NodeId {
+    const destinations = try allocator.alloc(azigmuth.NodeId, count);
     for (destinations) |*destination| {
         destination.* = try graph.addNode();
         try graph.addEdge(source, destination.*, 0, .{});
@@ -12,12 +12,12 @@ fn prefillSource(graph: *graphz.Graph, source: graphz.NodeId, count: usize, allo
 }
 
 fn benchAddEdgePhaseSingleBlock(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
     const ops: usize = 64;
-    const destinations = try allocator.alloc(graphz.NodeId, ops);
+    const destinations = try allocator.alloc(azigmuth.NodeId, ops);
     defer allocator.free(destinations);
     for (destinations) |*destination| destination.* = try graph.addNode();
 
@@ -30,7 +30,7 @@ fn benchAddEdgePhaseSingleBlock(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAddEdgePhaseGrouped(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -38,7 +38,7 @@ fn benchAddEdgePhaseGrouped(allocator: std.mem.Allocator) !harness.Result {
     defer allocator.free(prefilled);
 
     const ops: usize = 64;
-    const destinations = try allocator.alloc(graphz.NodeId, ops);
+    const destinations = try allocator.alloc(azigmuth.NodeId, ops);
     defer allocator.free(destinations);
     for (destinations) |*destination| destination.* = try graph.addNode();
 
@@ -51,7 +51,7 @@ fn benchAddEdgePhaseGrouped(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAddEdgePhaseSuffixCow(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -59,7 +59,7 @@ fn benchAddEdgePhaseSuffixCow(allocator: std.mem.Allocator) !harness.Result {
     defer allocator.free(prefilled);
 
     const ops: usize = 64;
-    const destinations = try allocator.alloc(graphz.NodeId, ops);
+    const destinations = try allocator.alloc(azigmuth.NodeId, ops);
     defer allocator.free(destinations);
     for (destinations) |*destination| destination.* = try graph.addNode();
 
@@ -72,12 +72,12 @@ fn benchAddEdgePhaseSuffixCow(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchRemoveEdgeTail(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
     const edge_count: usize = 8_192;
-    const destinations = try allocator.alloc(graphz.NodeId, edge_count);
+    const destinations = try allocator.alloc(azigmuth.NodeId, edge_count);
     defer allocator.free(destinations);
 
     for (destinations) |*destination| {
@@ -106,14 +106,14 @@ fn benchRemoveEdgeTail(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchRemoveEdgeRepairRequired(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     // RepairRequired surfaces when removing from a non-tail block already at
     // the hard occupancy floor while both endpoints are block-sided.
     const source = try graph.addNode();
     const hub = try graph.addNode();
-    var fillers: [64]graphz.NodeId = undefined;
+    var fillers: [64]azigmuth.NodeId = undefined;
     for (0..fillers.len) |filler_idx| fillers[filler_idx] = try graph.addNode();
 
     try graph.addEdge(source, hub, 0, .{});
@@ -139,7 +139,7 @@ fn benchRemoveEdgeRepairRequired(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAddEdgeWithIdDuplicatePair(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.initWithOptions(allocator, .{ .multigraph = true });
+    var graph = try azigmuth.Graph.initWithOptions(allocator, .{ .multigraph = true });
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -157,13 +157,13 @@ fn benchAddEdgeWithIdDuplicatePair(allocator: std.mem.Allocator) !harness.Result
 }
 
 fn benchRemoveEdgeWithIdDuplicatePairTail(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.initWithOptions(allocator, .{ .multigraph = true });
+    var graph = try azigmuth.Graph.initWithOptions(allocator, .{ .multigraph = true });
     defer graph.deinit();
 
     const source = try graph.addNode();
     const destination = try graph.addNode();
     const ops: usize = 512;
-    const edge_ids = try allocator.alloc(graphz.EdgeId, ops);
+    const edge_ids = try allocator.alloc(azigmuth.EdgeId, ops);
     defer allocator.free(edge_ids);
     for (edge_ids) |*edge_id| edge_id.* = try graph.addEdgeWithId(source, destination, 0, .{});
 

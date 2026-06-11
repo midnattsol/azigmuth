@@ -24,6 +24,7 @@ pub const ForwardEntryView = struct {
     relation: u16,
     flags: types.EdgeFlags,
     edge_id: u32,
+    prop_row: u32 = 0,
 };
 
 pub const TINY_SLOT_TAG: u32 = 0x8000_0000;
@@ -97,7 +98,7 @@ pub fn forEachSlotInSide(
     while (cursor.next(graph)) |block_idx| {
         // Clamp: a corrupt sidecar must surface as a validation finding, not
         // as an out-of-bounds crash inside shared traversal helpers.
-        const live_count = @min(page_ops.blockLiveCount(graph, block_idx, side), 64);
+        const live_count = @min(page_ops.blockLiveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
         for (0..live_count) |slot| {
             try callback(graph, context, block_idx, @as(u7, @intCast(slot)));
         }
@@ -152,6 +153,7 @@ pub fn readForwardEntryAtSlot(
             .relation = entry.relation,
             .flags = entry.flags,
             .edge_id = entry.edge_id,
+            .prop_row = entry.prop_row,
         };
     }
 
@@ -163,6 +165,7 @@ pub fn readForwardEntryAtSlot(
         .relation = block.relations[slot],
         .flags = @bitCast(block.flags[slot]),
         .edge_id = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx).ids[slot] else 0,
+        .prop_row = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAtConst(graph, block_idx).rows[slot] else 0,
     };
 }
 
@@ -173,16 +176,41 @@ pub fn forEachNodeIdInSide(
     context: anytype,
     comptime callback: anytype,
 ) !void {
-    try forEachSlotInSide(graph, side_adj, side, context, struct {
-        fn run(
-            inner_graph: *const graph_core.GraphCore,
-            inner_context: @TypeOf(context),
-            block_idx: u32,
-            slot: u7,
-        ) !void {
-            try callback(inner_graph, inner_context, readNodeIdAtSlot(inner_graph, block_idx, slot, side));
+    if (side_adj.block_count == 0) return;
+
+    try adjacency.validateSideAdjLayoutForSide(graph, side_adj, side);
+
+    if (node_published_mod.NodePublished.isTiny(&side_adj)) {
+        const count = node_published_mod.NodePublished.tinyCount(&side_adj);
+        switch (side) {
+            .fwd => {
+                const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+                for (0..count) |entry_idx| try callback(graph, context, slot.entries[entry_idx].destination);
+            },
+            .rev => {
+                const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+                for (0..count) |entry_idx| try callback(graph, context, slot.sources[entry_idx]);
+            },
         }
-    }.run);
+        return;
+    }
+
+    // The block pointer is resolved once per block instead of once per slot,
+    // so the inner loop never re-walks the page directory.
+    var cursor = BlockCursor.init(side_adj);
+    while (cursor.next(graph)) |block_idx| {
+        // Clamp: a corrupt sidecar must surface as a validation finding, not
+        // as an out-of-bounds crash inside shared traversal helpers.
+        const live_count = @min(page_ops.blockLiveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
+        const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
+        for (0..live_count) |slot| {
+            const node_id = switch (side) {
+                .fwd => block.destinations[slot],
+                .rev => block.sources[slot],
+            };
+            try callback(graph, context, node_id);
+        }
+    }
 }
 
 pub fn forEachForwardEntryInSide(

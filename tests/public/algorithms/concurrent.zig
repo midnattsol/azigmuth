@@ -1,13 +1,13 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
 const StartFlag = std.atomic.Value(bool);
 
 const AddChildrenCtx = struct {
-    graph: *graphz.Graph,
-    parent: graphz.NodeId,
+    graph: *azigmuth.Graph,
+    parent: azigmuth.NodeId,
     start: *StartFlag,
     stop: *StartFlag,
     traversal_active: *StartFlag,
@@ -35,8 +35,8 @@ fn addChildrenLoop(ctx: *AddChildrenCtx) void {
 }
 
 const RemoveNodeOnceCtx = struct {
-    graph: *graphz.Graph,
-    node: graphz.NodeId,
+    graph: *azigmuth.Graph,
+    node: azigmuth.NodeId,
     start: *StartFlag,
     traversal_active: *StartFlag,
     attempted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -51,14 +51,14 @@ fn removeNodeOnce(ctx: *RemoveNodeOnceCtx) void {
     ctx.attempted.store(true, .release);
 }
 
-fn buildWideRootGraph(graph: *graphz.Graph, child_count: usize) !struct {
-    root: graphz.NodeId,
-    first_child: graphz.NodeId,
-    last_child: graphz.NodeId,
+fn buildWideRootGraph(graph: *azigmuth.Graph, child_count: usize) !struct {
+    root: azigmuth.NodeId,
+    first_child: azigmuth.NodeId,
+    last_child: azigmuth.NodeId,
 } {
     const root = try graph.addNode();
-    var first_child: ?graphz.NodeId = null;
-    var last_child: graphz.NodeId = undefined;
+    var first_child: ?azigmuth.NodeId = null;
+    var last_child: azigmuth.NodeId = undefined;
     for (0..child_count) |_| {
         const child = try graph.addNode();
         if (first_child == null) first_child = child;
@@ -69,7 +69,7 @@ fn buildWideRootGraph(graph: *graphz.Graph, child_count: usize) !struct {
 }
 
 test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const setup = try buildWideRootGraph(graph, 20_000);
@@ -97,7 +97,7 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
 }
 
 test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const setup = try buildWideRootGraph(graph, 5000);
@@ -125,7 +125,7 @@ test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
 }
 
 test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const setup = try buildWideRootGraph(graph, 5000);
@@ -152,7 +152,7 @@ test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
 }
 
 test "algorithms concurrent: bfs tolerates node removed before expansion" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const setup = try buildWideRootGraph(graph, 5000);
@@ -179,7 +179,7 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
 }
 
 test "algorithms concurrent: dfs tolerates node removed before expansion" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const setup = try buildWideRootGraph(graph, 5000);
@@ -206,7 +206,7 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
 }
 
 test "algorithms concurrent: cycle tolerates node removed during traversal" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const setup = try buildWideRootGraph(graph, 5000);

@@ -29,11 +29,11 @@ pub const ReadSession = struct {
     /// capture a `ReadSnapshot` performs. The session's call guard keeps the
     /// graph open; each iterator additionally pins its own reader epoch.
     pub fn neighbors(self: *const ReadSession, node: types.NodeId) types.GraphError!neighbor_iterator.NeighborIterator {
-        return neighbor_iterator.neighbors(self.core, node);
+        return neighbor_iterator.neighborsRetained(self.core, node, self.reader_token);
     }
 
     pub fn inNeighbors(self: *const ReadSession, node: types.NodeId) types.GraphError!neighbor_iterator.NeighborIterator {
-        return neighbor_iterator.inNeighbors(self.core, node);
+        return neighbor_iterator.inNeighborsRetained(self.core, node, self.reader_token);
     }
 
     pub fn outDegree(self: *const ReadSession, node: types.NodeId) types.GraphError!usize {

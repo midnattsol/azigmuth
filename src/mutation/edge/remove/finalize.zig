@@ -147,6 +147,9 @@ pub fn finalizeSingleRemoval(
     scratch.disarm();
     try publishRemoved(endpoints, source, destination, publish_adj.source_publish_adj, publish_adj.destination_publish_adj);
     try retireRemoved(graph, source_old_groups, destination_old_groups, builds.source_build, builds.destination_build);
+    // Single-removal scratch carries no superseded blocks, only the dropped
+    // edge's property row (when edge_properties is enabled).
+    try scratch.retireMarked(graph);
     _ = graph.edge_count.fetchSub(1, .release);
     return true;
 }

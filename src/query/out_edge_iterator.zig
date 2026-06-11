@@ -35,13 +35,18 @@ pub const OutEdgeIterator = struct {
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
+    cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_blocks_raw: usize = 0,
+    cached_span_live_raw: usize = 0,
     cached_node_page_index: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
     check_removed_destinations: bool,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
+    reader_token_retained: bool = false,
 
     /// Safeguard against corrupt cyclic group chains.
     groups_visited: u16 = 0,
@@ -66,6 +71,7 @@ pub const OutEdgeIterator = struct {
                 .destination = entry.destination,
                 .relation = entry.relation,
                 .flags = entry.flags,
+                .property_row = entry.prop_row,
             };
         }
         return null;
@@ -74,6 +80,12 @@ pub const OutEdgeIterator = struct {
     fn nextBlockOutEdge(self: *OutEdgeIterator) ?types.EdgeRef {
         while (true) {
             while (self.current_slot >= self.current_live) {
+                // Token liveness is validated once per block span (see
+                // NeighborIterator.nextBlockNeighbor).
+                if (!rcu.readerTokenActive(self.core, self.reader_token)) {
+                    self.reader_active = false;
+                    return null;
+                }
                 if (!side_traversal.loadNextOutEdgeSpan(self, self.core)) return null;
             }
 
@@ -81,16 +93,16 @@ pub const OutEdgeIterator = struct {
             self.current_slot += 1;
 
             const fwd_block = self.cached_fwd_block.?;
-            const fwd_ids = self.cached_fwd_ids.?;
             const destination_idx = fwd_block.destinations[slot];
 
             if (self.destinationRemoved(destination_idx)) continue;
 
             return types.EdgeRef{
-                .id = .{ .local = fwd_ids.ids[slot] },
+                .id = .{ .local = if (self.cached_fwd_ids) |fwd_ids| fwd_ids.ids[slot] else 0 },
                 .destination = destination_idx,
                 .relation = fwd_block.relations[slot],
                 .flags = @bitCast(fwd_block.flags[slot]),
+                .property_row = if (self.cached_fwd_props) |fwd_props| fwd_props.rows[slot] else 0,
             };
         }
     }
@@ -98,11 +110,13 @@ pub const OutEdgeIterator = struct {
     /// Returns the next outgoing edge with its identity, or null when exhausted.
     pub fn next(self: *OutEdgeIterator) ?types.EdgeRef {
         if (!self.reader_active) return null;
-        if (!rcu.readerTokenActive(self.core, self.reader_token)) {
-            self.reader_active = false;
-            return null;
+        if (self.tiny_mode) {
+            if (!rcu.readerTokenActive(self.core, self.reader_token)) {
+                self.reader_active = false;
+                return null;
+            }
+            return self.nextTinyOutEdge();
         }
-        if (self.tiny_mode) return self.nextTinyOutEdge();
         return self.nextBlockOutEdge();
     }
 
@@ -112,10 +126,11 @@ pub const OutEdgeIterator = struct {
 };
 
 /// Creates an OutEdgeIterator for the given node. Returns by value.
+/// Available in multigraph mode and in edge_properties mode.
 pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!OutEdgeIterator {
-    if (!graph.multigraph_enabled) return error.UnsupportedOperation;
+    if (!graph.multigraph_enabled and !graph.edge_properties_enabled) return error.UnsupportedOperation;
     const capture = try live_read_common.captureNodeSnapshot(graph, node);
-    errdefer rcu.readerExit(@constCast(graph), capture.reader_token);
+    errdefer live_read_common.releaseCapturedReader(graph, capture);
     const side_snapshot = live_read_common.sideAdj(.fwd, capture.node_adj_snapshot);
     try live_read_common.validateForwardSideQuick(graph, side_snapshot);
 

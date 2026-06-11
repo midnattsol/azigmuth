@@ -47,11 +47,12 @@ pub const ReadSession = graph_snapshot_api.ReadSession;
 pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
 pub const SnapshotNeighborIterator = graph_snapshot_api.SnapshotNeighborIterator;
 pub const SnapshotOutEdgeIterator = graph_snapshot_api.SnapshotOutEdgeIterator;
+pub const CsrView = @import("query/snapshot/csr.zig").CsrView;
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: anytype, entries_per_page: usize) void {
     const Directory = @TypeOf(directory.*);
     var leaf_idx: usize = 0;
-    while (leaf_idx < Directory.l1_count) : (leaf_idx += 1) {
+    while (leaf_idx < Directory.leaf_count) : (leaf_idx += 1) {
         const leaf = directory.leafSliceAtConst(leaf_idx) orelse continue;
         for (leaf) |*entry| {
             const raw = entry.load(.acquire);
@@ -134,6 +135,7 @@ pub const Graph = struct {
         var state_value = graph_core.GraphCore{
             .allocator = allocator,
             .multigraph_enabled = options.multigraph,
+            .edge_properties_enabled = options.edge_properties,
             .repair_fwd = .empty,
             .repair_rev = .empty,
         };
@@ -179,6 +181,10 @@ pub const Graph = struct {
         freeAtomicPages(types.EdgeBlockRev, alloc, &self.graph.edge_blocks_rev_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockGroup, alloc, &self.graph.edge_block_group_pages, constants.EDGE_GROUPS_PER_PAGE);
         if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, &self.graph.edge_blocks_fwd_id_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        if (self.graph.edge_properties_enabled) {
+            freeAtomicPages(types.EdgeBlockFwdProps, alloc, &self.graph.edge_blocks_fwd_prop_pages, constants.EDGE_BLOCKS_PER_PAGE);
+            freeAtomicPages(types.BlockMeta, alloc, &self.graph.prop_row_meta_pages, constants.PROP_ROWS_PER_PAGE);
+        }
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_fwd_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(u8, alloc, &self.graph.edge_blocks_fwd_live_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(u8, alloc, &self.graph.edge_blocks_rev_live_pages, constants.EDGE_BLOCKS_PER_PAGE);
@@ -400,6 +406,17 @@ pub const Graph = struct {
         return graph_snapshot_api.snapshot(core, ctx);
     }
 
+    /// Direct CSR export from the live published state under one reader
+    /// guard — no intermediate snapshot capture. Same logical contract as
+    /// snapshot().materializeCsr(ctx) at a fraction of the cost.
+    pub fn materializeCsr(self: *const Graph, ctx: Context) GraphError!CsrView {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        const reader_token = try rcu.readerEnter(core);
+        defer rcu.readerExit(core, reader_token);
+        return @import("query/snapshot/csr.zig").materializeForwardCsrLive(core, ctx.allocator);
+    }
+
     // ── Repair API ────────────────────────────────────────────────────
 
     pub fn repairNode(self: *Graph, node: types.NodeId) GraphError!types.RepairNodeSummary {
@@ -457,6 +474,21 @@ pub const Graph = struct {
         defer endCall(core);
         if (!core.multigraph_enabled) return error.UnsupportedOperation;
         return mutation.addEdgeWithId(core, source, destination, relation, flags);
+    }
+
+    /// Adds one edge and returns its stable property row id (edge_properties mode).
+    pub fn addEdgeWithProperties(self: *Graph, source: types.NodeId, destination: types.NodeId, relation: u16, flags: u16) GraphError!u32 {
+        const core = try self.beginMutCall();
+        defer endCall(core);
+        return mutation.addEdgeWithProperties(core, source, destination, relation, flags);
+    }
+
+    /// Point lookup of the stable property row for (source → destination).
+    /// Returns null when no live edge matches (edge_properties mode).
+    pub fn edgePropertyRow(self: *const Graph, source: types.NodeId, destination: types.NodeId) GraphError!?u32 {
+        const core = try self.beginConstCall();
+        defer endCall(core);
+        return graph_live_query.edgePropertyRow(core, source, destination);
     }
 
     pub fn removeEdge(self: *Graph, source: types.NodeId, destination: types.NodeId) GraphError!bool {

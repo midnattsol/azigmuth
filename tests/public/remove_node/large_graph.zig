@@ -1,15 +1,15 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 
 test "remove_node_stress: remove hub with 200 incoming edges correctness" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
     const sender_count: usize = 200;
-    var senders: [sender_count]graphz.NodeId = undefined;
+    var senders: [sender_count]azigmuth.NodeId = undefined;
     for (0..sender_count) |i| senders[i] = try graph.addNode();
     for (0..sender_count) |i| try graph.addEdge(senders[i], hub, 0, .{});
 
@@ -31,12 +31,12 @@ test "remove_node_stress: remove hub with 200 incoming edges correctness" {
 }
 
 test "remove_node_stress: remove node with outgoing to many destinations" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
     const target_count: usize = 150;
-    var targets: [target_count]graphz.NodeId = undefined;
+    var targets: [target_count]azigmuth.NodeId = undefined;
     for (0..target_count) |i| targets[i] = try graph.addNode();
     for (0..target_count) |i| try graph.addEdge(source, targets[i], 0, .{});
 
@@ -50,7 +50,7 @@ test "remove_node_stress: remove node with outgoing to many destinations" {
 }
 
 test "remove_node_stress: bidirectional edges removed correctly" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -73,7 +73,7 @@ test "remove_node_stress: bidirectional edges removed correctly" {
 }
 
 test "remove_node_stress: remove middle node in chain" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -103,11 +103,11 @@ test "remove_node_stress: remove middle node in chain" {
 }
 
 test "remove_node_stress: remove node with self-edge and many others" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
-    var others: [50]graphz.NodeId = undefined;
+    var others: [50]azigmuth.NodeId = undefined;
     for (0..50) |i| others[i] = try graph.addNode();
 
     try graph.addEdge(node, node, 0, .{});
@@ -125,11 +125,11 @@ test "remove_node_stress: remove node with self-edge and many others" {
 }
 
 test "remove_node_stress: remove nodes sequentially from large graph" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 50;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
@@ -150,11 +150,11 @@ test "remove_node_stress: remove nodes sequentially from large graph" {
 }
 
 test "remove_node_stress: remove half the nodes from dense graph" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 20;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
@@ -174,7 +174,7 @@ test "remove_node_stress: remove half the nodes from dense graph" {
 }
 
 test "remove_node_stress: remove node leaves others intact" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -193,7 +193,7 @@ test "remove_node_stress: remove node leaves others intact" {
 }
 
 test "remove_node_stress: removeNode with no edges works" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -203,10 +203,10 @@ test "remove_node_stress: removeNode with no edges works" {
 }
 
 test "remove_node_stress: edgeCount accuracy after removeNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const nodes: [10]graphz.NodeId = .{ try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode() };
+    const nodes: [10]azigmuth.NodeId = .{ try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode(), try graph.addNode() };
 
     for (0..10) |i| {
         for (0..10) |j| {
@@ -229,7 +229,7 @@ test "remove_node_stress: edgeCount accuracy after removeNode" {
 }
 
 test "remove_node_stress: removeNode then addEdge to survivor works" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -248,11 +248,11 @@ test "remove_node_stress: removeNode then addEdge to survivor works" {
 }
 
 test "remove_node_stress: graph with many nodes some removed" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 30;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {

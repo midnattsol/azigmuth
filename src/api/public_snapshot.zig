@@ -1,6 +1,20 @@
 //! Public `ReadSnapshot` handle — heap-allocated opaque snapshot captured from a
 //! live graph. It owns the copied logical node view and keeps the originating
 //! read guard alive until `deinit()`.
+//!
+//! Consistency contract: the captured view is **per-node coherent**, not a
+//! global point-in-time image. Each node's adjacency descriptor, flags, and
+//! degrees come from one atomic publication of that node, but two different
+//! nodes may be captured around a concurrent multi-node mutation (e.g. a
+//! predecessor already reflecting a `removeNode` whose target was captured
+//! live). Serialize writers against `snapshot()` externally when a globally
+//! consistent image is required.
+//!
+//! Lifetime/memory contract: while a `ReadSnapshot` is alive it pins a reader
+//! epoch, which prevents reclamation of every block retired after capture.
+//! Long-lived analytical views over a mutating graph should call
+//! `materializeCsr()` and release the snapshot: the returned `CsrView` is a
+//! detached flat-array copy that pins nothing.
 
 const std = @import("std");
 const internal = @import("../graph.zig");
@@ -71,5 +85,15 @@ pub const ReadSnapshot = opaque {
 
     pub fn hasCycle(self: *const ReadSnapshot, ctx: internal.Context) internal.GraphError!bool {
         return self.innerConst().hasCycle(ctx);
+    }
+
+    /// Copies the snapshot's logical forward adjacency into caller-owned flat
+    /// CSR arrays (`out_offsets` + `out_targets`). The result is detached from
+    /// the graph: it remains valid after this snapshot — and the graph itself —
+    /// are deinitialized, and it does not block retired-storage reclamation.
+    /// Intended for hand-off to external analytics tooling and for bounded-
+    /// memory long-lived read views. Caller frees with `CsrView.deinit`.
+    pub fn materializeCsr(self: *const ReadSnapshot, ctx: internal.Context) internal.GraphError!internal.CsrView {
+        return self.innerConst().materializeCsr(ctx);
     }
 };

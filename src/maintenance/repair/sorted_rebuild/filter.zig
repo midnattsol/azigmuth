@@ -12,6 +12,19 @@ pub const Scan = struct {
     block_count: usize = 0,
 };
 
+/// Collector for property rows of slots the rebuild drops (forward side,
+/// edge_properties mode). firstPos/advanceIter together visit every slot of
+/// every block exactly once, so each dropped row is recorded exactly once.
+pub const DroppedRows = struct {
+    list: *std.ArrayList(u32),
+    allocator: std.mem.Allocator,
+
+    pub fn record(self: DroppedRows, graph: *const graph_core.GraphCore, block_idx: u32, slot: u7) !void {
+        const row = side_ops.readForwardEntryAtSlot(graph, block_idx, slot).prop_row;
+        if (row != 0) try self.list.append(self.allocator, row);
+    }
+};
+
 fn keepSlot(
     graph: *const graph_core.GraphCore,
     block_idx: u32,
@@ -72,10 +85,12 @@ fn firstPos(
     live: u7,
     comptime side: adjacency.AdjSide,
     skip_source: ?u32,
-) ?u7 {
+    dropped: ?DroppedRows,
+) !?u7 {
     var slot: u7 = 0;
     while (slot < live) : (slot += 1) {
         if (keepSlot(graph, block_idx, slot, side, skip_source)) return slot;
+        if (dropped) |collector| try collector.record(graph, block_idx, slot);
     }
     return null;
 }
@@ -86,9 +101,10 @@ fn pushBlock(
     block_idx: u32,
     comptime side: adjacency.AdjSide,
     skip_source: ?u32,
+    dropped: ?DroppedRows,
 ) !void {
     const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, side));
-    const pos = firstPos(graph, block_idx, live, side, skip_source) orelse return;
+    const pos = (try firstPos(graph, block_idx, live, side, skip_source, dropped)) orelse return;
 
     rebuild_heap.heapPush(heap, .{
         .block_idx = block_idx,
@@ -104,10 +120,14 @@ pub fn advanceIter(
     iter: *rebuild_heap.BlockIter,
     comptime side: adjacency.AdjSide,
     skip_source: ?u32,
-) bool {
+    dropped: ?DroppedRows,
+) !bool {
     var pos = iter.pos + 1;
     while (pos < iter.live) : (pos += 1) {
-        if (!keepSlot(graph, iter.block_idx, pos, side, skip_source)) continue;
+        if (!keepSlot(graph, iter.block_idx, pos, side, skip_source)) {
+            if (dropped) |collector| try collector.record(graph, iter.block_idx, pos);
+            continue;
+        }
         iter.pos = pos;
         iter.current_key = blockKey(graph, iter.block_idx, pos, side);
         iter.current_id = blockId(graph, iter.block_idx, pos, side);
@@ -137,13 +157,14 @@ pub fn initHeap(
     skip_source: ?u32,
     allocator: std.mem.Allocator,
     block_count: usize,
+    dropped: ?DroppedRows,
 ) !std.ArrayList(rebuild_heap.BlockIter) {
     var heap = try std.ArrayList(rebuild_heap.BlockIter).initCapacity(allocator, @max(1, block_count));
     errdefer heap.deinit(allocator);
 
     var heap_cursor = side_ops.BlockCursor.init(side_view);
     while (heap_cursor.next(graph)) |block_idx| {
-        try pushBlock(graph, &heap, block_idx, side, skip_source);
+        try pushBlock(graph, &heap, block_idx, side, skip_source, dropped);
     }
     return heap;
 }

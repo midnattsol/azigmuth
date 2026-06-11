@@ -153,7 +153,7 @@ pub const GraphBuilder = struct {
     }
 
     fn blockCountForEdgeCount(edge_count: usize) !u16 {
-        const blocks = edge_count / 64 + @intFromBool(edge_count % 64 != 0);
+        const blocks = edge_count / constants.EDGES_PER_BLOCK + @intFromBool(edge_count % constants.EDGES_PER_BLOCK != 0);
         if (blocks > std.math.maxInt(u16)) return error.BlockLimitReached;
         return @intCast(blocks);
     }
@@ -182,19 +182,23 @@ pub const GraphBuilder = struct {
     }
 
     fn prepareBlockCapacity(self: *GraphBuilder, plan: *const FreezePlan) !struct { base_fwd: u32, base_rev: u32 } {
-        const base_fwd = self.graph.graph.block_fwd_count;
-        const base_rev = self.graph.graph.block_rev_count;
+        const base_fwd = self.graph.graph.loadBlockFwdCount();
+        const base_rev = self.graph.graph.loadBlockRevCount();
 
         const final_fwd_count = std.math.add(u32, base_fwd, plan.total_fwd_blocks) catch return error.OutOfMemory;
         const final_rev_count = std.math.add(u32, base_rev, plan.total_rev_blocks) catch return error.OutOfMemory;
 
         try page_ops.ensureBlockCapacity(&self.graph.graph, final_fwd_count, .fwd);
         try page_ops.ensureBlockCapacity(&self.graph.graph, final_rev_count, .rev);
+        if (self.graph.graph.edge_properties_enabled) {
+            const final_rows = std.math.add(u32, self.graph.graph.loadPropRowCount(), std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory) catch return error.OutOfMemory;
+            try page_ops.ensurePropRowCapacity(&self.graph.graph, final_rows);
+        }
 
         return .{ .base_fwd = base_fwd, .base_rev = base_rev };
     }
 
-    fn publishForwardRun(self: *GraphBuilder, source_index: u32, run: []const BuilderEdge, first_block: u32, block_count: u16) void {
+    fn publishForwardRun(self: *GraphBuilder, source_index: u32, run: []const BuilderEdge, first_block: u32, block_count: u16, next_prop_row: *u32) void {
         if (run.len == 0) return;
 
         var edge_index: usize = 0;
@@ -212,9 +216,14 @@ pub const GraphBuilder = struct {
             if (self.graph.graph.multigraph_enabled) {
                 id_block.?.* = std.mem.zeroes(types.EdgeBlockFwdIds);
             }
+            const prop_block = if (self.graph.graph.edge_properties_enabled)
+                page_ops.edgeBlockFwdPropsAt(&self.graph.graph, block_index)
+            else
+                null;
+            if (prop_block) |fwd_props| fwd_props.* = std.mem.zeroes(types.EdgeBlockFwdProps);
 
             const remaining = run.len - edge_index;
-            const live = @min(remaining, 64);
+            const live = @min(remaining, constants.EDGES_PER_BLOCK);
             for (0..live) |slot| {
                 const edge = run[edge_index + slot];
                 block.destinations[slot] = edge.destination;
@@ -223,6 +232,10 @@ pub const GraphBuilder = struct {
                 if (id_block) |fwd_ids| {
                     fwd_ids.ids[slot] = next_edge_id;
                     next_edge_id += 1;
+                }
+                if (prop_block) |fwd_props| {
+                    fwd_props.rows[slot] = next_prop_row.*;
+                    next_prop_row.* += 1;
                 }
             }
             page_ops.setBlockLiveCount(&self.graph.graph, block_index, .fwd, @intCast(live));
@@ -239,8 +252,11 @@ pub const GraphBuilder = struct {
     }
 
     fn publishForwardAdjacencies(self: *GraphBuilder, plan: *const FreezePlan, base_fwd: u32) void {
-        std.sort.heap(BuilderEdge, self.edges.items, {}, BuilderEdge.lessForward);
+        // pdq is safe here: insertion_order makes lessForward a total order,
+        // so the unstable sort is deterministic.
+        std.sort.pdq(BuilderEdge, self.edges.items, {}, BuilderEdge.lessForward);
 
+        var next_prop_row: u32 = self.graph.graph.loadPropRowCount();
         var next_block_index = base_fwd;
         var start: usize = 0;
         while (start < self.edges.items.len) {
@@ -248,9 +264,12 @@ pub const GraphBuilder = struct {
             var end = start + 1;
             while (end < self.edges.items.len and self.edges.items[end].source == source) : (end += 1) {}
             const block_count = plan.fwd_block_counts[source];
-            self.publishForwardRun(source, self.edges.items[start..end], next_block_index, block_count);
+            self.publishForwardRun(source, self.edges.items[start..end], next_block_index, block_count, &next_prop_row);
             next_block_index += block_count;
             start = end;
+        }
+        if (self.graph.graph.edge_properties_enabled) {
+            @atomicStore(u32, &self.graph.graph.prop_row_count, next_prop_row, .release);
         }
 
         std.debug.assert(next_block_index == base_fwd + plan.total_fwd_blocks);
@@ -289,8 +308,8 @@ pub const GraphBuilder = struct {
             const position = rev_positions[destination_index];
             rev_positions[destination_index] = position + 1;
 
-            const block_index = rev_first_blocks[destination_index] + position / 64;
-            const slot: usize = @intCast(position % 64);
+            const block_index = rev_first_blocks[destination_index] + position / constants.EDGES_PER_BLOCK;
+            const slot: usize = @intCast(position % constants.EDGES_PER_BLOCK);
             page_ops.edgeBlockAt(&self.graph.graph, block_index, .rev).sources[slot] = edge.source;
         }
 
@@ -302,7 +321,7 @@ pub const GraphBuilder = struct {
             const first_block = rev_first_blocks[node_index];
             var remaining = degree;
             for (0..block_count) |block_offset| {
-                const live = @min(remaining, 64);
+                const live = @min(remaining, constants.EDGES_PER_BLOCK);
                 const block_index = first_block + @as(u32, @intCast(block_offset));
                 page_ops.setBlockLiveCount(&self.graph.graph, block_index, .rev, @intCast(live));
                 remaining -= live;
@@ -338,8 +357,8 @@ pub const GraphBuilder = struct {
         self.resetPublishedAdjacencyBuffers();
         self.publishForwardAdjacencies(&plan, reservation.base_fwd);
         try self.publishReverseAdjacencies(&plan, reservation.base_rev);
-        self.graph.graph.block_fwd_count = reservation.base_fwd + plan.total_fwd_blocks;
-        self.graph.graph.block_rev_count = reservation.base_rev + plan.total_rev_blocks;
+        @atomicStore(u32, &self.graph.graph.block_fwd_count, reservation.base_fwd + plan.total_fwd_blocks, .release);
+        @atomicStore(u32, &self.graph.graph.block_rev_count, reservation.base_rev + plan.total_rev_blocks, .release);
         self.graph.graph.edge_count.store(@intCast(self.edges.items.len), .release);
         self.publishExactDegrees(&plan);
 

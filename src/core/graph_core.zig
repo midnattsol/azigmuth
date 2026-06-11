@@ -11,7 +11,7 @@ pub const TokenLivenessSlot = struct {
     state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
-pub const MAX_TRACKED_OVERFLOW_READERS: usize = 256;
+pub const MAX_TRACKED_OVERFLOW_READERS: usize = constants.MAX_TRACKED_OVERFLOW_READERS;
 pub const MAX_TOKEN_LIVENESS_SLOTS: usize = constants.MAX_READER_SLOTS + MAX_TRACKED_OVERFLOW_READERS;
 
 /// Concrete internal state of the graph engine.
@@ -19,15 +19,18 @@ pub const MAX_TOKEN_LIVENESS_SLOTS: usize = constants.MAX_READER_SLOTS + MAX_TRA
 /// Core implementation modules use this type directly so they get explicit
 /// fields and editor autocomplete without relying on `anytype` duck typing.
 pub const GraphCore = struct {
-    pub const NodePageDirectory = radix_directory.RadixDirectory(constants.NODE_PAGE_DIR_L1, constants.NODE_PAGE_DIR_L2);
-    pub const EdgeBlockPageDirectory = radix_directory.RadixDirectory(constants.EDGE_BLOCK_PAGE_DIR_L1, constants.EDGE_BLOCK_PAGE_DIR_L2);
-    pub const EdgeGroupPageDirectory = radix_directory.RadixDirectory(constants.EDGE_GROUP_PAGE_DIR_L1, constants.EDGE_GROUP_PAGE_DIR_L2);
+    pub const NodePageDirectory = radix_directory.RadixDirectory(constants.NODE_DIR.inline_pages, constants.NODE_DIR.l1, constants.NODE_DIR.l2);
+    pub const EdgeBlockPageDirectory = radix_directory.RadixDirectory(constants.EDGE_BLOCK_DIR.inline_pages, constants.EDGE_BLOCK_DIR.l1, constants.EDGE_BLOCK_DIR.l2);
+    pub const EdgeGroupPageDirectory = radix_directory.RadixDirectory(constants.EDGE_GROUP_DIR.inline_pages, constants.EDGE_GROUP_DIR.l1, constants.EDGE_GROUP_DIR.l2);
 
     allocator: std.mem.Allocator,
 
     /// Enables multigraph mode: multiple edges between the same (source,destination)
     /// pair are allowed, and `EdgeId` disambiguates them.
     multigraph_enabled: bool = false,
+
+    /// Enables stable per-edge property rows (see GraphOptions.edge_properties).
+    edge_properties_enabled: bool = false,
 
     /// Atomically-published node metadata pages for lock-free node lookup
     /// during concurrent reads and `addNode` growth.
@@ -55,6 +58,14 @@ pub const GraphCore = struct {
     /// as edge_blocks_fwd_pages.
     edge_blocks_fwd_id_pages: EdgeBlockPageDirectory = .{},
 
+    /// Per-forward-block property row sidecar pages (edge_properties mode).
+    /// Same block_idx and lifecycle as edge_blocks_fwd_pages.
+    edge_blocks_fwd_prop_pages: EdgeBlockPageDirectory = .{},
+
+    /// Per-property-row lifecycle metadata for the lock-free free/retired
+    /// row stacks (edge_properties mode). 256 rows per page.
+    prop_row_meta_pages: NodePageDirectory = .{},
+
     /// Per-group metadata pages for lock-free retired/free stacks.
     edge_block_group_meta_pages: EdgeGroupPageDirectory = .{},
 
@@ -72,6 +83,11 @@ pub const GraphCore = struct {
     free_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
     retired_blocks_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+
+    /// Tagged stack heads for property-row reuse (edge_properties mode):
+    /// rows of removed edges retire with an epoch and recycle once safe.
+    free_prop_rows_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    retired_prop_rows_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
 
     /// Tagged stack heads for tiny-slot reuse — same retire/reclaim discipline
     /// as edge blocks so superseded tiny slots return to circulation.
@@ -106,6 +122,9 @@ pub const GraphCore = struct {
     group_count: u32 = 0,
     tiny_fwd_count: u32 = 0,
     tiny_rev_count: u32 = 0,
+
+    /// Monotonic property-row counter. Row 0 is reserved as invalid/unset.
+    prop_row_count: u32 = 1,
 
     /// Number of writer mutations currently executing.
     active_writers: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -175,5 +194,33 @@ pub const GraphCore = struct {
 
     pub inline fn hasNode(self: *const GraphCore, node: types.NodeId) bool {
         return node.index < self.publishedNodeCount();
+    }
+
+    // ── Monotonic allocation counters ─────────────────────────────────
+    // Written with atomic RMW during allocation; every cross-thread read
+    // must go through these acquire loads (a plain read is a data race).
+
+    pub inline fn loadGroupCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.group_count), .acquire);
+    }
+
+    pub inline fn loadBlockFwdCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.block_fwd_count), .acquire);
+    }
+
+    pub inline fn loadBlockRevCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.block_rev_count), .acquire);
+    }
+
+    pub inline fn loadTinyFwdCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.tiny_fwd_count), .acquire);
+    }
+
+    pub inline fn loadTinyRevCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.tiny_rev_count), .acquire);
+    }
+
+    pub inline fn loadPropRowCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.prop_row_count), .acquire);
     }
 };

@@ -1,15 +1,15 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
 test "addEdge with NodeId from a different graph returns InvalidNode when index is out of bounds" {
-    var graph_a = try graphz.Graph.init(testing.allocator);
+    var graph_a = try azigmuth.Graph.init(testing.allocator);
     defer graph_a.deinit();
 
     const node_in_a = try graph_a.addNode();
 
-    var graph_b = try graphz.Graph.init(testing.allocator);
+    var graph_b = try azigmuth.Graph.init(testing.allocator);
     defer graph_b.deinit();
 
     // graph_b has fewer nodes than node_in_a.index, so the NodeId is out of bounds.
@@ -22,14 +22,14 @@ test "addEdge with NodeId from a different graph returns InvalidNode when index 
 }
 
 test "addEdge with NodeId from a different graph succeeds when index happens to be valid" {
-    var graph_a = try graphz.Graph.init(testing.allocator);
+    var graph_a = try azigmuth.Graph.init(testing.allocator);
     defer graph_a.deinit();
 
     _ = try graph_a.addNode(); // index 0
     _ = try graph_a.addNode(); // index 1
     const node_in_a = try graph_a.addNode(); // index 2
 
-    var graph_b = try graphz.Graph.init(testing.allocator);
+    var graph_b = try azigmuth.Graph.init(testing.allocator);
     defer graph_b.deinit();
 
     // Create exactly the same number of nodes so index 0 and 2 are valid.
@@ -51,7 +51,7 @@ test "addEdge with NodeId from a different graph succeeds when index happens to 
 }
 
 test "addEdge with NodeId beyond node count returns InvalidNode even if graph has nodes" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     _ = try graph.addNode();
@@ -63,7 +63,7 @@ test "addEdge with NodeId beyond node count returns InvalidNode even if graph ha
 }
 
 test "NodeId with zero index is valid after addNode called at least once" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     _ = try graph.addNode();

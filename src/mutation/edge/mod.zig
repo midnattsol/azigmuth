@@ -6,6 +6,7 @@ const remove = @import("remove.zig");
 
 pub const addEdge = add.addEdge;
 pub const addEdgeWithId = add.addEdgeWithId;
+pub const addEdgeWithProperties = add.addEdgeWithProperties;
 pub const addEdges = add_batch.addEdges;
 pub const removeEdge = remove.removeEdge;
 pub const removeEdgeWithId = remove.removeEdgeWithId;

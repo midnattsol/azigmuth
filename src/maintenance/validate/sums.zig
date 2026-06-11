@@ -28,7 +28,7 @@ pub fn sumContiguousBlocks(
 pub fn sumGroupedRuns(graph: *const graph_core.GraphCore, first_group: u32, group_count: u16, comptime side: common.Side) u64 {
     var total: u64 = 0;
     const end_group = std.math.add(u32, first_group, group_count) catch return total;
-    if (end_group > graph.group_count) return total;
+    if (end_group > graph.loadGroupCount()) return total;
     for (first_group..end_group) |group_index_usize| {
         const group_index: u32 = @intCast(group_index_usize);
         const group = page_ops.groupAtConst(graph, group_index);
@@ -53,7 +53,7 @@ pub fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_inde
         .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd),
         .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev),
     };
-    const live = @min(common.blockLive(graph, block_index, side), 64);
+    const live = @min(common.blockLive(graph, block_index, side), constants.EDGES_PER_BLOCK);
     var total: u64 = 0;
     for (0..live) |slot| {
         const candidate_index = switch (side) {

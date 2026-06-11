@@ -28,6 +28,7 @@ const SortedInput = struct {
     relation: u16,
     flags: u16,
     edge_id: u32 = 0,
+    prop_row: u32 = 0,
 };
 
 fn inputLessThan(_: void, lhs: SortedInput, rhs: SortedInput) bool {
@@ -40,6 +41,7 @@ const FwdEntry = struct {
     relation: u16,
     flags: u16,
     edge_id: u32,
+    prop_row: u32 = 0,
 };
 
 fn fwdEntryLessThan(_: void, lhs: FwdEntry, rhs: FwdEntry) bool {
@@ -76,6 +78,7 @@ fn buildForwardSide(
                 .relation = entry.relation,
                 .flags = @bitCast(entry.flags),
                 .edge_id = entry.edge_id,
+                .prop_row = entry.prop_row,
             });
         }
     }.run);
@@ -85,6 +88,7 @@ fn buildForwardSide(
             .relation = input.relation,
             .flags = input.flags,
             .edge_id = input.edge_id,
+            .prop_row = input.prop_row,
         });
     }
     std.sort.pdq(FwdEntry, entries.items, {}, fwdEntryLessThan);
@@ -95,7 +99,7 @@ fn buildForwardSide(
     // Small result: keep the tiny representation.
     const tiny_cap: usize = if (graph.multigraph_enabled) @import("../../core/tiny_config.zig").TINY_FWD_CAP_MULTI else @import("../../core/tiny_config.zig").TINY_FWD_CAP_SIMPLE;
     if (total <= tiny_cap) {
-        const slot_idx = try scratch.allocTinySlot(graph, .fwd);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
         const slot = page_ops.tinyFwdAt(graph, slot_idx);
         for (entries.items, 0..) |entry, entry_idx| {
             slot.entries[entry_idx] = .{
@@ -103,6 +107,7 @@ fn buildForwardSide(
                 .relation = entry.relation,
                 .flags = @bitCast(entry.flags),
                 .edge_id = entry.edge_id,
+                .prop_row = entry.prop_row,
             };
         }
         return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(total));
@@ -118,11 +123,13 @@ fn buildForwardSide(
         const take = @min(remaining.len, constants.EDGES_PER_BLOCK);
         const block = page_ops.edgeBlockAt(graph, emit_block_idx, .fwd);
         const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, emit_block_idx) else undefined;
+        const prop_block = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, emit_block_idx) else undefined;
         for (remaining[0..take], 0..) |entry, slot| {
             block.destinations[slot] = entry.destination_idx;
             block.relations[slot] = entry.relation;
             block.flags[slot] = entry.flags;
             if (graph.multigraph_enabled) id_block.ids[slot] = entry.edge_id;
+            if (graph.edge_properties_enabled) prop_block.rows[slot] = entry.prop_row;
         }
         page_ops.setBlockLiveCount(graph, emit_block_idx, .fwd, @intCast(take));
         remaining = remaining[take..];
@@ -141,7 +148,7 @@ fn buildReverseSide(
     // Fast path for the dominant fan-out shape: previously isolated
     // destination, few incoming copies — fill a tiny slot directly.
     if (published_side.block_count == 0 and added <= @import("../../core/tiny_config.zig").TINY_REV_CAP) {
-        const slot_idx = try scratch.allocTinySlot(graph, .rev);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
         const slot = page_ops.tinyRevAt(graph, slot_idx);
         for (0..added) |entry_idx| slot.sources[entry_idx] = source.index;
         return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(added));
@@ -168,7 +175,7 @@ fn buildReverseSide(
     if (total > constants.MAX_DEGREE_PER_SIDE) return error.DegreeLimitReached;
 
     if (total <= @import("../../core/tiny_config.zig").TINY_REV_CAP) {
-        const slot_idx = try scratch.allocTinySlot(graph, .rev);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
         const slot = page_ops.tinyRevAt(graph, slot_idx);
         for (sources.items, 0..) |source_idx, entry_idx| slot.sources[entry_idx] = source_idx;
         return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(total));
@@ -224,7 +231,7 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
     }
 
     // Claim the source forward side first.
-    const source_hot = try page_ops.ensureNodeHotAt(graph, source);
+    const source_hot = page_ops.nodeHotAt(graph, source);
     try source_hot.claimFwd();
     defer source_hot.releaseFwd();
 
@@ -243,6 +250,12 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
     } else {
         for (batch) |*input| input.edge_id = (try source_hot.nextEdgeId()).local;
         std.sort.pdq(SortedInput, batch, {}, inputLessThan);
+    }
+
+    // Stable property rows for the new edges; freed by scratch cleanup if any
+    // later fallible step rejects the batch.
+    if (graph.edge_properties_enabled) {
+        for (batch) |*input| input.prop_row = try scratch.allocPropRow(graph);
     }
 
     // Group by destination and claim every reverse side. Claims fail fast on

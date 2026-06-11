@@ -1,5 +1,5 @@
 const std = @import("std");
-const gz = @import("graphz");
+const gz = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 

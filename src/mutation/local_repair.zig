@@ -18,13 +18,16 @@ pub fn ensureTailCowGroupConstraint(
     _ = prepared;
 }
 
-fn copyBlock(graph: *graph_core.GraphCore, source_block_idx: u32, destination_block_idx: u32, comptime side: adjacency.AdjSide) void {
+pub fn copyBlock(graph: *graph_core.GraphCore, source_block_idx: u32, destination_block_idx: u32, comptime side: adjacency.AdjSide) void {
     switch (side) {
         .fwd => {
             page_ops.edgeBlockAt(graph, destination_block_idx, .fwd).* = page_ops.edgeBlockAtConst(graph, source_block_idx, .fwd).*;
             page_ops.setBlockLiveCount(graph, destination_block_idx, .fwd, page_ops.blockLiveCount(graph, source_block_idx, .fwd));
             if (graph.multigraph_enabled) {
                 page_ops.edgeBlockFwdIdsAt(graph, destination_block_idx).* = page_ops.edgeBlockFwdIdsAtConst(graph, source_block_idx).*;
+            }
+            if (graph.edge_properties_enabled) {
+                page_ops.edgeBlockFwdPropsAt(graph, destination_block_idx).* = page_ops.edgeBlockFwdPropsAtConst(graph, source_block_idx).*;
             }
         },
         .rev => {
@@ -91,12 +94,10 @@ pub fn appendPreparedBlock(
         const first_group_idx = try scratch.allocGroupSpan(graph, 2);
         page_ops.groupAt(graph, first_group_idx).* = .{
             .start = side_adj.first_block,
-            .next = constants.END_OF_CHAIN,
             .count = side_adj.block_count,
         };
         page_ops.groupAt(graph, first_group_idx + 1).* = .{
             .start = prepared.new_block,
-            .next = constants.END_OF_CHAIN,
             .count = 1,
         };
         side_adj.first_group = first_group_idx;
@@ -140,7 +141,6 @@ pub fn appendPreparedBlock(
     const cloned_first_group = try side_runs.cloneGroupedRuns(graph, side_adj, side_adj.group_count + 1, scratch);
     page_ops.groupAt(graph, cloned_first_group + side_adj.group_count).* = .{
         .start = prepared.new_block,
-        .next = constants.END_OF_CHAIN,
         .count = 1,
     };
     side_adj.first_group = cloned_first_group;
@@ -165,12 +165,10 @@ pub fn replaceTailBlock(
         const first_group_idx = try scratch.allocGroupSpan(graph, 2);
         page_ops.groupAt(graph, first_group_idx).* = .{
             .start = side_adj.first_block,
-            .next = constants.END_OF_CHAIN,
             .count = side_adj.block_count - 1,
         };
         page_ops.groupAt(graph, first_group_idx + 1).* = .{
             .start = prepared.new_block,
-            .next = constants.END_OF_CHAIN,
             .count = 1,
         };
         side_adj.first_group = first_group_idx;
@@ -210,7 +208,6 @@ pub fn replaceTailBlock(
     const cloned_tail_group = page_ops.groupAt(graph, cloned_first_group + side_adj.group_count - 1);
     page_ops.groupAt(graph, cloned_first_group + side_adj.group_count).* = .{
         .start = prepared.new_block,
-        .next = constants.END_OF_CHAIN,
         .count = 1,
     };
     cloned_tail_group.count -= 1;
@@ -236,12 +233,10 @@ pub fn removeTailBlock(
         const first_group_idx = try scratch.allocGroupSpan(graph, 2);
         page_ops.groupAt(graph, first_group_idx).* = .{
             .start = published_side.first_block,
-            .next = constants.END_OF_CHAIN,
             .count = published_side.block_count - 1,
         };
         page_ops.groupAt(graph, first_group_idx + 1).* = .{
             .start = new_block,
-            .next = constants.END_OF_CHAIN,
             .count = 1,
         };
         staging_side.first_group = first_group_idx;
@@ -298,7 +293,6 @@ pub fn removeTailBlock(
     const cloned_tail_group = page_ops.groupAt(graph, cloned_first_group + published_side.group_count - 1);
     page_ops.groupAt(graph, cloned_first_group + published_side.group_count).* = .{
         .start = new_block,
-        .next = constants.END_OF_CHAIN,
         .count = 1,
     };
     cloned_tail_group.count -= 1;

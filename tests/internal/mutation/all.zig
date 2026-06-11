@@ -1,4 +1,5 @@
 comptime {
+    _ = @import("sorted_bit.zig");
     _ = @import("clone_and_fastpath.zig");
     _ = @import("concurrent_mutation.zig");
     _ = @import("cow_guards.zig");

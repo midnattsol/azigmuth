@@ -1,14 +1,14 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
 test "read session: point reads without whole-graph capture" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var destinations: [8]graphz.NodeId = undefined;
+    var destinations: [8]azigmuth.NodeId = undefined;
     for (0..destinations.len) |i| {
         destinations[i] = try graph.addNode();
         try graph.addEdge(source, destinations[i], 0, .{});
@@ -29,7 +29,7 @@ test "read session: point reads without whole-graph capture" {
 }
 
 test "read session: keeps deinitChecked busy until closed" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     _ = try graph.addNode();
@@ -44,7 +44,7 @@ test "read session: keeps deinitChecked busy until closed" {
 }
 
 test "read session: observes mutations published after it opened" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -60,7 +60,7 @@ test "read session: observes mutations published after it opened" {
 }
 
 test "read session: invalid node surfaces InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     _ = try graph.addNode();

@@ -1,8 +1,8 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const testing = std.testing;
 
-fn expectNoViolations(graph: *graphz.Graph, allocator: std.mem.Allocator) !void {
+fn expectNoViolations(graph: *azigmuth.Graph, allocator: std.mem.Allocator) !void {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     const violations = try snapshot.debugValidate(.{ .allocator = allocator });
@@ -15,10 +15,10 @@ fn expectNoViolations(graph: *graphz.Graph, allocator: std.mem.Allocator) !void 
 
 test "mixed sequence: add, remove, repair, removeNode, add leaves a clean graph" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
-    var nodes: [10]graphz.NodeId = undefined;
+    var nodes: [10]azigmuth.NodeId = undefined;
     for (0..10) |idx| {
         nodes[idx] = try graph.addNode();
     }
@@ -50,10 +50,10 @@ test "mixed sequence: add, remove, repair, removeNode, add leaves a clean graph"
 
 test "mixed sequence: alternating addNode and addEdge with periodic repair stays clean" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
-    var nodes: [6]graphz.NodeId = undefined;
+    var nodes: [6]azigmuth.NodeId = undefined;
     for (0..6) |idx| {
         nodes[idx] = try graph.addNode();
     }
@@ -84,7 +84,7 @@ test "mixed sequence: alternating addNode and addEdge with periodic repair stays
 
 test "mixed sequence: addEdge, removeEdge, removeNode, addNode with the recycled slot" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();

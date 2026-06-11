@@ -1,15 +1,15 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 pub const SnapshotNeighbors = struct {
-    snapshot: ?*graphz.ReadSnapshot,
-    iterator: graphz.SnapshotNeighborIterator,
+    snapshot: ?*azigmuth.ReadSnapshot,
+    iterator: azigmuth.SnapshotNeighborIterator,
 
-    pub fn next(self: *SnapshotNeighbors) ?graphz.NodeId {
+    pub fn next(self: *SnapshotNeighbors) ?azigmuth.NodeId {
         return self.iterator.next();
     }
 
-    pub fn materialize(self: *SnapshotNeighbors, allocator: std.mem.Allocator) ![]graphz.NodeId {
+    pub fn materialize(self: *SnapshotNeighbors, allocator: std.mem.Allocator) ![]azigmuth.NodeId {
         return self.iterator.materialize(allocator);
     }
 
@@ -22,10 +22,10 @@ pub const SnapshotNeighbors = struct {
 };
 
 pub const SnapshotOutEdges = struct {
-    snapshot: ?*graphz.ReadSnapshot,
-    iterator: graphz.SnapshotOutEdgeIterator,
+    snapshot: ?*azigmuth.ReadSnapshot,
+    iterator: azigmuth.SnapshotOutEdgeIterator,
 
-    pub fn next(self: *SnapshotOutEdges) ?graphz.EdgeRef {
+    pub fn next(self: *SnapshotOutEdges) ?azigmuth.EdgeRef {
         return self.iterator.next();
     }
 
@@ -37,43 +37,43 @@ pub const SnapshotOutEdges = struct {
     }
 };
 
-pub fn neighbors(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !SnapshotNeighbors {
+pub fn neighbors(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) !SnapshotNeighbors {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     errdefer snapshot.deinit();
     return .{ .snapshot = snapshot, .iterator = try snapshot.neighbors(node) };
 }
 
-pub fn inNeighbors(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !SnapshotNeighbors {
+pub fn inNeighbors(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) !SnapshotNeighbors {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     errdefer snapshot.deinit();
     return .{ .snapshot = snapshot, .iterator = try snapshot.inNeighbors(node) };
 }
 
-pub fn outEdges(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !SnapshotOutEdges {
+pub fn outEdges(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) !SnapshotOutEdges {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     errdefer snapshot.deinit();
     return .{ .snapshot = snapshot, .iterator = try snapshot.outEdges(node) };
 }
 
-pub fn outDegree(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !usize {
+pub fn outDegree(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) !usize {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.outDegree(node);
 }
 
-pub fn inDegree(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) !usize {
+pub fn inDegree(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) !usize {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.inDegree(node);
 }
 
-pub fn neighborsMaterialized(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) ![]graphz.NodeId {
+pub fn neighborsMaterialized(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) ![]azigmuth.NodeId {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.neighborsMaterialized(node, .{ .allocator = allocator });
 }
 
-pub fn inNeighborsMaterialized(graph: *graphz.Graph, node: graphz.NodeId, allocator: std.mem.Allocator) ![]graphz.NodeId {
+pub fn inNeighborsMaterialized(graph: *azigmuth.Graph, node: azigmuth.NodeId, allocator: std.mem.Allocator) ![]azigmuth.NodeId {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.inNeighborsMaterialized(node, .{ .allocator = allocator });

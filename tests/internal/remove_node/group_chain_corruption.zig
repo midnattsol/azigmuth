@@ -25,7 +25,7 @@ test "removeNode corruption: grouped forward chain shorter than declared group c
     page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const g0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
@@ -112,7 +112,7 @@ test "removeNode corruption: truncated grouped forward chain with skipped live d
     page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const g0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
@@ -193,7 +193,7 @@ test "removeNode corruption: grouped reverse chain shorter than declared group c
     page_ops.setBlockLiveCount(&graph.graph, r1, .rev, @intCast(1));
 
     const g0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1 };
 
     const target_node = try graph.nodeAt(target);
     publish.clearPublishedSides(target_node);
@@ -237,7 +237,7 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     page_ops.setBlockLiveCount(&graph.graph, r1, .rev, @intCast(1));
 
     const g0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1 };
 
     const target_node = try graph.nodeAt(target);
     publish.clearPublishedSides(target_node);
@@ -264,7 +264,7 @@ test "removeNode corruption: out-of-range destination via grouped chain is rejec
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
 
     const group = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);

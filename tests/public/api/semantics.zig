@@ -2,12 +2,12 @@
 //! degree queries, and edge-case API contracts.
 
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
 test "api semantics: addEdge to removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const src = try graph.addNode();
@@ -18,7 +18,7 @@ test "api semantics: addEdge to removed node returns InvalidNode" {
 }
 
 test "api semantics: addEdge from removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const src = try graph.addNode();
@@ -29,7 +29,7 @@ test "api semantics: addEdge from removed node returns InvalidNode" {
 }
 
 test "api semantics: removeEdge on removed node source returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const src = try graph.addNode();
@@ -41,7 +41,7 @@ test "api semantics: removeEdge on removed node source returns InvalidNode" {
 }
 
 test "api semantics: removeEdge on removed node destination returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const src = try graph.addNode();
@@ -53,7 +53,7 @@ test "api semantics: removeEdge on removed node destination returns InvalidNode"
 }
 
 test "api semantics: repairNode on removed node returns InvalidNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -63,14 +63,14 @@ test "api semantics: repairNode on removed node returns InvalidNode" {
 }
 
 test "api semantics: edgeCount returns 0 for empty graph" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 }
 
 test "api semantics: nodeCount returns 0 for empty graph" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     try testing.expectEqual(@as(usize, 0), graph.nodeCount());

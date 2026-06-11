@@ -1,14 +1,14 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
-fn hasCycleOnGraph(graph: *graphz.Graph, allocator: std.mem.Allocator) !bool {
+fn hasCycleOnGraph(graph: *azigmuth.Graph, allocator: std.mem.Allocator) !bool {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.hasCycle(.{ .allocator = allocator });
 }
 
 test "empty graph has no cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     var graph = try builder.freeze();
@@ -17,7 +17,7 @@ test "empty graph has no cycle" {
 }
 
 test "single node without edges has no cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     _ = try builder.addNode();
@@ -28,7 +28,7 @@ test "single node without edges has no cycle" {
 }
 
 test "single node with self-loop has cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     const node = try builder.addNode();
@@ -40,7 +40,7 @@ test "single node with self-loop has cycle" {
 }
 
 test "two nodes no cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     const a = try builder.addNode();
@@ -53,7 +53,7 @@ test "two nodes no cycle" {
 }
 
 test "two nodes with cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     const a = try builder.addNode();
@@ -67,10 +67,10 @@ test "two nodes with cycle" {
 }
 
 test "three nodes triangle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [3]graphz.NodeId = undefined;
+    var nodes: [3]azigmuth.NodeId = undefined;
     for (0..3) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[1], nodes[2], 0, .{});
@@ -82,10 +82,10 @@ test "three nodes triangle" {
 }
 
 test "disconnected graph, one component has cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [4]graphz.NodeId = undefined;
+    var nodes: [4]azigmuth.NodeId = undefined;
     for (0..4) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
@@ -97,10 +97,10 @@ test "disconnected graph, one component has cycle" {
 }
 
 test "disconnected graph, no cycles" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [4]graphz.NodeId = undefined;
+    var nodes: [4]azigmuth.NodeId = undefined;
     for (0..4) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
@@ -111,10 +111,10 @@ test "disconnected graph, no cycles" {
 }
 
 test "dag with diamond shape has no cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [4]graphz.NodeId = undefined;
+    var nodes: [4]azigmuth.NodeId = undefined;
     for (0..4) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
@@ -127,10 +127,10 @@ test "dag with diamond shape has no cycle" {
 }
 
 test "cycle reached after an acyclic prefix is detected" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [5]graphz.NodeId = undefined;
+    var nodes: [5]azigmuth.NodeId = undefined;
     for (0..5) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[1], nodes[2], 0, .{});
@@ -144,10 +144,10 @@ test "cycle reached after an acyclic prefix is detected" {
 }
 
 test "cycle detection handles duplicate paths to completed nodes" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [5]graphz.NodeId = undefined;
+    var nodes: [5]azigmuth.NodeId = undefined;
     for (0..5) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
@@ -161,7 +161,7 @@ test "cycle detection handles duplicate paths to completed nodes" {
 }
 
 test "cycle detection ignores removed nodes" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();
@@ -175,11 +175,11 @@ test "cycle detection ignores removed nodes" {
 }
 
 test "cycle detection handles nodes with more than 64 outgoing edges" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     const node_count: u32 = 71;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |node_index| nodes[node_index] = try builder.addNode();
 
     for (1..node_count) |target_index| {
@@ -195,11 +195,11 @@ test "cycle detection handles nodes with more than 64 outgoing edges" {
 }
 
 test "cycle detection handles nodes with more than 64 outgoing edges and a self-cycle" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     const node_count: u32 = 71;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |node_index| nodes[node_index] = try builder.addNode();
 
     for (1..node_count) |target_index| {
@@ -216,12 +216,12 @@ test "cycle detection handles nodes with more than 64 outgoing edges and a self-
 }
 
 test "cycle detection with dense hub and many tombstoned sources is correct" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
     const sender_count: usize = 100;
-    var senders: [sender_count]graphz.NodeId = undefined;
+    var senders: [sender_count]azigmuth.NodeId = undefined;
     for (0..sender_count) |i| {
         senders[i] = try graph.addNode();
         try graph.addEdge(senders[i], hub, 0, .{});
@@ -242,7 +242,7 @@ test "cycle detection with dense hub and many tombstoned sources is correct" {
 }
 
 test "cycle detection with tombstoned self-loop node returns false" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const a = try graph.addNode();

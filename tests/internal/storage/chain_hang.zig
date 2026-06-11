@@ -23,7 +23,6 @@ fn makeAdjacencyGroupedWithInvalidDeclaredSpan(graph: *graph_mod.Graph, node: gr
         page_ops.groupAt(&graph.graph, g0).* = .{
             .start = published_adj.first_block_fwd,
             .count = existing_blocks,
-            .next = constants.END_OF_CHAIN,
         };
         const buf = try graph.nodeAt(node);
         publish.publishedFwdSide(buf).group_count = 2;

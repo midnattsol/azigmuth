@@ -1,14 +1,14 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 
 test "repair_budgeted: processes single node with repair debt" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var targets: [85]graphz.NodeId = undefined;
+    var targets: [85]azigmuth.NodeId = undefined;
     for (0..85) |i| {
         targets[i] = try graph.addNode();
         try graph.addEdge(source, targets[i], 0, .{});
@@ -26,14 +26,14 @@ test "repair_budgeted: processes single node with repair debt" {
 }
 
 test "repair_budgeted: processes multiple nodes in one call" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 5;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
-    var all_targets: [node_count][80]graphz.NodeId = undefined;
+    var all_targets: [node_count][80]azigmuth.NodeId = undefined;
     for (0..node_count) |i| {
         for (0..80) |j| {
             all_targets[i][j] = try graph.addNode();
@@ -54,7 +54,7 @@ test "repair_budgeted: processes multiple nodes in one call" {
 }
 
 test "repair_budgeted: returns zero when no repair debt" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -66,14 +66,14 @@ test "repair_budgeted: returns zero when no repair debt" {
 }
 
 test "repair_budgeted: max_nodes limits work done" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 10;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
-    var all_targets: [node_count][80]graphz.NodeId = undefined;
+    var all_targets: [node_count][80]azigmuth.NodeId = undefined;
     for (0..node_count) |i| {
         for (0..80) |j| {
             all_targets[i][j] = try graph.addNode();
@@ -92,12 +92,12 @@ test "repair_budgeted: max_nodes limits work done" {
 }
 
 test "repair_budgeted: node with both fwd and rev debt counted once" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
-    var targets: [80]graphz.NodeId = undefined;
-    var senders: [80]graphz.NodeId = undefined;
+    var targets: [80]azigmuth.NodeId = undefined;
+    var senders: [80]azigmuth.NodeId = undefined;
     for (0..80) |i| {
         targets[i] = try graph.addNode();
         try graph.addEdge(node, targets[i], 0, .{});
@@ -121,7 +121,7 @@ test "repair_budgeted: node with both fwd and rev debt counted once" {
 }
 
 test "repair_budgeted: empty graph returns zero" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const repaired = try graph.repairBudgeted(100);
@@ -129,7 +129,7 @@ test "repair_budgeted: empty graph returns zero" {
 }
 
 test "repair_budgeted: single node no edges returns zero" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     _ = try graph.addNode();
@@ -138,7 +138,7 @@ test "repair_budgeted: single node no edges returns zero" {
 }
 
 test "repair_budgeted: repair of node already optimal returns zero" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -156,14 +156,14 @@ test "repair_budgeted: repair of node already optimal returns zero" {
 }
 
 test "repair_budgeted: repeated calls make progress" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 5;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
-    var all_targets: [node_count][80]graphz.NodeId = undefined;
+    var all_targets: [node_count][80]azigmuth.NodeId = undefined;
     for (0..node_count) |i| {
         for (0..80) |j| {
             all_targets[i][j] = try graph.addNode();
@@ -188,12 +188,12 @@ test "repair_budgeted: repeated calls make progress" {
 }
 
 test "repair_budgeted: self-edge node repair works" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
-    var targets: [80]graphz.NodeId = undefined;
-    var senders: [80]graphz.NodeId = undefined;
+    var targets: [80]azigmuth.NodeId = undefined;
+    var senders: [80]azigmuth.NodeId = undefined;
     for (0..80) |i| {
         targets[i] = try graph.addNode();
         try graph.addEdge(node, targets[i], 0, .{});
@@ -214,11 +214,11 @@ test "repair_budgeted: self-edge node repair works" {
 }
 
 test "repair_budgeted: repair after removeNode processes tombstoned edges" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const hub = try graph.addNode();
-    var senders: [50]graphz.NodeId = undefined;
+    var senders: [50]azigmuth.NodeId = undefined;
     for (0..50) |i| senders[i] = try graph.addNode();
     for (0..50) |i| try graph.addEdge(senders[i], hub, 0, .{});
 
@@ -235,11 +235,11 @@ test "repair_budgeted: repair after removeNode processes tombstoned edges" {
 }
 
 test "repair_budgeted: group count at max_boundary triggers repair" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var targets: [250]graphz.NodeId = undefined;
+    var targets: [250]azigmuth.NodeId = undefined;
     for (0..250) |i| targets[i] = try graph.addNode();
 
     for (0..250) |i| try graph.addEdge(source, targets[i], 0, .{});
@@ -258,14 +258,14 @@ test "repair_budgeted: group count at max_boundary triggers repair" {
 }
 
 test "repair_budgeted: verify repair debt queue is consumed" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node_count: usize = 8;
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
-    var all_targets: [node_count][65]graphz.NodeId = undefined;
+    var all_targets: [node_count][65]azigmuth.NodeId = undefined;
     for (0..node_count) |i| {
         for (0..65) |j| {
             all_targets[i][j] = try graph.addNode();

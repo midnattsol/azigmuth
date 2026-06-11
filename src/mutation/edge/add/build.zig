@@ -14,9 +14,11 @@ pub fn insertForwardEdge(
     relation: u16,
     flags: u16,
     edge_id: u32,
+    prop_row: u32,
 ) !void {
     const forward_block = page_ops.edgeBlockAt(graph, block_idx, .fwd);
     const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx) else undefined;
+    const prop_block = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, block_idx) else undefined;
     const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
     var insertion_point: u7 = 0;
     var search_end: u7 = @intCast(live);
@@ -41,12 +43,14 @@ pub fn insertForwardEdge(
         forward_block.relations[shift] = forward_block.relations[shift - 1];
         forward_block.flags[shift] = forward_block.flags[shift - 1];
         if (graph.multigraph_enabled) id_block.ids[shift] = id_block.ids[shift - 1];
+        if (graph.edge_properties_enabled) prop_block.rows[shift] = prop_block.rows[shift - 1];
         shift -= 1;
     }
     forward_block.destinations[insertion_point] = destination.index;
     forward_block.relations[insertion_point] = relation;
     forward_block.flags[insertion_point] = @bitCast((flags));
     if (graph.multigraph_enabled) id_block.ids[insertion_point] = edge_id;
+    if (graph.edge_properties_enabled) prop_block.rows[insertion_point] = prop_row;
     page_ops.setBlockLiveCount(graph, block_idx, .fwd, @intCast(live + 1));
 }
 
@@ -82,13 +86,13 @@ pub fn canUseTinyRevSide(destination_side: types.SideAdj) bool {
 }
 
 fn cloneTinyFwdIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj, scratch: *common.MutationScratch) !u32 {
-    const new_slot_idx = try scratch.allocTinySlot(graph, .fwd);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
     page_ops.tinyFwdAt(graph, new_slot_idx).* = page_ops.tinyFwdAtConst(graph, side_adj.first_block).*;
     return new_slot_idx;
 }
 
 fn cloneTinyRevIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj, scratch: *common.MutationScratch) !u32 {
-    const new_slot_idx = try scratch.allocTinySlot(graph, .rev);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
     page_ops.tinyRevAt(graph, new_slot_idx).* = page_ops.tinyRevAtConst(graph, side_adj.first_block).*;
     return new_slot_idx;
 }
@@ -100,13 +104,14 @@ pub fn buildForwardTinyOrPromoted(
     relation: u16,
     raw_flags: u16,
     edge_id: u32,
+    prop_row: u32,
     scratch: *common.MutationScratch,
 ) !types.SideAdj {
     const cap: u16 = if (graph.multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE;
     if (source_side.block_count == 0) {
-        const slot_idx = try scratch.allocTinySlot(graph, .fwd);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
         const slot = page_ops.tinyFwdAt(graph, slot_idx);
-        _ = try node_tiny.insertFwd(slot, 0, destination.index, relation, @bitCast(raw_flags), edge_id, graph.multigraph_enabled);
+        _ = try node_tiny.insertFwd(slot, 0, destination.index, relation, @bitCast(raw_flags), edge_id, prop_row, graph.multigraph_enabled);
         return node_published.NodePublished.makeTiny(slot_idx, 1);
     }
 
@@ -114,7 +119,7 @@ pub fn buildForwardTinyOrPromoted(
     if (count < cap) {
         const slot_idx = try cloneTinyFwdIntoNewSlot(graph, source_side, scratch);
         const slot = page_ops.tinyFwdAt(graph, slot_idx);
-        const new_count = try node_tiny.insertFwd(slot, count, destination.index, relation, @bitCast(raw_flags), edge_id, graph.multigraph_enabled);
+        const new_count = try node_tiny.insertFwd(slot, count, destination.index, relation, @bitCast(raw_flags), edge_id, prop_row, graph.multigraph_enabled);
         return node_published.NodePublished.makeTiny(slot_idx, new_count);
     }
 
@@ -129,9 +134,10 @@ pub fn buildForwardTinyOrPromoted(
         block.relations[entry_idx] = entry.relation;
         block.flags[entry_idx] = @bitCast(entry.flags);
         if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx).ids[entry_idx] = entry.edge_id;
+        if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, block_idx).rows[entry_idx] = entry.prop_row;
     }
     page_ops.setBlockLiveCount(graph, block_idx, .fwd, @intCast(count));
-    try insertForwardEdge(graph, block_idx, destination, relation, raw_flags, edge_id);
+    try insertForwardEdge(graph, block_idx, destination, relation, raw_flags, edge_id, prop_row);
     return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
 }
 
@@ -143,7 +149,7 @@ pub fn buildReverseTinyOrPromoted(
 ) !types.SideAdj {
     const cap: u16 = tiny_config.TINY_REV_CAP;
     if (destination_side.block_count == 0) {
-        const slot_idx = try scratch.allocTinySlot(graph, .rev);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
         const slot = page_ops.tinyRevAt(graph, slot_idx);
         _ = node_tiny.insertRev(slot, 0, source.index);
         return node_published.NodePublished.makeTiny(slot_idx, 1);

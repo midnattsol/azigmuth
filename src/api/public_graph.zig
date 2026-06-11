@@ -110,6 +110,14 @@ pub const Graph = opaque {
         return @ptrCast(snapshot_handle);
     }
 
+    /// Direct CSR export from the live published state: one reader guard,
+    /// no intermediate snapshot capture, never-published nodes cost a single
+    /// atomic load. The detached `CsrView` is caller-owned (see
+    /// `ReadSnapshot.materializeCsr` for the contract).
+    pub fn materializeCsr(self: *const Graph, ctx: internal.Context) internal.GraphError!internal.CsrView {
+        return self.innerConst().materializeCsr(ctx);
+    }
+
     /// Opens a cheap point-read session over the live published state.
     /// No O(node_count) capture happens; reads may observe newer published
     /// states as writers progress. Use `snapshot` for a fixed view.
@@ -154,6 +162,22 @@ pub const Graph = opaque {
     /// Returns the assigned EdgeId in multigraph mode.
     pub fn addEdgeWithId(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!internal.EdgeId {
         return self.inner().addEdgeWithId(source, destination, relation, @bitCast(flags));
+    }
+
+    /// Adds one edge and returns its stable property row id, usable as an
+    /// index into caller-owned `EdgeColumn(T)` stores. Requires
+    /// `GraphOptions.edge_properties`.
+    pub fn addEdgeWithProperties(self: *Graph, source: internal.NodeId, destination: internal.NodeId, relation: u16, flags: internal.EdgeFlags) internal.GraphError!u32 {
+        return self.inner().addEdgeWithProperties(source, destination, relation, @bitCast(flags));
+    }
+
+    /// Point lookup of the stable property row for (source → destination);
+    /// null when no live edge matches. Requires `GraphOptions.edge_properties`.
+    /// In multigraph mode an arbitrary matching parallel edge's row is
+    /// returned; use snapshot `outEdges` + `EdgeRef.property_row` to
+    /// disambiguate.
+    pub fn edgePropertyRow(self: *const Graph, source: internal.NodeId, destination: internal.NodeId) internal.GraphError!?u32 {
+        return self.innerConst().edgePropertyRow(source, destination);
     }
 
     /// Removes one edge in simple mode, or all duplicates for the pair in multigraph mode.

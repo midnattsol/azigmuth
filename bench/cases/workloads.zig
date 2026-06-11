@@ -3,7 +3,7 @@
 //! numbers for the access patterns that matter, not just micro-paths.
 
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const harness = @import("../harness.zig");
 
 /// Deterministic LCG so runs are comparable across branches.
@@ -21,12 +21,12 @@ const Rng = struct {
 };
 
 fn benchTinyChurn(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const pair_count: usize = 512;
     const cycles: usize = 8;
-    var nodes: [2 * pair_count]graphz.NodeId = undefined;
+    var nodes: [2 * pair_count]azigmuth.NodeId = undefined;
     for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const start_ns = harness.nowNs();
@@ -52,12 +52,12 @@ fn benchTinyChurn(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAddEdgeMonotonic(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const edge_count: usize = 4096;
     const source = try graph.addNode();
-    const destinations = try allocator.alloc(graphz.NodeId, edge_count);
+    const destinations = try allocator.alloc(azigmuth.NodeId, edge_count);
     defer allocator.free(destinations);
     for (destinations) |*destination| destination.* = try graph.addNode();
 
@@ -70,12 +70,12 @@ fn benchAddEdgeMonotonic(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAddEdgeRandomOrder(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const edge_count: usize = 4096;
     const source = try graph.addNode();
-    const destinations = try allocator.alloc(graphz.NodeId, edge_count);
+    const destinations = try allocator.alloc(azigmuth.NodeId, edge_count);
     defer allocator.free(destinations);
     for (destinations) |*destination| destination.* = try graph.addNode();
 
@@ -85,7 +85,7 @@ fn benchAddEdgeRandomOrder(allocator: std.mem.Allocator) !harness.Result {
     while (shuffle_idx > 1) {
         shuffle_idx -= 1;
         const swap_idx = rng.upTo(shuffle_idx + 1);
-        std.mem.swap(graphz.NodeId, &destinations[shuffle_idx], &destinations[swap_idx]);
+        std.mem.swap(azigmuth.NodeId, &destinations[shuffle_idx], &destinations[swap_idx]);
     }
 
     const start_ns = harness.nowNs();
@@ -96,14 +96,72 @@ fn benchAddEdgeRandomOrder(allocator: std.mem.Allocator) !harness.Result {
     return .{ .ops = edge_count, .elapsed_ns = elapsed_ns };
 }
 
+fn benchPointReadSessionReuse(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try azigmuth.Graph.init(allocator);
+    defer graph.deinit();
+
+    const node_count: usize = 100_000;
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
+    defer allocator.free(nodes);
+    for (nodes) |*node| node.* = try graph.addNode();
+    for (0..64) |neighbor_idx| {
+        try graph.addEdge(nodes[0], nodes[neighbor_idx + 1], 0, .{});
+    }
+
+    // One long-lived session, many point reads — the documented pattern.
+    var session = try graph.readSession(allocator);
+    defer session.deinit();
+
+    const ops: usize = 65536;
+    var seen: usize = 0;
+    const start_ns = harness.nowNs();
+    for (0..ops) |_| {
+        var it = try session.neighbors(nodes[0]);
+        defer it.deinit();
+        while (it.next() != null) seen += 1;
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    if (seen != 64 * ops) return error.CorruptGraph;
+    return .{ .ops = ops, .elapsed_ns = elapsed_ns };
+}
+
+fn benchCsrDirectSparse(allocator: std.mem.Allocator) !harness.Result {
+    var graph = try azigmuth.Graph.init(allocator);
+    defer graph.deinit();
+
+    // Sparse 100K-node graph: direct CSR export must not pay the full
+    // SoA snapshot capture for the untouched majority.
+    const node_count: usize = 100_000;
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
+    defer allocator.free(nodes);
+    for (nodes) |*node| node.* = try graph.addNode();
+    for (0..64) |neighbor_idx| {
+        try graph.addEdge(nodes[0], nodes[neighbor_idx + 1], 0, .{});
+    }
+
+    const ops: usize = 32;
+    var total_edges: u64 = 0;
+    const start_ns = harness.nowNs();
+    for (0..ops) |_| {
+        var csr = try graph.materializeCsr(.{ .allocator = allocator });
+        defer csr.deinit(allocator);
+        total_edges += csr.edgeCount();
+    }
+    const elapsed_ns = harness.nowNs() - start_ns;
+
+    if (total_edges != 64 * ops) return error.CorruptGraph;
+    return .{ .ops = ops, .elapsed_ns = elapsed_ns };
+}
+
 fn benchPointReadSnapshot(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     // Sparse graph: the snapshot capture cost is dominated by node count,
     // which is exactly what a point read should NOT have to pay.
     const node_count: usize = 100_000;
-    const nodes = try allocator.alloc(graphz.NodeId, node_count);
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
     defer allocator.free(nodes);
     for (nodes) |*node| node.* = try graph.addNode();
     for (0..64) |neighbor_idx| {
@@ -126,12 +184,12 @@ fn benchPointReadSnapshot(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchRemoveEdgeRandomOrder(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const edge_count: usize = 4096;
     const source = try graph.addNode();
-    const destinations = try allocator.alloc(graphz.NodeId, edge_count);
+    const destinations = try allocator.alloc(azigmuth.NodeId, edge_count);
     defer allocator.free(destinations);
     for (destinations) |*destination| {
         destination.* = try graph.addNode();
@@ -143,7 +201,7 @@ fn benchRemoveEdgeRandomOrder(allocator: std.mem.Allocator) !harness.Result {
     while (shuffle_idx > 1) {
         shuffle_idx -= 1;
         const swap_idx = rng.upTo(shuffle_idx + 1);
-        std.mem.swap(graphz.NodeId, &destinations[shuffle_idx], &destinations[swap_idx]);
+        std.mem.swap(azigmuth.NodeId, &destinations[shuffle_idx], &destinations[swap_idx]);
     }
 
     const ops: usize = edge_count / 2;
@@ -164,11 +222,11 @@ fn benchRemoveEdgeRandomOrder(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchPointReadSession(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const node_count: usize = 100_000;
-    const nodes = try allocator.alloc(graphz.NodeId, node_count);
+    const nodes = try allocator.alloc(azigmuth.NodeId, node_count);
     defer allocator.free(nodes);
     for (nodes) |*node| node.* = try graph.addNode();
     for (0..64) |neighbor_idx| {
@@ -192,12 +250,12 @@ fn benchPointReadSession(allocator: std.mem.Allocator) !harness.Result {
 }
 
 fn benchAddEdgesBatch(allocator: std.mem.Allocator) !harness.Result {
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     const edge_count: usize = 4096;
     const source = try graph.addNode();
-    const inputs = try allocator.alloc(graphz.EdgeInput, edge_count);
+    const inputs = try allocator.alloc(azigmuth.EdgeInput, edge_count);
     defer allocator.free(inputs);
     for (inputs) |*input| input.* = .{ .destination = try graph.addNode() };
 
@@ -212,9 +270,11 @@ fn benchAddEdgesBatch(allocator: std.mem.Allocator) !harness.Result {
 pub const cases = [_]harness.Case{
     .{ .name = "workload.addedges_batch", .run = benchAddEdgesBatch },
     .{ .name = "workload.point_read_session", .run = benchPointReadSession },
+    .{ .name = "workload.point_read_session_reuse", .run = benchPointReadSessionReuse },
     .{ .name = "workload.tiny_churn", .run = benchTinyChurn },
     .{ .name = "workload.addedge_monotonic", .run = benchAddEdgeMonotonic },
     .{ .name = "workload.addedge_random_order", .run = benchAddEdgeRandomOrder },
     .{ .name = "workload.removeedge_random_order", .run = benchRemoveEdgeRandomOrder },
     .{ .name = "workload.point_read_snapshot", .run = benchPointReadSnapshot },
+    .{ .name = "workload.csr_direct_sparse", .run = benchCsrDirectSparse },
 };

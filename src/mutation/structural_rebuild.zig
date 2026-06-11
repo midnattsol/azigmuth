@@ -1,7 +1,9 @@
 const std = @import("std");
+const adjacency = @import("../adjacency/mod.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const common = @import("common.zig");
+const rebuild_common = @import("edge/remove/rebuild/common.zig");
 
 pub fn rebuildAfterSingleRemoval(
     graph: *graph_core.GraphCore,
@@ -9,6 +11,7 @@ pub fn rebuildAfterSingleRemoval(
     published_side: *const types.SideAdj,
     old_block: u32,
     new_block: ?u32,
+    comptime side: adjacency.AdjSide,
     scratch: *common.MutationScratch,
 ) !void {
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
@@ -21,5 +24,7 @@ pub fn rebuildAfterSingleRemoval(
         null,
         &block_list,
     );
-    try common.buildSideFromBlocks(staging_side, graph, block_list.items, scratch);
+    // Bounded build: occupancy-floor or run-bound violations trigger the
+    // synchronous dense repack instead of surfacing RepairRequired.
+    staging_side.* = try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, side);
 }

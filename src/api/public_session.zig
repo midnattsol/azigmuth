@@ -4,6 +4,15 @@
 //! query reads the current published adjacency under RCU. Reads through the
 //! same session may therefore observe newer published states as writers make
 //! progress; use `ReadSnapshot` when a fixed view is required.
+//!
+//! Usage contract for performance: a session is meant to be OPENED ONCE and
+//! REUSED for many point reads. Iterators created through it retain the
+//! session's reader token (one atomic increment per read); a reused-session
+//! point read measures in the hundreds of nanoseconds, while creating and
+//! destroying a session per read costs roughly an order of magnitude more —
+//! and with `std.heap.page_allocator` each handle allocation is an mmap
+//! syscall. If you must churn sessions, pass an allocator with reuse (GPA,
+//! arena, fixed buffer).
 
 const std = @import("std");
 const internal = @import("../graph.zig");

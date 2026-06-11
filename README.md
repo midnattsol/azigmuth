@@ -1,4 +1,4 @@
-# graphz
+# azigmuth
 
 A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 
@@ -8,31 +8,42 @@ A directed graph storage library for Zig based on the RB-CSR design in `RFC.md`.
 - sorted fixed-size struct-of-arrays edge blocks (dense, cache-line aligned)
 - local repair and validation
 - tombstone-based node deletion (Phase 2) with debt/repair cleanup
+- stable per-edge property rows + caller-owned columnar stores (Phase 7)
 - a `GraphBuilder` bulk-construction handle
 
 ## Design limits
 
-- Max degree per side per node: **16,777,216** (`262,144 * 64` edges).
+Capacity ceilings derive from the comptime **storage profile** (RFC §2.9.1);
+page directories are lazy, so ceilings cost nothing until used:
+
+- `default` profile: ~2.1 G edge blocks per direction (≈137 G edges — in
+  practice bounded by RAM at ~12–13 B/edge), ~4.3 G nodes, ~11 KB fixed
+  footprint per `Graph` instance.
+- `embedded` profile: ≈266 K edges in 16-edge blocks (128 B forward blocks,
+  ~4× less waste per sparse node), ~66 K nodes, 8 reader slots, ~1.3 KB fixed
+  footprint. Select with `-Dprofile=embedded`, or in executable builds with
+  `pub const azigmuth_options: az.Options = .{ .profile = .embedded };`.
+- `edges_per_block` (16/32/64) is itself a profile field for custom profiles.
+- Max degree per side per node: `(2²⁶−1) × 64` ≈ **4.29 G** edges.
 - Max block groups per node: **4** (`MAX_GROUPS_PER_NODE`).
-- Supernodes (> 16.7M edges in one direction) are not supported in the
-  current storage format — accepted architecture trade-off.
 
 Implementation notes:
 
 - Per-node state is split into `NodeMeta` (atomic publication word),
   `NodePublished` (double-buffered side descriptors, degrees, sorted bits)
   and `NodeHot` (writer claims, edge-id counter, padded `32 B` stride).
-- Edge blocks are struct-of-arrays (512 B forward / 256 B reverse, 64-byte
-  aligned); per-block live counts live in a one-cache-line sidecar page.
+- Edge blocks are struct-of-arrays (profile-sized: 512 B forward / 256 B
+  reverse at the default 64 edges per block; 128 B / 64 B at 16), 64-byte
+  aligned; per-block live counts live in a one-cache-line sidecar page.
 
 ## Basic usage
 
 ```zig
 const std = @import("std");
-const gz = @import("graphz");
+const az = @import("azigmuth");
 
 pub fn main() !void {
-    var g = try gz.Graph.init(std.heap.page_allocator);
+    var g = try az.Graph.init(std.heap.page_allocator);
     defer g.deinit();
 
     const a = try g.addNode();
@@ -64,9 +75,9 @@ pub fn main() !void {
 ## Builder
 
 ```zig
-const gz = @import("graphz");
+const az = @import("azigmuth");
 
-var builder = try gz.GraphBuilder.init(allocator);
+var builder = try az.GraphBuilder.init(allocator);
 defer builder.deinit();
 
 const a = try builder.addNode();
@@ -178,7 +189,7 @@ all-or-nothing: duplicates (in simple-graph mode) or invalid destinations
 reject the entire batch before anything is published.
 
 ```zig
-const inputs = [_]gz.EdgeInput{
+const inputs = [_]az.EdgeInput{
     .{ .destination = b },
     .{ .destination = c, .relation = 7 },
 };
@@ -190,6 +201,12 @@ _ = try g.addEdges(a, &inputs);
 `readSession()` is the cheap counterpart to `snapshot()`: it opens in O(1) and
 reads the live published state under RCU, instead of capturing the whole graph
 up front. Reads are per-node coherent but not a fixed view.
+
+Open the session once and reuse it: its iterators retain the session's reader
+token (one atomic increment per read; a 64-neighbor point read measures
+~600–900 ns). Creating a session per read costs ~10× more, and with
+`std.heap.page_allocator` every handle allocation is an mmap syscall — prefer
+an allocator with reuse for session handles.
 
 ```zig
 var session = try g.readSession(allocator);
@@ -211,7 +228,7 @@ an owned slice. Public adjacency queries, degree queries, and algorithms all go
 through `ReadSnapshot`, not `Graph`.
 
 ```zig
-const ctx = gz.Context.init(allocator);
+const ctx = az.Context.init(allocator);
 
 var snapshot = try g.snapshot(ctx);
 defer snapshot.deinit();
@@ -228,7 +245,7 @@ defer allocator.free(violations);
 ## Algorithms
 
 ```zig
-const ctx = gz.Context.init(allocator);
+const ctx = az.Context.init(allocator);
 
 var snapshot = try g.snapshot(ctx);
 defer snapshot.deinit();
@@ -253,6 +270,22 @@ defer allocator.free(snap_dfs);
 against that fixed captured view and do not perform repair or other hidden
 maintenance.
 
+The captured view is per-node coherent, not a global point-in-time image:
+serialize writers against `snapshot()` if you need one. A live snapshot also
+pins a reader epoch (retired storage cannot be reclaimed while it exists).
+For long-lived analytical views — or to hand flat arrays to external engines
+like DuckDB — materialize a detached CSR copy and release the snapshot:
+
+```zig
+var csr = try snapshot.materializeCsr(ctx);
+defer csr.deinit(allocator);
+snapshot.deinit(); // csr stays valid; nothing pinned
+
+const neighbors_of_n = try csr.outNeighbors(n); // []const u32 into csr.out_targets
+_ = neighbors_of_n;
+// csr.out_offsets / csr.out_targets are plain flat arrays (classic CSR).
+```
+
 Long traversals can be cancelled cooperatively. Attach a `CancelToken` to the
 `Context`; `bfs`, `dfs`, and `hasCycle` observe it once per visited node and
 abort with `error.Cancelled`. Cancelling is sticky and safe from any thread.
@@ -263,8 +296,8 @@ guaranteed outcome. On `error.Cancelled` partial results are freed and the
 snapshot stays valid.
 
 ```zig
-var token = gz.CancelToken.init();
-const ctx = gz.Context{ .allocator = allocator, .cancel_token = &token };
+var token = az.CancelToken.init();
+const ctx = az.Context{ .allocator = allocator, .cancel_token = &token };
 
 // From a watchdog/timeout thread:
 token.cancel();
@@ -282,6 +315,59 @@ sealed captured view, and `snapshot.debugValidate(ctx)` is the exhaustive
 allocating validator over that same captured view. Unlike live
 `Graph.debugValidate(ctx)`, snapshot debug validation does not audit free lists,
 retired stacks, or other ownership details of the mutable engine.
+
+## Edge Properties
+
+With `GraphOptions.edge_properties` every edge gets a **stable property row
+id** that survives repair, repack, and COW. Values live in caller-owned,
+comptime-typed columns — the engine stores only the 4-byte row sidecar:
+
+```zig
+var g = try az.Graph.initWithOptions(allocator, .{ .edge_properties = true });
+defer g.deinit();
+
+var weights = az.EdgeColumn(f32).init(allocator, 0.0);
+defer weights.deinit();
+
+const a = try g.addNode();
+const b = try g.addNode();
+const row = try g.addEdgeWithProperties(a, b, 0, .{});
+try weights.set(row, 1.5);
+
+// Later, from any edge-aware read surface:
+var snapshot = try g.snapshot(ctx);
+defer snapshot.deinit();
+var it = try snapshot.outEdges(a);
+while (it.next()) |edge| {
+    _ = weights.get(edge.property_row);
+}
+
+// CSR export carries the row column aligned with targets:
+var csr = try snapshot.materializeCsr(ctx);
+defer csr.deinit(allocator);
+// csr.out_targets[i] ↔ csr.out_rows.?[i]
+```
+
+Rows of removed edges recycle after `reclaimRetired()`. With bare columns,
+set properties when creating edges (a recycled row keeps the old value until
+overwritten) — or use the schema wrapper, which does it for you:
+
+```zig
+const Schema = struct { weight: f32 = 0.0, since: u64 = 0 };
+var pg = try az.PropertyGraph(Schema).init(allocator, .{});
+defer pg.deinit();
+
+const n1 = try pg.addNode();
+const n2 = try pg.addNode();
+_ = try pg.addEdge(n1, n2, 0, .{}, .{ .weight = 1.5, .since = 1700000000 });
+const values = (try pg.edgeValues(n1, n2)).?;  // .{ .weight = 1.5, ... }
+_ = values;
+// Everything else (snapshots, algorithms, repair) via pg.graph.
+```
+
+`NodeColumn(T)` works the same way indexed by `NodeId.index`, which is stable
+by construction. `validate()` checks property-row ranges; `debugValidate`
+additionally audits global row uniqueness.
 
 ## Commands
 

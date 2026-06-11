@@ -1,16 +1,16 @@
-//! Root module for the Zigraph graph library. `src/root.zig` defines the public
+//! Root module for the azigmuth graph library. `src/root.zig` defines the public
 //! API surface and re-exports the stable public types; everything else in the
 //! source tree is implementation detail not covered by the stability contract.
 //!
 //! Usage with Graph:
-//!   const graphz = @import("graphz");
-//!   var g = try graphz.Graph.init(allocator);
+//!   const azigmuth = @import("azigmuth");
+//!   var g = try azigmuth.Graph.init(allocator);
 //!   defer g.deinit();
 //!   const n = try g.addNode();
 //!   const m = try g.addNode();
 //!   try g.addEdge(n, m, 0, .{});
 //!
-//!   const ctx = graphz.Context.init(allocator);
+//!   const ctx = azigmuth.Context.init(allocator);
 //!   var snapshot = try g.snapshot(ctx);
 //!   defer snapshot.deinit();
 //!   var neighbors = try snapshot.neighbors(n);
@@ -22,7 +22,7 @@
 //!   _ = has_cycle;
 //!
 //! Usage with GraphBuilder:
-//!   var builder = try graphz.GraphBuilder.init(allocator);
+//!   var builder = try azigmuth.GraphBuilder.init(allocator);
 //!   defer builder.deinit();  // required even after freeze()
 //!   const a = try builder.addNode();
 //!   const b = try builder.addNode();
@@ -56,6 +56,7 @@ pub const StorageStats = graph.StorageStats;
 // ── Graph engine ──────────────────────────────────────────────────────
 pub const Graph = public_graph.Graph;
 pub const ReadSnapshot = public_snapshot.ReadSnapshot;
+pub const CsrView = graph.CsrView;
 pub const ReadSession = public_session.ReadSession;
 pub const NeighborIterator = graph.NeighborIterator;
 pub const GraphBuilder = public_builder.GraphBuilder;
@@ -68,3 +69,17 @@ pub const Violation = graph.Violation;
 // ── Algorithms ────────────────────────────────────────────────────────
 pub const Context = @import("algorithms/context.zig").Context;
 pub const CancelToken = @import("algorithms/context.zig").CancelToken;
+
+// ── Property columns (RFC §properties) ────────────────────────────────────
+// Caller-owned comptime-typed columnar stores indexed by the stable ids the
+// engine exposes: `EdgeRef.property_row` / `NodeId.index`.
+pub const PropertyColumn = @import("properties.zig").PropertyColumn;
+pub const EdgeColumn = @import("properties.zig").EdgeColumn;
+pub const NodeColumn = @import("properties.zig").NodeColumn;
+pub const PropertyGraph = @import("properties.zig").PropertyGraph;
+
+// ── Storage profiles ──────────────────────────────────────────────────
+// Selected at comptime via a root-module declaration:
+//   pub const azigmuth_options: azigmuth.Options = .{ .profile = .embedded };
+pub const Profile = @import("core/profile.zig").Profile;
+pub const Options = @import("core/profile.zig").Options;

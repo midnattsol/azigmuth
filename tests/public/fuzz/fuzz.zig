@@ -1,5 +1,5 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 
 const testing = std.testing;
@@ -18,7 +18,7 @@ const RandomStream = struct {
 };
 
 fn expectGraphMatchesModel(
-    graph: *const graphz.Graph,
+    graph: *const azigmuth.Graph,
     comptime node_count: usize,
     model: *const [node_count][node_count]bool,
     expected_edge_count: u64,
@@ -49,7 +49,7 @@ fn expectGraphMatchesModel(
 
 test "fuzz: random single-block mutations match a reference matrix" {
     const node_count = 24;
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     for (0..node_count) |_| {
@@ -63,8 +63,8 @@ test "fuzz: random single-block mutations match a reference matrix" {
     for (0..350) |step| {
         const source_index = random.bounded(node_count);
         const target_index = random.bounded(node_count);
-        const source = graphz.NodeId{ .index = source_index };
-        const target = graphz.NodeId{ .index = target_index };
+        const source = azigmuth.NodeId{ .index = source_index };
+        const target = azigmuth.NodeId{ .index = target_index };
 
         if (random.bounded(2) == 0) {
             if (model[source_index][target_index]) {
@@ -101,11 +101,11 @@ test "fuzz: random single-block mutations match a reference matrix" {
 
 test "fuzz: random hub mutations preserve model state across multi-block adjacency" {
     const target_count = 100;
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var targets: [target_count]graphz.NodeId = undefined;
+    var targets: [target_count]azigmuth.NodeId = undefined;
     for (0..target_count) |target_index| {
         targets[target_index] = try graph.addNode();
     }

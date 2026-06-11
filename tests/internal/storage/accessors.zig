@@ -26,9 +26,9 @@ test "tiny: fwdCap depends on multigraph mode" {
 test "tiny: removeFwd shifts the tail down and clears the freed entry" {
     var slot = tiny.TinyFwdSlot{};
     var count: u16 = 0;
-    count = try tiny.insertFwd(&slot, count, 10, 1, no_flags, 1, false);
-    count = try tiny.insertFwd(&slot, count, 20, 2, no_flags, 2, false);
-    count = try tiny.insertFwd(&slot, count, 30, 3, no_flags, 3, false);
+    count = try tiny.insertFwd(&slot, count, 10, 1, no_flags, 1, 0, false);
+    count = try tiny.insertFwd(&slot, count, 20, 2, no_flags, 2, 0, false);
+    count = try tiny.insertFwd(&slot, count, 30, 3, no_flags, 3, 0, false);
 
     // Miss leaves the slot untouched.
     try testing.expectEqual(@as(?u16, null), tiny.removeFwd(&slot, count, 99, null, false));
@@ -44,8 +44,8 @@ test "tiny: removeFwd shifts the tail down and clears the freed entry" {
 test "tiny: removeFwd in multigraph mode matches on edge id" {
     var slot = tiny.TinyFwdSlot{};
     var count: u16 = 0;
-    count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 7, true);
-    count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 9, true);
+    count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 7, 0, true);
+    count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 9, 0, true);
 
     // Wrong edge id is a miss; the right one removes only that parallel edge.
     try testing.expectEqual(@as(?u16, null), tiny.removeFwd(&slot, count, 10, 5, true));
@@ -89,11 +89,12 @@ test "node_bitmap: ensurePageForNode, setBit and clearBit round-trip" {
     try testing.expect(!node_bitmap.isSet(directory, node_index));
 }
 
-test "radix directory: maxPages reports the L1*L2 capacity" {
+test "radix directory: maxPages reports the inline + L1*L2 capacity" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const expected: usize = @as(usize, constants.NODE_PAGE_DIR_L1) * constants.NODE_PAGE_DIR_L2;
+    const dims = constants.NODE_DIR;
+    const expected: usize = dims.inline_pages + dims.l1 * dims.l2;
     try testing.expectEqual(expected, graph.graph.repair_queued_fwd_pages.maxPages());
 }
 
@@ -168,4 +169,154 @@ test "side_ops: readNodeIdAtSlotDynamic reads both sides with a runtime side" {
     for (sides) |case| {
         try testing.expectEqual(case.expected, side_ops.readNodeIdAtSlotDynamic(&graph.graph, case.block, case.slot, case.side));
     }
+}
+
+test "radix directory: lazy levels publish pages across the inline boundary" {
+    const Dir = graph_mod.radix_directory_mod.RadixDirectory(2, 4, 8);
+    var dir = Dir{};
+    defer dir.deinitLeaves(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), dir.load(0));
+    try testing.expectEqual(@as(usize, 0), dir.load(@intCast(Dir.max_pages - 1)));
+
+    // Inline page: no heap level involved.
+    (try dir.slotPtr(testing.allocator, 1)).store(0x1000, .release);
+    try testing.expectEqual(@as(usize, 0x1000), dir.load(1));
+
+    // First page past the inline window forces root + leaf allocation.
+    (try dir.slotPtr(testing.allocator, 2)).store(0x2000, .release);
+    try testing.expectEqual(@as(usize, 0x2000), dir.load(2));
+
+    // Last addressable page lands in the last leaf.
+    const last_page: u32 = @intCast(Dir.max_pages - 1);
+    (try dir.slotPtr(testing.allocator, last_page)).store(0x3000, .release);
+    try testing.expectEqual(@as(usize, 0x3000), dir.load(last_page));
+
+    // Beyond capacity: load reports absent, slotPtr fails cleanly.
+    try testing.expectEqual(@as(usize, 0), dir.load(@intCast(Dir.max_pages)));
+    try testing.expectError(error.OutOfMemory, dir.slotPtr(testing.allocator, @intCast(Dir.max_pages)));
+}
+
+test "radix directory: node growth crosses the inline page window" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    // Default profile keeps 4 inline node pages (1024 nodes); go past them.
+    const total: u32 = 4 * 256 + 64;
+    var last: graph_mod.NodeId = undefined;
+    for (0..total) |_| last = try graph.addNode();
+    try testing.expectEqual(@as(usize, total), graph.nodeCount());
+
+    const first = graph_mod.NodeId{ .index = 0 };
+    try graph.addEdge(first, last, 0, 0);
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(first));
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(last));
+    try graph.validate();
+}
+
+test "default profile: GraphCore fixed footprint stays bounded" {
+    try testing.expect(@sizeOf(graph_mod.GraphCore) < 16 * 1024);
+}
+
+test "frontier rollback: removal churn does not grow the block pool unboundedly" {
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+
+    const source = try graph.addNode();
+    var destinations: [512]graph_mod.NodeId = undefined;
+    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+
+    var frontier_after_first_cycle: u32 = 0;
+    for (0..6) |cycle| {
+        for (destinations) |destination| {
+            try graph.addEdge(source, destination, 0, 0);
+        }
+        for (destinations) |destination| {
+            _ = graph.removeEdge(source, destination) catch |err| switch (err) {
+                error.RepairRequired => blk: {
+                    _ = try graph.repairNode(source);
+                    break :blk try graph.removeEdge(source, destination);
+                },
+                else => return err,
+            };
+        }
+        graph.reclaimRetired();
+        const stats = try graph.storageStats();
+        if (cycle == 0) frontier_after_first_cycle = stats.blocks_fwd_allocated;
+        // After reclaim + rollback the frontier must stay bounded instead of
+        // accumulating one fresh span set per cycle.
+        try testing.expect(stats.blocks_fwd_allocated <= frontier_after_first_cycle * 2);
+    }
+    try graph.validate();
+}
+
+test "persistence format: header round-trips through its own validators" {
+    const persistence = graph_mod.persistence_mod;
+
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(a, b, 0, 0);
+
+    var raw_header: [persistence.HEADER_BYTES]u8 = @splat(0);
+    var header = persistence.FileHeader.init(&graph.graph);
+    @memcpy(raw_header[0..@sizeOf(persistence.FileHeader)], std.mem.asBytes(&header));
+    header.header_checksum = persistence.headerChecksum(&raw_header);
+    @memcpy(raw_header[0..@sizeOf(persistence.FileHeader)], std.mem.asBytes(&header));
+
+    try persistence.validateHeader(header, &raw_header);
+    try testing.expectEqual(@as(u64, 2), header.node_count);
+    try testing.expectEqual(@as(u64, 1), header.edge_count);
+    try testing.expect(!header.flags.multigraph);
+
+    // Tampering must be caught.
+    var bad = header;
+    bad.magic +%= 1;
+    try testing.expectError(error.BadMagic, persistence.validateHeader(bad, &raw_header));
+    bad = header;
+    bad.params.edges_per_block +%= 1;
+    try testing.expectError(error.IncompatibleFormatParams, persistence.validateHeader(bad, &raw_header));
+    raw_header[100] +%= 1;
+    try testing.expectError(error.CorruptHeader, persistence.validateHeader(header, &raw_header));
+}
+
+test "persistence format: a well-formed section table validates; misaligned or overlapping does not" {
+    const persistence = graph_mod.persistence_mod;
+
+    var graph = try graph_mod.Graph.init(testing.allocator);
+    defer graph.deinit();
+    const a = try graph.addNode();
+    const b = try graph.addNode();
+    try graph.addEdge(a, b, 0, 0);
+    const header = persistence.FileHeader.init(&graph.graph);
+
+    var table: [persistence.MAX_SECTIONS]persistence.SectionDescriptor = undefined;
+    var offset: u64 = persistence.PAYLOAD_BASE_OFFSET;
+    for (0..persistence.MAX_SECTIONS) |section_idx| {
+        const id: persistence.SectionId = @enumFromInt(section_idx);
+        const byte_len = persistence.expectedSectionBytes(header, id) orelse 0;
+        table[section_idx] = .{
+            .id = @intCast(section_idx),
+            .entry_count = if (byte_len == 0) 0 else 1,
+            .file_offset = offset,
+            .byte_len = byte_len,
+            .checksum = 0,
+        };
+        // entry_count is only validated for the free-list sections.
+        if (persistence.expectedSectionBytes(header, id) == null) table[section_idx].entry_count = 0;
+        if (table[section_idx].byte_len == 0) table[section_idx].entry_count = 0;
+        offset = persistence.alignForward(@intCast(offset + byte_len), persistence.SECTION_ALIGN);
+    }
+    try persistence.validateSectionTable(header, &table);
+
+    // Misaligned payload offset must fail (node_records is never empty here).
+    var bad_table = table;
+    bad_table[0].file_offset += 1;
+    try testing.expectError(error.CorruptSectionTable, persistence.validateSectionTable(header, &bad_table));
+
+    // Wrong derived size must fail.
+    bad_table = table;
+    bad_table[0].byte_len += 64;
+    try testing.expectError(error.CorruptSectionTable, persistence.validateSectionTable(header, &bad_table));
 }

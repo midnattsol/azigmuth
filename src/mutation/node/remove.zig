@@ -1,4 +1,5 @@
 const graph_core = @import("../../core/graph_core.zig");
+const side_ops = @import("../../adjacency/side_ops.zig");
 const node_access = @import("../../core/node_access.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const types = @import("../../core/types.zig");
@@ -46,16 +47,26 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // Forward-degree decrements use the meta-only CAS helper
     // (`publishMetaFwdDeltaUpdated`) which does NOT require `fwd_claim` on the
     // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
-    // (RFC Phase 2 §concurrency note).
+    // (RFC §concurrency note).
     const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
 
     // Edge accounting happens at publish time: a related endpoint that was
     // concurrently removed after the scan already paid for the shared edge.
     const removed_visible_edge_count = counts.applied_edge_removals + scan.self_edge_count;
 
-    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), try page_ops.ensureNodePublishedAt(graph, node), source_staging_adj, 0, 0, true, true);
+    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), page_ops.nodePublishedAt(graph, node), source_staging_adj, 0, 0, true, true);
 
     try remove_publish.retireRemovedNodeStorage(graph, source_adj_before);
+    // Every forward edge of the removed node dies with it: its property rows
+    // recycle once no reader can still observe the retired blocks.
+    if (graph.edge_properties_enabled) {
+        try side_ops.forEachForwardEntryInSide(graph, side_ops.sideAdjOfNode(source_adj_before, .fwd), graph, struct {
+            fn run(inner_graph: *const graph_core.GraphCore, mut_graph: *graph_core.GraphCore, entry: side_ops.ForwardEntryView) !void {
+                _ = inner_graph;
+                rcu.retirePropRow(mut_graph, entry.prop_row);
+            }
+        }.run);
+    }
     _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);
     rcu.bumpEpoch(graph);
     writer_guard.end();

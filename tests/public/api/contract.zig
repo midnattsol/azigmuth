@@ -1,16 +1,16 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
-fn captureSnapshot(graph: *graphz.Graph) !*graphz.ReadSnapshot {
+fn captureSnapshot(graph: *azigmuth.Graph) !*azigmuth.ReadSnapshot {
     return graph.snapshot(.{ .allocator = testing.allocator });
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 test "contract: deinitChecked fails with active snapshot and handle stays usable" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     const source = try graph.addNode();
     const destination = try graph.addNode();
     try graph.addEdge(source, destination, 0, .{});
@@ -23,14 +23,14 @@ test "contract: deinitChecked fails with active snapshot and handle stays usable
 }
 
 test "contract: deinitChecked succeeds on clean graph and consumes handle" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     try graph.deinitChecked();
 }
 
 // ── Iterator ───────────────────────────────────────────────────────────────
 
 test "contract: materialize with defer deinit is safe" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -48,7 +48,7 @@ test "contract: materialize with defer deinit is safe" {
 }
 
 test "contract: materialize does not invalidate snapshot ownership" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -63,7 +63,7 @@ test "contract: materialize does not invalidate snapshot ownership" {
 }
 
 test "contract: next after materialize returns null" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -80,7 +80,7 @@ test "contract: next after materialize returns null" {
 }
 
 test "contract: neighbors returns by value (no alloc on creation)" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -95,7 +95,7 @@ test "contract: neighbors returns by value (no alloc on creation)" {
 }
 
 test "contract: empty iterator materialize returns empty slice" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -109,7 +109,7 @@ test "contract: empty iterator materialize returns empty slice" {
 }
 
 test "contract: snapshot owns iterator lifetime" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -123,7 +123,7 @@ test "contract: snapshot owns iterator lifetime" {
 }
 
 test "contract: iterator remains usable until owner deinit" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -145,7 +145,7 @@ test "contract: iterator remains usable until owner deinit" {
 // ── Edge mutations ─────────────────────────────────────────────────────────
 
 test "contract: addEdge with non-zero relation and flags" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -160,7 +160,7 @@ test "contract: addEdge with non-zero relation and flags" {
 }
 
 test "contract: addEdge self-edge" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -178,7 +178,7 @@ test "contract: addEdge self-edge" {
 }
 
 test "contract: addEdge duplicate returns EdgeAlreadyExists" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -188,7 +188,7 @@ test "contract: addEdge duplicate returns EdgeAlreadyExists" {
 }
 
 test "contract: removeEdge returns true when edge exists" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -204,7 +204,7 @@ test "contract: removeEdge returns true when edge exists" {
 }
 
 test "contract: removeEdge returns false when edge does not exist" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -217,7 +217,7 @@ test "contract: removeEdge returns false when edge does not exist" {
 }
 
 test "contract: removeEdge self-edge" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -234,7 +234,7 @@ test "contract: removeEdge self-edge" {
 // ── Node mutations ─────────────────────────────────────────────────────────
 
 test "contract: addNode returns unique IDs" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const first = try graph.addNode();
@@ -247,7 +247,7 @@ test "contract: addNode returns unique IDs" {
 }
 
 test "contract: hasNode returns false for out-of-range index" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     try testing.expectEqual(false, graph.hasNode(.{ .index = 0 }));
@@ -255,7 +255,7 @@ test "contract: hasNode returns false for out-of-range index" {
 }
 
 test "contract: nodeCount and edgeCount after mutations" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const first = try graph.addNode();
@@ -271,7 +271,7 @@ test "contract: nodeCount and edgeCount after mutations" {
 // ── removeNode ─────────────────────────────────────────────────────────────
 
 test "contract: removeNode invalidates hasNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -282,7 +282,7 @@ test "contract: removeNode invalidates hasNode" {
 }
 
 test "contract: removeNode returns summary for repair policy decisions" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -298,7 +298,7 @@ test "contract: removeNode returns summary for repair policy decisions" {
 }
 
 test "contract: removeNode clears outgoing edges" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -317,7 +317,7 @@ test "contract: removeNode clears outgoing edges" {
 }
 
 test "contract: removeNode with incoming edges" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -339,7 +339,7 @@ test "contract: removeNode with incoming edges" {
 }
 
 test "contract: outDegree and inDegree are consistent with neighbors materialize" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -362,7 +362,7 @@ test "contract: outDegree and inDegree are consistent with neighbors materialize
 }
 
 test "contract: neighborsMaterialized convenience matches neighbors + materialize" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -387,7 +387,7 @@ test "contract: neighborsMaterialized convenience matches neighbors + materializ
 }
 
 test "contract: inNeighborsMaterialized convenience matches inNeighbors + materialize" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -409,14 +409,14 @@ test "contract: inNeighborsMaterialized convenience matches inNeighbors + materi
 }
 
 test "api contract: addEdges inserts a batch atomically" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var destinations: [100]graphz.NodeId = undefined;
+    var destinations: [100]azigmuth.NodeId = undefined;
     for (0..destinations.len) |i| destinations[i] = try graph.addNode();
 
-    var inputs: [100]graphz.EdgeInput = undefined;
+    var inputs: [100]azigmuth.EdgeInput = undefined;
     for (0..inputs.len) |i| inputs[i] = .{ .destination = destinations[i], .relation = @intCast(i % 7) };
 
     const added = try graph.addEdges(source, &inputs);
@@ -431,7 +431,7 @@ test "api contract: addEdges inserts a batch atomically" {
 }
 
 test "api contract: addEdges rejects duplicates without mutating" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -440,7 +440,7 @@ test "api contract: addEdges rejects duplicates without mutating" {
     try graph.addEdge(source, a, 0, .{});
 
     // Existing duplicate in the batch: all-or-nothing rejection.
-    const inputs = [_]graphz.EdgeInput{
+    const inputs = [_]azigmuth.EdgeInput{
         .{ .destination = b },
         .{ .destination = a },
     };
@@ -448,7 +448,7 @@ test "api contract: addEdges rejects duplicates without mutating" {
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 
     // Intra-batch duplicate: same rejection.
-    const dup_inputs = [_]graphz.EdgeInput{
+    const dup_inputs = [_]azigmuth.EdgeInput{
         .{ .destination = b },
         .{ .destination = b },
     };
@@ -458,18 +458,18 @@ test "api contract: addEdges rejects duplicates without mutating" {
 }
 
 test "api contract: addEdges merges into an existing block side" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    var first: [80]graphz.NodeId = undefined;
+    var first: [80]azigmuth.NodeId = undefined;
     for (0..first.len) |i| {
         first[i] = try graph.addNode();
         try graph.addEdge(source, first[i], 0, .{});
     }
 
-    var extra: [50]graphz.NodeId = undefined;
-    var inputs: [50]graphz.EdgeInput = undefined;
+    var extra: [50]azigmuth.NodeId = undefined;
+    var inputs: [50]azigmuth.EdgeInput = undefined;
     for (0..extra.len) |i| {
         extra[i] = try graph.addNode();
         inputs[i] = .{ .destination = extra[i] };
@@ -485,12 +485,12 @@ test "api contract: addEdges merges into an existing block side" {
 }
 
 test "api contract: addEdges handles self edges and repeat batches" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
     const other = try graph.addNode();
-    const inputs = [_]graphz.EdgeInput{
+    const inputs = [_]azigmuth.EdgeInput{
         .{ .destination = node },
         .{ .destination = other },
     };

@@ -1,10 +1,10 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
 test "api repair: repairNode on single-block node succeeds" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -18,7 +18,7 @@ test "api repair: repairNode on single-block node succeeds" {
 }
 
 test "api repair: repairBudgeted returns repaired count" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -32,7 +32,7 @@ test "api repair: repairBudgeted returns repaired count" {
 }
 
 test "api repair: removeNode summary reports repair debt after lazy removeNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -46,7 +46,7 @@ test "api repair: removeNode summary reports repair debt after lazy removeNode" 
 }
 
 test "api repair: repairBudgeted drains flagged repair debt" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -62,7 +62,7 @@ test "api repair: repairBudgeted drains flagged repair debt" {
 }
 
 test "api repair: debtStats exposes explicit repair debt" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -77,7 +77,7 @@ test "api repair: debtStats exposes explicit repair debt" {
 }
 
 test "api repair: flushRepairs performs explicit repair pass" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
@@ -93,7 +93,7 @@ test "api repair: flushRepairs performs explicit repair pass" {
 }
 
 test "api repair: repairBudgeted with max_nodes=0 returns 0" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -105,12 +105,12 @@ test "api repair: repairBudgeted with max_nodes=0 returns 0" {
 
 test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
     const allocator = std.heap.page_allocator;
-    var graph = try graphz.Graph.init(allocator);
+    var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
     // removeNode leaves flagged forward-tombstone debt on every predecessor,
     // giving repairBudgeted a wide, reliable backlog for the race window.
-    var predecessors: [256]graphz.NodeId = undefined;
+    var predecessors: [256]azigmuth.NodeId = undefined;
     for (0..predecessors.len) |i| predecessors[i] = try graph.addNode();
     const hub = try graph.addNode();
     for (predecessors) |predecessor| try graph.addEdge(predecessor, hub, 0, .{});
@@ -120,7 +120,7 @@ test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
     var success_count = std.atomic.Value(u32).init(0);
 
     const Worker = struct {
-        graph: *graphz.Graph,
+        graph: *azigmuth.Graph,
         stop: *std.atomic.Value(bool),
         successes: *std.atomic.Value(u32),
 
@@ -162,12 +162,12 @@ test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
 }
 
 test "api repair: RepairRequired is resolved by explicit repairNode" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
     const hub = try graph.addNode(); // lowest destination: lands in slot 0 of block 0
-    var fillers: [64]graphz.NodeId = undefined;
+    var fillers: [64]azigmuth.NodeId = undefined;
     for (0..fillers.len) |i| fillers[i] = try graph.addNode();
 
     try graph.addEdge(source, hub, 0, .{});
@@ -175,7 +175,7 @@ test "api repair: RepairRequired is resolved by explicit repairNode" {
 
     // Push the hub's reverse side out of tiny mode so the removal takes the
     // strict single-removal path that enforces the hard occupancy bound.
-    var extra_sources: [17]graphz.NodeId = undefined;
+    var extra_sources: [17]azigmuth.NodeId = undefined;
     for (0..extra_sources.len) |i| {
         extra_sources[i] = try graph.addNode();
         try graph.addEdge(extra_sources[i], hub, 0, .{});
@@ -199,7 +199,7 @@ test "api repair: RepairRequired is resolved by explicit repairNode" {
 }
 
 test "api repair: repairNode on canonical node reports no work" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();

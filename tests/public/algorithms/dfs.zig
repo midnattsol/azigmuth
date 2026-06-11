@@ -1,13 +1,13 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 
-fn dfsOnGraph(graph: *graphz.Graph, start: graphz.NodeId, allocator: std.mem.Allocator) ![]graphz.NodeId {
+fn dfsOnGraph(graph: *azigmuth.Graph, start: azigmuth.NodeId, allocator: std.mem.Allocator) ![]azigmuth.NodeId {
     var snapshot = try graph.snapshot(.{ .allocator = allocator });
     defer snapshot.deinit();
     return snapshot.dfs(start, .{ .allocator = allocator });
 }
 
-fn idxOf(order: []const graphz.NodeId, target: usize) usize {
+fn idxOf(order: []const azigmuth.NodeId, target: usize) usize {
     for (order, 0..) |node, node_index| {
         if (node.index == target) return node_index;
     }
@@ -15,10 +15,10 @@ fn idxOf(order: []const graphz.NodeId, target: usize) usize {
 }
 
 test "dfs visits all reachable nodes from start" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [5]graphz.NodeId = undefined;
+    var nodes: [5]azigmuth.NodeId = undefined;
     for (0..5) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
@@ -41,10 +41,10 @@ test "dfs visits all reachable nodes from start" {
 }
 
 test "dfs on unconnected graph visits only reachable component" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [4]graphz.NodeId = undefined;
+    var nodes: [4]azigmuth.NodeId = undefined;
     for (0..4) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
@@ -61,10 +61,10 @@ test "dfs on unconnected graph visits only reachable component" {
 }
 
 test "dfs on a graph with a cycle still terminates" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [3]graphz.NodeId = undefined;
+    var nodes: [3]azigmuth.NodeId = undefined;
     for (0..3) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[1], nodes[2], 0, .{});
@@ -84,10 +84,10 @@ test "dfs on a graph with a cycle still terminates" {
 }
 
 test "dfs returns actual depth-first visitation order" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [5]graphz.NodeId = undefined;
+    var nodes: [5]azigmuth.NodeId = undefined;
     for (0..5) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
@@ -106,7 +106,7 @@ test "dfs returns actual depth-first visitation order" {
 }
 
 test "dfs returns error on invalid start node" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
     _ = try builder.addNode();
@@ -118,7 +118,7 @@ test "dfs returns error on invalid start node" {
 }
 
 test "dfs returns error on removed start node" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const start = try graph.addNode();
@@ -129,10 +129,10 @@ test "dfs returns error on removed start node" {
 }
 
 test "dfs from isolated node returns only the start node" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [3]graphz.NodeId = undefined;
+    var nodes: [3]azigmuth.NodeId = undefined;
     for (0..3) |node_index| nodes[node_index] = try builder.addNode();
 
     var graph = try builder.freeze();
@@ -146,10 +146,10 @@ test "dfs from isolated node returns only the start node" {
 }
 
 test "dfs handles self-loop without revisiting the node" {
-    var builder = try graphz.GraphBuilder.init(std.testing.allocator);
+    var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    var nodes: [2]graphz.NodeId = undefined;
+    var nodes: [2]azigmuth.NodeId = undefined;
     for (0..2) |node_index| nodes[node_index] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[0], 0, .{});
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
@@ -164,7 +164,7 @@ test "dfs handles self-loop without revisiting the node" {
 }
 
 test "dfs visits neighbors across multiple edge blocks" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -180,7 +180,7 @@ test "dfs visits neighbors across multiple edge blocks" {
 }
 
 test "dfs on empty graph returns InvalidNode" {
-    var graph = try graphz.Graph.init(std.testing.allocator);
+    var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
     try std.testing.expectError(error.InvalidNode, dfsOnGraph(graph, .{ .index = 0 }, std.testing.allocator));

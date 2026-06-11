@@ -18,7 +18,7 @@ const OutputState = struct {
         comptime side: adjacency.AdjSide,
         live_after: usize,
     ) !OutputState {
-        const out_block_count = (live_after + 63) / 64;
+        const out_block_count = (live_after + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK;
         var new_blocks = try std.ArrayList(u32).initCapacity(allocator, out_block_count);
         errdefer {
             for (new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, side);
@@ -28,7 +28,7 @@ const OutputState = struct {
     }
 
     fn ensureBlock(self: *OutputState, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !void {
-        if (self.out_block_idx != null and self.out_slot < 64) return;
+        if (self.out_block_idx != null and self.out_slot < constants.EDGES_PER_BLOCK) return;
         self.out_block_idx = try page_ops.allocBlock(graph, side);
         self.new_blocks.appendAssumeCapacity(self.out_block_idx.?);
         self.out_slot = 0;
@@ -38,8 +38,8 @@ const OutputState = struct {
         try self.ensureBlock(graph, side);
         writeItem(graph, self.out_block_idx.?, self.out_slot, iter, side);
         self.out_slot += 1;
-        if (self.out_slot == 64) {
-            page_ops.setBlockLiveCount(graph, self.out_block_idx.?, side, 64);
+        if (self.out_slot == constants.EDGES_PER_BLOCK) {
+            page_ops.setBlockLiveCount(graph, self.out_block_idx.?, side, constants.EDGES_PER_BLOCK);
         }
     }
 
@@ -65,6 +65,7 @@ fn writeItem(
             out_block.relations[out_slot] = entry.relation;
             out_block.flags[out_slot] = @bitCast(entry.flags);
             if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, out_block_idx).ids[out_slot] = entry.edge_id;
+            if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, out_block_idx).rows[out_slot] = entry.prop_row;
         },
         .rev => {
             page_ops.edgeBlockAt(graph, out_block_idx, .rev).sources[out_slot] = side_ops.readNodeIdAtSlot(graph, iter.block_idx, iter.pos, .rev);
@@ -79,6 +80,7 @@ pub fn emitMergedBlocks(
     live_after: usize,
     allocator: std.mem.Allocator,
     skip_source: ?u32,
+    dropped: ?rebuild_filter.DroppedRows,
 ) !std.ArrayList(u32) {
     var output_state = try OutputState.init(graph, allocator, side, live_after);
     errdefer {
@@ -91,7 +93,7 @@ pub fn emitMergedBlocks(
         try output_state.appendIter(graph, current_iter, side);
 
         var next_iter = current_iter;
-        if (!rebuild_filter.advanceIter(graph, &next_iter, side, skip_source)) {
+        if (!try rebuild_filter.advanceIter(graph, &next_iter, side, skip_source, dropped)) {
             rebuild_heap.heapRemoveTop(heap);
         } else {
             rebuild_heap.heapUpdateTop(heap, next_iter);

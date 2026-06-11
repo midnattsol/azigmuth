@@ -21,7 +21,7 @@ pub fn appendBlockShapeViolations(
     else
         null;
 
-    if (live_count > 64) {
+    if (live_count > constants.EDGES_PER_BLOCK) {
         try violations.append(allocator, .{ .mask_bit_out_of_range = .{ .node = node_id, .block = block_index } });
         return;
     }

@@ -42,9 +42,11 @@ pub fn finalizeAdded(
     reverse_applied: shared.AppliedAppend,
     old_source_groups: shared.OldGroupChain,
     old_destination_groups: shared.OldGroupChain,
+    fwd_sorted: bool,
+    rev_sorted: bool,
 ) !void {
     scratch.disarm();
-    shared.publishAdded(endpoints, source, destination, publish_adj.source_publish_adj, publish_adj.destination_publish_adj);
+    shared.publishAdded(endpoints, source, destination, publish_adj.source_publish_adj, publish_adj.destination_publish_adj, fwd_sorted, rev_sorted);
     try shared.retireAdded(graph, forward_prepared, forward_applied, reverse_prepared, reverse_applied, old_source_groups, old_destination_groups);
     _ = graph.edge_count.fetchAdd(1, .release);
 }

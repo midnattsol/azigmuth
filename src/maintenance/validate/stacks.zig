@@ -61,7 +61,7 @@ pub fn groupSpanStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime 
 }
 
 pub fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_index: u32) !u32 {
-    if (group_index >= graph.group_count) return error.CorruptGraph;
+    if (group_index >= graph.loadGroupCount()) return error.CorruptGraph;
     const page_index = page_ops.pageOf(group_index, constants.EDGE_GROUPS_PER_PAGE);
     const raw = graph.edge_block_group_meta_pages.load(page_index);
     if (raw == 0) return error.CorruptGraph;
@@ -75,7 +75,7 @@ pub fn populateGroupStackBitmapFast(
     bitmap: []u64,
     comptime kind: common.StackKindFast,
 ) !void {
-    const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    const limit = graph.loadGroupCount();
     var span_count: u16 = 1;
     while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
         var current = groupSpanStackHeadIndexFast(graph, kind, span_count);

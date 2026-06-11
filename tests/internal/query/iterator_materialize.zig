@@ -110,13 +110,11 @@ test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency re
     page_ops.setBlockLiveCount(&graph.graph, block2, .rev, @intCast(2));
 
     const group0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1, .next = constants.END_OF_CHAIN };
+    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1 };
     const group1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1, .next = constants.END_OF_CHAIN };
-    page_ops.groupAt(&graph.graph, group0).next = group1;
+    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1 };
     const group2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1, .next = constants.END_OF_CHAIN };
-    page_ops.groupAt(&graph.graph, group1).next = group2;
+    page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1 };
 
     const node = try graph.nodeAt(hub);
     publish.publishedRevSide(node).block_count = 3;

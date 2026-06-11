@@ -1,5 +1,5 @@
 const std = @import("std");
-const graphz = @import("graphz");
+const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 const testing = std.testing;
 
@@ -16,10 +16,10 @@ fn shrinkAndReplay(
         var i: usize = 1;
         while (i < candidate.len) {
             const reduced = candidate[0..i];
-            var graph = try graphz.Graph.init(allocator);
+            var graph = try azigmuth.Graph.init(allocator);
             errdefer graph.deinit();
 
-            var nodes: [16]graphz.NodeId = undefined;
+            var nodes: [16]azigmuth.NodeId = undefined;
             var j: usize = 0;
             while (j < initial_nodes and j < 16) : (j += 1) {
                 nodes[j] = try graph.addNode();
@@ -71,10 +71,10 @@ fn shrinkAndReplay(
         if (!removed_any) break;
     }
 
-    var graph2 = try graphz.Graph.init(allocator);
+    var graph2 = try azigmuth.Graph.init(allocator);
     defer graph2.deinit();
 
-    var nodes2: [16]graphz.NodeId = undefined;
+    var nodes2: [16]azigmuth.NodeId = undefined;
     var k: usize = 0;
     while (k < initial_nodes and k < 16) : (k += 1) {
         nodes2[k] = try graph2.addNode();
@@ -139,10 +139,10 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
         };
     }
 
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |idx| {
         nodes[idx] = try graph.addNode();
     }
@@ -158,7 +158,7 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
                 _ = graph.removeEdge(nodes[op.src], nodes[op.dst]) catch {};
             },
             .repair_node => {
-                _ = graph.repairNode(nodes[op.src]) catch graphz.RepairNodeSummary{};
+                _ = graph.repairNode(nodes[op.src]) catch azigmuth.RepairNodeSummary{};
             },
             .remove_node => {
                 _ = graph.removeNode(nodes[op.src]) catch {};
@@ -177,10 +177,10 @@ test "property_fuzz: dense random graph with removals maintains consistency" {
     const initial_edges: usize = 200;
     const remove_ops: usize = 100;
 
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     var i: usize = 0;
@@ -221,10 +221,10 @@ test "property_fuzz: removing all edges leaves clean graph" {
     _ = rng.random();
 
     const node_count: usize = 10;
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
@@ -258,7 +258,7 @@ test "property_fuzz: alternate add and remove on same pair converges" {
     var rng = std.Random.DefaultPrng.init(7777);
     var random = rng.random();
 
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
@@ -292,10 +292,10 @@ test "property_fuzz: property that outDegree equals neighbors count" {
     const random = rng.random();
 
     const node_count: usize = 15;
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
@@ -325,10 +325,10 @@ test "property_fuzz: property that inDegree equals inNeighbors count" {
     const random = rng.random();
 
     const node_count: usize = 15;
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     for (0..node_count) |i| {
@@ -354,7 +354,7 @@ test "property_fuzz: property that inDegree equals inNeighbors count" {
 }
 
 test "property_fuzz: addEdge removes self-edge correctness" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
@@ -376,10 +376,10 @@ test "property_fuzz: random sequence with repair maintains validity" {
     const random = rng.random();
 
     const node_count: usize = 12;
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var nodes: [node_count]graphz.NodeId = undefined;
+    var nodes: [node_count]azigmuth.NodeId = undefined;
     for (0..node_count) |i| nodes[i] = try graph.addNode();
 
     var i: usize = 0;
@@ -394,14 +394,14 @@ test "property_fuzz: random sequence with repair maintains validity" {
     i = 0;
     while (i < 50) : (i += 1) {
         const repair_node = random.int(u8) % node_count;
-        _ = graph.repairNode(nodes[repair_node]) catch graphz.RepairNodeSummary{};
+        _ = graph.repairNode(nodes[repair_node]) catch azigmuth.RepairNodeSummary{};
     }
 
     try graph.validate();
 }
 
 test "property_fuzz: removeNode followed by addNode reuses slots correctly" {
-    var graph = try graphz.Graph.init(testing.allocator);
+    var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const initial = try graph.addNode();
@@ -423,11 +423,11 @@ test "property_fuzz: large sequential add then random remove maintains consisten
     var rng = std.Random.DefaultPrng.init(4444);
     var random = rng.random();
 
-    var source = try graphz.Graph.init(testing.allocator);
+    var source = try azigmuth.Graph.init(testing.allocator);
     defer source.deinit();
     const source_node = try source.addNode();
     const target_count: usize = 100;
-    var targets: [target_count]graphz.NodeId = undefined;
+    var targets: [target_count]azigmuth.NodeId = undefined;
     for (0..target_count) |i| targets[i] = try source.addNode();
 
     for (0..target_count) |i| {

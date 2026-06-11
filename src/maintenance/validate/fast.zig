@@ -13,6 +13,7 @@ const sums = @import("sums.zig");
 const stacks = @import("stacks.zig");
 const ownership = @import("ownership.zig");
 const consistency = @import("consistency.zig");
+const prop_rows = @import("prop_rows.zig");
 const logical = @import("logical.zig");
 
 pub fn validate(graph: *const graph_core.GraphCore) !void {
@@ -59,6 +60,7 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         try shape.validateOccupancyFast(graph, adjacency, .fwd);
         try shape.validateOccupancyFast(graph, adjacency, .rev);
         try consistency.validateForwardEdgeIdsFast(graph, node_id, adjacency);
+        try prop_rows.validateForwardPropRowsFast(graph, node_id, adjacency);
         try consistency.validateForwardConsistencyFast(graph, node_id, adjacency);
         try consistency.validateReverseConsistencyFast(graph, node_id, adjacency);
 
@@ -76,8 +78,10 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
 
     try ownership.validateRepairDebtFast(graph, node_count);
 
+    // Orphan sweeps are exact within the tracked window; storage beyond it
+    // is audited by debugValidate.
     {
-        const fwd_limit = common.allocatedBlockCount(graph, .fwd);
+        const fwd_limit = @min(common.allocatedBlockCount(graph, .fwd), common.MAX_TRACKED_BLOCKS);
         for (0..fwd_limit) |block_index| {
             if (!common.bitmapIsSet(owned_forward_blocks[0..], @intCast(block_index)) and
                 !common.bitmapIsSet(free_forward_blocks[0..], @intCast(block_index)) and
@@ -88,7 +92,7 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         }
     }
     {
-        const rev_limit = common.allocatedBlockCount(graph, .rev);
+        const rev_limit = @min(common.allocatedBlockCount(graph, .rev), common.MAX_TRACKED_BLOCKS);
         for (0..rev_limit) |block_index| {
             if (!common.bitmapIsSet(owned_reverse_blocks[0..], @intCast(block_index)) and
                 !common.bitmapIsSet(free_reverse_blocks[0..], @intCast(block_index)) and
@@ -99,7 +103,7 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         }
     }
     {
-        const group_limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+        const group_limit = @min(graph.loadGroupCount(), common.MAX_TRACKED_GROUPS);
         for (0..group_limit) |group_index| {
             if (!common.bitmapIsSet(owned_groups[0..], @intCast(group_index)) and
                 !common.bitmapIsSet(free_groups[0..], @intCast(group_index)) and
