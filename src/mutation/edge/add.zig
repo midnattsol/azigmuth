@@ -30,7 +30,7 @@ fn prepareAppendBlockSide(
         .fwd => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .fwd);
             if (page_ops.blockLiveCount(graph, tail_idx, .fwd) == constants.EDGES_PER_BLOCK) {
-                return .{ .new_block = new_block, .tail_index = tail_idx };
+                return .{ .new_block = new_block, .tail_idx = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = tail_block.*;
             page_ops.setBlockLiveCount(graph, new_block, .fwd, page_ops.blockLiveCount(graph, tail_idx, .fwd));
@@ -40,14 +40,14 @@ fn prepareAppendBlockSide(
         .rev => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .rev);
             if (page_ops.blockLiveCount(graph, tail_idx, .rev) == constants.EDGES_PER_BLOCK) {
-                return .{ .new_block = new_block, .tail_index = tail_idx };
+                return .{ .new_block = new_block, .tail_idx = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .rev).* = tail_block.*;
             page_ops.setBlockLiveCount(graph, new_block, .rev, page_ops.blockLiveCount(graph, tail_idx, .rev));
         },
     }
 
-    return .{ .old_block = tail_idx, .new_block = new_block, .tail_index = tail_idx };
+    return .{ .old_block = tail_idx, .new_block = new_block, .tail_idx = tail_idx };
 }
 
 fn applyPreparedAppendSideTracked(

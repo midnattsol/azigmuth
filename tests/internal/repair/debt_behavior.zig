@@ -180,32 +180,32 @@ fn addNodesForTest(graph: *graph_mod.Graph, count: usize) !void {
     }
 }
 
-fn fillBlock(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u7) void {
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
+fn fillBlock(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, count: u7) void {
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
     for (0..count) |i| {
-        block.destinations[i] = first_dst + @as(u32, @intCast(i));
+        block.destinations[i] = first_destination + @as(u32, @intCast(i));
         block.relations[i] = 0;
         block.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
-fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
-    const block_index = try graph.allocBlockRev();
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
-    block.sources[0] = source_index;
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(1));
+fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_idx: u32, source_idx: u32) !void {
+    const block_idx = try graph.allocBlockRev();
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
+    block.sources[0] = source_idx;
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(1));
 
-    const node_buffer = try graph.nodeAt(.{ .index = destination_index });
-    publish.publishedRevSide(node_buffer).first_block = block_index;
+    const node_buffer = try graph.nodeAt(.{ .index = destination_idx });
+    publish.publishedRevSide(node_buffer).first_block = block_idx;
     publish.publishedRevSide(node_buffer).block_count = 1;
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
-    try publish.syncToPublished(graph, destination_index);
+    try publish.syncToPublished(graph, destination_idx);
 }
 
-fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
+fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_idx: u32, first_destination: u32, count: u7) !void {
     for (0..count) |offset| {
-        try publishSingleReverseSource(graph, first_destination + @as(u32, @intCast(offset)), source_index);
+        try publishSingleReverseSource(graph, first_destination + @as(u32, @intCast(offset)), source_idx);
     }
 }
 
@@ -224,16 +224,16 @@ test "repair debt: needs_repair flag is cleared after repairNode" {
     var first_block_edges = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
     var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
 
-    for (0..47) |edge_index| {
-        first_block_edges.destinations[edge_index] = @intCast(edge_index + 1);
-        first_block_edges.relations[edge_index] = 0;
-        first_block_edges.flags[edge_index] = 0;
+    for (0..47) |edge_idx| {
+        first_block_edges.destinations[edge_idx] = @intCast(edge_idx + 1);
+        first_block_edges.relations[edge_idx] = 0;
+        first_block_edges.flags[edge_idx] = 0;
     }
     page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
-    for (0..36) |edge_index| {
-        second_block_edges.destinations[edge_index] = @intCast(edge_index + 48);
-        second_block_edges.relations[edge_index] = 0;
-        second_block_edges.flags[edge_index] = 0;
+    for (0..36) |edge_idx| {
+        second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 48);
+        second_block_edges.relations[edge_idx] = 0;
+        second_block_edges.flags[edge_idx] = 0;
     }
     page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
 
@@ -269,18 +269,18 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
     const block1 = try graph.allocBlockFwd();
 
     var first_block_edges = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
-    for (0..20) |edge_index| {
-        first_block_edges.destinations[edge_index] = @intCast(edge_index + 1);
-        first_block_edges.relations[edge_index] = 0;
-        first_block_edges.flags[edge_index] = 0;
+    for (0..20) |edge_idx| {
+        first_block_edges.destinations[edge_idx] = @intCast(edge_idx + 1);
+        first_block_edges.relations[edge_idx] = 0;
+        first_block_edges.flags[edge_idx] = 0;
     }
     page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(20));
 
     var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
-    for (0..32) |edge_index| {
-        second_block_edges.destinations[edge_index] = @intCast(edge_index + 21);
-        second_block_edges.relations[edge_index] = 0;
-        second_block_edges.flags[edge_index] = 0;
+    for (0..32) |edge_idx| {
+        second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 21);
+        second_block_edges.relations[edge_idx] = 0;
+        second_block_edges.flags[edge_idx] = 0;
     }
     page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(32));
 
@@ -309,14 +309,14 @@ test "repair debt: tail underfill remains logically valid and repair-safe" {
     const destination_count: usize = 130;
     var destinations: [destination_count]graph_mod.NodeId = undefined;
 
-    for (0..destination_count) |destination_index| {
-        destinations[destination_index] = try graph.addNode();
-        try graph.addEdge(source, destinations[destination_index], 0, 0);
+    for (0..destination_count) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, destinations[destination_idx], 0, 0);
     }
 
     // Remove edges from the tail block until it's underfull. The tail is exempt.
-    for (0..2) |destination_index| {
-        try testing.expect(try graph.removeEdge(source, destinations[destination_count - 1 - destination_index]));
+    for (0..2) |destination_idx| {
+        try testing.expect(try graph.removeEdge(source, destinations[destination_count - 1 - destination_idx]));
     }
     try graph.validate();
 

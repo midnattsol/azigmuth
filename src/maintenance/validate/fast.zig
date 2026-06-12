@@ -41,8 +41,8 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     try stacks.populateGroupStackBitmapFast(graph, free_groups[0..], .free);
     try stacks.populateGroupStackBitmapFast(graph, retired_groups[0..], .retired);
 
-    for (0..node_count) |node_index| {
-        const node_id: u32 = @intCast(node_index);
+    for (0..node_count) |node_idx| {
+        const node_id: u32 = @intCast(node_idx);
         const node = types.NodeId{ .index = node_id };
         const adjacency = node_access.publishedAdjAtConst(graph, node);
         const meta = node_access.loadPublishedMetaAtConst(graph, node);
@@ -82,10 +82,10 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     // is audited by debugValidate.
     {
         const fwd_limit = @min(common.allocatedBlockCount(graph, .fwd), common.MAX_TRACKED_BLOCKS);
-        for (0..fwd_limit) |block_index| {
-            if (!common.bitmapIsSet(owned_forward_blocks[0..], @intCast(block_index)) and
-                !common.bitmapIsSet(free_forward_blocks[0..], @intCast(block_index)) and
-                !common.bitmapIsSet(retired_forward_blocks[0..], @intCast(block_index)))
+        for (0..fwd_limit) |block_idx| {
+            if (!common.bitmapIsSet(owned_forward_blocks[0..], @intCast(block_idx)) and
+                !common.bitmapIsSet(free_forward_blocks[0..], @intCast(block_idx)) and
+                !common.bitmapIsSet(retired_forward_blocks[0..], @intCast(block_idx)))
             {
                 return error.CorruptGraph;
             }
@@ -93,10 +93,10 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     }
     {
         const rev_limit = @min(common.allocatedBlockCount(graph, .rev), common.MAX_TRACKED_BLOCKS);
-        for (0..rev_limit) |block_index| {
-            if (!common.bitmapIsSet(owned_reverse_blocks[0..], @intCast(block_index)) and
-                !common.bitmapIsSet(free_reverse_blocks[0..], @intCast(block_index)) and
-                !common.bitmapIsSet(retired_reverse_blocks[0..], @intCast(block_index)))
+        for (0..rev_limit) |block_idx| {
+            if (!common.bitmapIsSet(owned_reverse_blocks[0..], @intCast(block_idx)) and
+                !common.bitmapIsSet(free_reverse_blocks[0..], @intCast(block_idx)) and
+                !common.bitmapIsSet(retired_reverse_blocks[0..], @intCast(block_idx)))
             {
                 return error.CorruptGraph;
             }
@@ -104,10 +104,10 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     }
     {
         const group_limit = @min(graph.loadGroupCount(), common.MAX_TRACKED_GROUPS);
-        for (0..group_limit) |group_index| {
-            if (!common.bitmapIsSet(owned_groups[0..], @intCast(group_index)) and
-                !common.bitmapIsSet(free_groups[0..], @intCast(group_index)) and
-                !common.bitmapIsSet(retired_groups[0..], @intCast(group_index)))
+        for (0..group_limit) |group_idx| {
+            if (!common.bitmapIsSet(owned_groups[0..], @intCast(group_idx)) and
+                !common.bitmapIsSet(free_groups[0..], @intCast(group_idx)) and
+                !common.bitmapIsSet(retired_groups[0..], @intCast(group_idx)))
             {
                 return error.CorruptGraph;
             }

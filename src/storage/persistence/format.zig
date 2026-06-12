@@ -41,7 +41,7 @@
 //! pool); retired state is not representable in the file. Sides are written
 //! normalized: per node, the published `SideAdj`, degree, and sorted bit of
 //! each direction — staging slots and the RCU `version` counter are not
-//! persisted (a loaded graph starts with `fwd_index = rev_index = 0`,
+//! persisted (a loaded graph starts with `fwd_idx = rev_idx = 0`,
 //! version 0).
 //!
 //! ## Load contract

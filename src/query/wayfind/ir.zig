@@ -115,14 +115,73 @@ pub const PlanError = error{
 };
 
 /// Static validation — the trust boundary for every plan that did not come
-/// from the comptime builder. Checks, in order: enum ranges (the bytes may
-/// be hostile — use std.meta.intToEnum, never @enumFromInt), stack
-/// discipline (sources +1, set ops -1, transforms 0, terminal -1 and last),
-/// exactly one terminal as the final step, param slots < param_count,
-/// hops.min <= hops.max, and operand cleanliness per op.
+/// from the comptime builder. Enum fields are decoded from raw bytes
+/// (a plan cast from wire bytes may hold out-of-range values; loading such
+/// an enum field directly would be illegal behavior, so the raw int is
+/// read first and checked with std.enums.fromInt).
 pub fn validate(plan: Plan) PlanError!void {
-    _ = plan;
-    @panic("TODO: ir.validate");
+    if (plan.steps.len == 0) return error.MissingTerminal;
+
+    var depth: usize = 0;
+    for (plan.steps, 0..) |*step, step_idx| {
+        const bytes = std.mem.asBytes(step);
+        const op = std.enums.fromInt(Op, std.mem.readInt(u16, bytes[0..2], .little)) orelse
+            return error.InvalidEnum;
+        if (std.enums.fromInt(Direction, bytes[2]) == null) return error.InvalidEnum;
+        if (std.enums.fromInt(Cmp, bytes[3]) == null) return error.InvalidEnum;
+
+        // Operand cleanliness: every field an op does not use must hold its
+        // default, so plans compare/hash structurally.
+        const uses: struct {
+            dir: bool = false,
+            cmp: bool = false,
+            rel: bool = false,
+            param: bool = false,
+            hops: bool = false,
+            arg: bool = false,
+        } = switch (op) {
+            .seed_param => .{ .param = true },
+            .seed_node => .{ .arg = true },
+            .all_nodes => .{},
+            .expand => .{ .dir = true, .rel = true, .hops = true },
+            .set_union, .set_intersect, .set_minus => .{},
+            .filter_degree => .{ .dir = true, .cmp = true, .arg = true },
+            .emit_ids, .emit_count, .emit_exists, .emit_edges, .emit_csr => .{},
+        };
+        if (!uses.dir and step.dir != .out) return error.DirtyOperand;
+        if (!uses.cmp and step.cmp != .ge) return error.DirtyOperand;
+        if (!uses.rel and step.rel != ANY_RELATION) return error.DirtyOperand;
+        if (!uses.param and step.param != 0) return error.DirtyOperand;
+        if (!uses.hops and (step.hops.min != 1 or step.hops.max != 1)) return error.DirtyOperand;
+        if (!uses.arg and step.arg != 0) return error.DirtyOperand;
+
+        switch (op) {
+            .seed_param => {
+                if (step.param >= plan.param_count) return error.UnknownParam;
+                depth += 1;
+            },
+            .seed_node, .all_nodes => depth += 1,
+            .expand => {
+                if (depth < 1) return error.StackUnderflow;
+                if (step.hops.min > step.hops.max) return error.InvalidHops;
+            },
+            .filter_degree => {
+                if (depth < 1) return error.StackUnderflow;
+            },
+            .set_union, .set_intersect, .set_minus => {
+                if (depth < 2) return error.StackUnderflow;
+                depth -= 1;
+            },
+            .emit_ids, .emit_count, .emit_exists, .emit_edges, .emit_csr => {
+                if (step_idx != plan.steps.len - 1) return error.EarlyTerminal;
+                if (depth < 1) return error.StackUnderflow;
+                if (depth != 1) return error.MissingTerminal;
+                return;
+            },
+        }
+    }
+    // Fell off the end without hitting a terminal.
+    return error.MissingTerminal;
 }
 
 comptime {

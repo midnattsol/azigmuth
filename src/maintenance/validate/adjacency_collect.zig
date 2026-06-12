@@ -17,8 +17,8 @@ pub fn appendContiguousBlocks(
     start: u32,
     count: u32,
 ) !void {
-    for (start..start + count) |block_index| {
-        try blocks.append(allocator, .{ .block_index = @intCast(block_index) });
+    for (start..start + count) |block_idx| {
+        try blocks.append(allocator, .{ .block_idx = @intCast(block_idx) });
     }
 }
 
@@ -72,7 +72,7 @@ pub fn collectAdjacencyBlocks(
         seen_count += 1;
 
         for (group.start..group.start + group.count) |block_idx_usize| {
-            try blocks.append(allocator, .{ .block_index = @intCast(block_idx_usize) });
+            try blocks.append(allocator, .{ .block_idx = @intCast(block_idx_usize) });
         }
     }
 }

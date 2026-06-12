@@ -13,7 +13,7 @@ const node_validity = @import("../../core/node_validity.zig");
 pub const PreparedAppendBlock = struct {
     old_block: ?u32 = null,
     new_block: u32,
-    tail_index: ?u32 = null,
+    tail_idx: ?u32 = null,
 };
 
 pub const AppliedAppend = struct {

@@ -68,17 +68,17 @@ pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
     return .{ .graph = graph };
 }
 
-pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_index: u32, destination_index: u32) !ClaimedAdjacencies {
+pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_idx: u32, destination_idx: u32) !ClaimedAdjacencies {
     // addNode guarantees hot pages for every published node, so claims take
     // the plain load path instead of the (heavier, fallible) ensure path.
-    const source_hot = page_ops.nodeHotAt(graph, .{ .index = source_index });
-    const destination_hot = if (source_index == destination_index) source_hot else page_ops.nodeHotAt(graph, .{ .index = destination_index });
+    const source_hot = page_ops.nodeHotAt(graph, .{ .index = source_idx });
+    const destination_hot = if (source_idx == destination_idx) source_hot else page_ops.nodeHotAt(graph, .{ .index = destination_idx });
     var claims = ClaimedAdjacencies{
         .source_hot = source_hot,
         .destination_hot = destination_hot,
     };
     errdefer claims.release();
-    if (source_index == destination_index) {
+    if (source_idx == destination_idx) {
         try claims.claimNodeFwd(source_hot, true);
         try claims.claimNodeRev(source_hot, true);
     } else {
@@ -88,8 +88,8 @@ pub fn tryClaimAdjacencies(graph: *graph_core.GraphCore, source_index: u32, dest
     return claims;
 }
 
-pub fn tryClaimNodeSides(graph: *graph_core.GraphCore, node_index: u32, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
-    var claims = ClaimedNodeSides{ .hot = page_ops.nodeHotAt(graph, .{ .index = node_index }) };
+pub fn tryClaimNodeSides(graph: *graph_core.GraphCore, node_idx: u32, want_fwd: bool, want_rev: bool) !ClaimedNodeSides {
+    var claims = ClaimedNodeSides{ .hot = page_ops.nodeHotAt(graph, .{ .index = node_idx }) };
     errdefer claims.release();
     if (want_fwd) try claims.ensureFwd();
     if (want_rev) try claims.ensureRev();

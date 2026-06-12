@@ -68,31 +68,31 @@ test "stress rcu: multiple readers and writers run concurrently without corrupti
 
     const reader_source = try graph.addNode();
     var stable_targets: [10]graph_mod.NodeId = undefined;
-    for (0..stable_targets.len) |target_index| {
-        stable_targets[target_index] = try graph.addNode();
-        try graph.addEdge(reader_source, stable_targets[target_index], 0, 0);
+    for (0..stable_targets.len) |target_idx| {
+        stable_targets[target_idx] = try graph.addNode();
+        try graph.addEdge(reader_source, stable_targets[target_idx], 0, 0);
     }
 
     const first_writer_source = try graph.addNode();
     const second_writer_source = try graph.addNode();
     var first_writer_targets: [8]graph_mod.NodeId = undefined;
     var second_writer_targets: [8]graph_mod.NodeId = undefined;
-    for (0..8) |target_index| {
-        first_writer_targets[target_index] = try graph.addNode();
-        second_writer_targets[target_index] = try graph.addNode();
+    for (0..8) |target_idx| {
+        first_writer_targets[target_idx] = try graph.addNode();
+        second_writer_targets[target_idx] = try graph.addNode();
     }
 
     var stop = std.atomic.Value(bool).init(false);
 
     var reader_tasks: [4]ReaderTask = undefined;
     var reader_threads: [4]std.Thread = undefined;
-    for (0..reader_tasks.len) |reader_index| {
-        reader_tasks[reader_index] = ReaderTask{
+    for (0..reader_tasks.len) |reader_idx| {
+        reader_tasks[reader_idx] = ReaderTask{
             .graph = &graph,
             .source = reader_source,
             .stop = &stop,
         };
-        reader_threads[reader_index] = try std.Thread.spawn(.{}, readerLoop, .{&reader_tasks[reader_index]});
+        reader_threads[reader_idx] = try std.Thread.spawn(.{}, readerLoop, .{&reader_tasks[reader_idx]});
     }
 
     var first_writer = WriterTask{

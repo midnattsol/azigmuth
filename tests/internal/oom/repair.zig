@@ -15,32 +15,32 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
     }
 }
 
-fn fillForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
-    for (0..count) |edge_index| {
-        block.destinations[edge_index] = first_destination + @as(u32, @intCast(edge_index));
-        block.relations[edge_index] = 0;
-        block.flags[edge_index] = 0;
+fn fillForwardBlock(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, count: u7) void {
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
+    for (0..count) |edge_idx| {
+        block.destinations[edge_idx] = first_destination + @as(u32, @intCast(edge_idx));
+        block.relations[edge_idx] = 0;
+        block.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
-fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
-    const block_index = try graph.allocBlockRev();
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
-    block.sources[0] = source_index;
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(1));
+fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_idx: u32, source_idx: u32) !void {
+    const block_idx = try graph.allocBlockRev();
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
+    block.sources[0] = source_idx;
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(1));
 
-    const node_buffer = try graph.nodeAt(.{ .index = destination_index });
-    publish.publishedRevSide(node_buffer).first_block = block_index;
+    const node_buffer = try graph.nodeAt(.{ .index = destination_idx });
+    publish.publishedRevSide(node_buffer).first_block = block_idx;
     publish.publishedRevSide(node_buffer).block_count = 1;
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast(1)));
-    try publish.syncToPublished(graph, destination_index);
+    try publish.syncToPublished(graph, destination_idx);
 }
 
-fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_index: u32, first_destination: u32, count: u7) !void {
+fn publishReverseSourcesForForwardRange(graph: *graph_mod.Graph, source_idx: u32, first_destination: u32, count: u7) !void {
     for (0..count) |offset| {
-        try publishSingleReverseSource(graph, first_destination + @as(u32, @intCast(offset)), source_index);
+        try publishSingleReverseSource(graph, first_destination + @as(u32, @intCast(offset)), source_idx);
     }
 }
 

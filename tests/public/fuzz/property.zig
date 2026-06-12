@@ -27,19 +27,19 @@ fn shrinkAndReplay(
 
             var passed = true;
             for (reduced) |op| {
-                const src_idx = op.src % @min(initial_nodes, 16);
-                const dst_idx = op.dst % @min(initial_nodes, 16);
-                if (src_idx == dst_idx) continue;
-                if (graph.hasNode(nodes[src_idx]) and graph.hasNode(nodes[dst_idx])) {
+                const src_idx = op.source % @min(initial_nodes, 16);
+                const destination_idx = op.destination % @min(initial_nodes, 16);
+                if (src_idx == destination_idx) continue;
+                if (graph.hasNode(nodes[src_idx]) and graph.hasNode(nodes[destination_idx])) {
                     switch (op.kind) {
                         .add => {
-                            if (graph.addEdge(nodes[src_idx], nodes[dst_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| {
+                            if (graph.addEdge(nodes[src_idx], nodes[destination_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
                         },
                         .remove => {
-                            if (graph.removeEdge(nodes[src_idx], nodes[dst_idx])) |_| {} else |_| {
+                            if (graph.removeEdge(nodes[src_idx], nodes[destination_idx])) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
@@ -81,16 +81,16 @@ fn shrinkAndReplay(
     }
 
     for (ops) |op| {
-        const src_idx = op.src % @min(initial_nodes, 16);
-        const dst_idx = op.dst % @min(initial_nodes, 16);
-        if (src_idx == dst_idx) continue;
-        if (graph2.hasNode(nodes2[src_idx]) and graph2.hasNode(nodes2[dst_idx])) {
+        const src_idx = op.source % @min(initial_nodes, 16);
+        const destination_idx = op.destination % @min(initial_nodes, 16);
+        if (src_idx == destination_idx) continue;
+        if (graph2.hasNode(nodes2[src_idx]) and graph2.hasNode(nodes2[destination_idx])) {
             switch (op.kind) {
                 .add => {
-                    if (graph2.addEdge(nodes2[src_idx], nodes2[dst_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| break;
+                    if (graph2.addEdge(nodes2[src_idx], nodes2[destination_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| break;
                 },
                 .remove => {
-                    if (graph2.removeEdge(nodes2[src_idx], nodes2[dst_idx])) |_| {} else |_| break;
+                    if (graph2.removeEdge(nodes2[src_idx], nodes2[destination_idx])) |_| {} else |_| break;
                 },
                 .repair_node => {
                     if (graph2.repairNode(nodes2[src_idx])) |_| {} else |_| break;
@@ -109,8 +109,8 @@ const OpKind = enum { add, remove, repair_node, remove_node };
 
 const Op = struct {
     kind: OpKind,
-    src: u8,
-    dst: u8,
+    source: u8,
+    destination: u8,
     rel: u16,
     flags: u16,
 };
@@ -132,8 +132,8 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
                 2 => .repair_node,
                 else => .remove_node,
             },
-            .src = @intCast(random.int(u8) % node_count),
-            .dst = @intCast(random.int(u8) % node_count),
+            .source = @intCast(random.int(u8) % node_count),
+            .destination = @intCast(random.int(u8) % node_count),
             .rel = random.int(u16),
             .flags = random.int(u16),
         };
@@ -148,20 +148,20 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
     }
 
     for (ops) |op| {
-        if (op.src == op.dst) continue;
+        if (op.source == op.destination) continue;
 
         switch (op.kind) {
             .add => {
-                _ = graph.addEdge(nodes[op.src], nodes[op.dst], op.rel, @bitCast(op.flags)) catch {};
+                _ = graph.addEdge(nodes[op.source], nodes[op.destination], op.rel, @bitCast(op.flags)) catch {};
             },
             .remove => {
-                _ = graph.removeEdge(nodes[op.src], nodes[op.dst]) catch {};
+                _ = graph.removeEdge(nodes[op.source], nodes[op.destination]) catch {};
             },
             .repair_node => {
-                _ = graph.repairNode(nodes[op.src]) catch azigmuth.RepairNodeSummary{};
+                _ = graph.repairNode(nodes[op.source]) catch azigmuth.RepairNodeSummary{};
             },
             .remove_node => {
-                _ = graph.removeNode(nodes[op.src]) catch {};
+                _ = graph.removeNode(nodes[op.source]) catch {};
             },
         }
     }

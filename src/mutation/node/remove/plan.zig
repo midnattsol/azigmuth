@@ -10,12 +10,12 @@ const remove_types = @import("types.zig");
 fn markRelatedNode(
     graph: *graph_core.GraphCore,
     related_nodes: *std.ArrayList(remove_types.RelatedNode),
-    related_node_index: *std.AutoHashMap(u32, usize),
-    node_index: u32,
+    related_node_idx: *std.AutoHashMap(u32, usize),
+    node_idx: u32,
     fwd_degree_delta: u22,
     rev_degree_delta: u22,
 ) !void {
-    if (related_node_index.get(node_index)) |entry_idx| {
+    if (related_node_idx.get(node_idx)) |entry_idx| {
         const entry = &related_nodes.items[entry_idx];
         if (rev_degree_delta > 0) try entry.claims.ensureRev();
         entry.fwd_degree_delta += fwd_degree_delta;
@@ -23,15 +23,15 @@ fn markRelatedNode(
         return;
     }
 
-    const claims = try common.tryClaimNodeSides(graph, node_index, false, rev_degree_delta > 0);
+    const claims = try common.tryClaimNodeSides(graph, node_idx, false, rev_degree_delta > 0);
     try related_nodes.append(graph.allocator, .{
-        .node_index = node_index,
-        .node_meta = page_ops.nodeMetaAt(graph, .{ .index = node_index }),
+        .node_idx = node_idx,
+        .node_meta = page_ops.nodeMetaAt(graph, .{ .index = node_idx }),
         .claims = claims,
         .fwd_degree_delta = fwd_degree_delta,
         .rev_degree_delta = rev_degree_delta,
     });
-    try related_node_index.put(node_index, related_nodes.items.len - 1);
+    try related_node_idx.put(node_idx, related_nodes.items.len - 1);
 }
 
 /// Collects live neighbor nodes that need degree or repair-flag updates.

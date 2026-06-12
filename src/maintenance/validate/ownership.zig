@@ -10,8 +10,8 @@ const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
 
 fn validateDebtQueue(queue: []const u32, node_count: u32) !void {
-    for (queue) |node_index| {
-        if (node_index >= node_count) return error.CorruptGraph;
+    for (queue) |node_idx| {
+        if (node_idx >= node_count) return error.CorruptGraph;
     }
 }
 
@@ -20,13 +20,13 @@ pub fn validateOwnedBlockFast(
     owned_blocks: []u64,
     free_blocks: []const u64,
     retired_blocks: []const u64,
-    block_index: u32,
+    block_idx: u32,
     comptime side: common.Side,
 ) !void {
-    if (!common.blockExists(graph, block_index, side)) return error.CorruptGraph;
-    if (!common.bitmapSet(owned_blocks, block_index)) return error.CorruptGraph;
-    if (common.bitmapIsSet(free_blocks, block_index)) return error.CorruptGraph;
-    if (common.bitmapIsSet(retired_blocks, block_index)) return error.CorruptGraph;
+    if (!common.blockExists(graph, block_idx, side)) return error.CorruptGraph;
+    if (!common.bitmapSet(owned_blocks, block_idx)) return error.CorruptGraph;
+    if (common.bitmapIsSet(free_blocks, block_idx)) return error.CorruptGraph;
+    if (common.bitmapIsSet(retired_blocks, block_idx)) return error.CorruptGraph;
 }
 
 pub fn validateAdjacencyOwnershipAndLayoutFast(
@@ -57,8 +57,8 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
     }
 
     if (groups == 0) {
-        for (common.firstBlock(adjacency, side)..common.firstBlock(adjacency, side) + count) |block_index| {
-            try validateOwnedBlockFast(graph, owned_blocks, free_blocks, retired_blocks, @intCast(block_index), side);
+        for (common.firstBlock(adjacency, side)..common.firstBlock(adjacency, side) + count) |block_idx| {
+            try validateOwnedBlockFast(graph, owned_blocks, free_blocks, retired_blocks, @intCast(block_idx), side);
         }
         return;
     }
@@ -73,19 +73,19 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
     const end_group = std.math.add(u32, first_group_idx, groups) catch return error.CorruptGraph;
     if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
 
-    for (first_group_idx..end_group) |group_index_usize| {
-        const group_index: u32 = @intCast(group_index_usize);
+    for (first_group_idx..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
         visited_groups += 1;
 
-        const group = page_ops.groupAtConst(graph, group_index);
+        const group = page_ops.groupAtConst(graph, group_idx);
         if (group.count == 0) return error.CorruptGraph;
 
-        if (!common.bitmapSet(owned_groups, group_index)) return error.CorruptGraph;
-        if (common.bitmapIsSet(free_groups, group_index)) return error.CorruptGraph;
-        if (common.bitmapIsSet(retired_groups, group_index)) return error.CorruptGraph;
+        if (!common.bitmapSet(owned_groups, group_idx)) return error.CorruptGraph;
+        if (common.bitmapIsSet(free_groups, group_idx)) return error.CorruptGraph;
+        if (common.bitmapIsSet(retired_groups, group_idx)) return error.CorruptGraph;
 
-        for (group.start..group.start + group.count) |block_index| {
-            try validateOwnedBlockFast(graph, owned_blocks, free_blocks, retired_blocks, @intCast(block_index), side);
+        for (group.start..group.start + group.count) |block_idx| {
+            try validateOwnedBlockFast(graph, owned_blocks, free_blocks, retired_blocks, @intCast(block_idx), side);
         }
         counted_blocks += group.count;
     }

@@ -227,8 +227,8 @@ test "graph_builder: degree cache matches edge count for large graph" {
     try testing.expectEqual(@as(usize, 200), try snapshot_support.outDegree(graph, n, testing.allocator));
     try testing.expectEqual(@as(u64, 200), graph.edgeCount());
 
-    for (1..201) |dst_index| {
-        try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, .{ .index = @intCast(dst_index) }, testing.allocator));
+    for (1..201) |dst_idx| {
+        try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, .{ .index = @intCast(dst_idx) }, testing.allocator));
     }
 }
 

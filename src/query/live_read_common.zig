@@ -118,16 +118,16 @@ pub fn validateReverseSideQuick(graph: *const graph_core.GraphCore, side_snapsho
 /// Returns whether a candidate node should be treated as removed during live iteration.
 /// Caches the candidate's NodeMeta page: 8 bytes per node keeps the removed
 /// filter dense in cache during multi-candidate scans.
-pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_index: u32) bool {
-    if (candidate_index >= graph.publishedNodeCount()) return true;
-    const page_index = page_ops.pageOf(candidate_index, constants.NODES_PER_PAGE);
-    if (iterator.cached_node_page == null or iterator.cached_node_page_index != page_index) {
-        iterator.cached_node_page = page_ops.nodeMetaPageAtConst(graph, page_index);
-        iterator.cached_node_page_index = page_index;
+pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_idx: u32) bool {
+    if (candidate_idx >= graph.publishedNodeCount()) return true;
+    const page_idx = page_ops.pageOf(candidate_idx, constants.NODES_PER_PAGE);
+    if (iterator.cached_node_page == null or iterator.cached_node_page_idx != page_idx) {
+        iterator.cached_node_page = page_ops.nodeMetaPageAtConst(graph, page_idx);
+        iterator.cached_node_page_idx = page_idx;
     }
 
-    const slot_index = page_ops.slotOf(candidate_index, constants.NODES_PER_PAGE);
-    return iterator.cached_node_page.?[slot_index].loadPublishedMeta().removed;
+    const slot_idx = page_ops.slotOf(candidate_idx, constants.NODES_PER_PAGE);
+    return iterator.cached_node_page.?[slot_idx].loadPublishedMeta().removed;
 }
 
 /// Releases the reader token held by one live iterator, if still active.

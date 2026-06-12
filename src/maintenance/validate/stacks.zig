@@ -21,17 +21,17 @@ pub fn blockStackHeadIndex(graph: *const graph_core.GraphCore, comptime kind: co
     return @truncate(head);
 }
 
-pub fn blockMetaNextFast(graph: *const graph_core.GraphCore, block_index: u32, comptime side: common.Side) !u32 {
-    if (!common.blockExists(graph, block_index, side)) return error.CorruptGraph;
-    const page_index = page_ops.pageOf(block_index, constants.EDGE_BLOCKS_PER_PAGE);
+pub fn blockMetaNextFast(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: common.Side) !u32 {
+    if (!common.blockExists(graph, block_idx, side)) return error.CorruptGraph;
+    const page_idx = page_ops.pageOf(block_idx, constants.EDGE_BLOCKS_PER_PAGE);
     const raw = switch (side) {
-        .fwd => graph.edge_blocks_fwd_meta_pages.load(page_index),
-        .rev => graph.edge_blocks_rev_meta_pages.load(page_index),
+        .fwd => graph.edge_blocks_fwd_meta_pages.load(page_idx),
+        .rev => graph.edge_blocks_rev_meta_pages.load(page_idx),
     };
     if (raw == 0) return error.CorruptGraph;
     const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
     const page = page_ptr[0..constants.EDGE_BLOCKS_PER_PAGE];
-    return page[page_ops.slotOf(block_index, constants.EDGE_BLOCKS_PER_PAGE)].next.load(.acquire);
+    return page[page_ops.slotOf(block_idx, constants.EDGE_BLOCKS_PER_PAGE)].next.load(.acquire);
 }
 
 pub fn populateStackBitmapFast(
@@ -60,14 +60,14 @@ pub fn groupSpanStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime 
     return @truncate(head);
 }
 
-pub fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_index: u32) !u32 {
-    if (group_index >= graph.loadGroupCount()) return error.CorruptGraph;
-    const page_index = page_ops.pageOf(group_index, constants.EDGE_GROUPS_PER_PAGE);
-    const raw = graph.edge_block_group_meta_pages.load(page_index);
+pub fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_idx: u32) !u32 {
+    if (group_idx >= graph.loadGroupCount()) return error.CorruptGraph;
+    const page_idx = page_ops.pageOf(group_idx, constants.EDGE_GROUPS_PER_PAGE);
+    const raw = graph.edge_block_group_meta_pages.load(page_idx);
     if (raw == 0) return error.CorruptGraph;
     const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
     const page = page_ptr[0..constants.EDGE_GROUPS_PER_PAGE];
-    return page[page_ops.slotOf(group_index, constants.EDGE_GROUPS_PER_PAGE)].next.load(.acquire);
+    return page[page_ops.slotOf(group_idx, constants.EDGE_GROUPS_PER_PAGE)].next.load(.acquire);
 }
 
 pub fn populateGroupStackBitmapFast(
@@ -83,9 +83,9 @@ pub fn populateGroupStackBitmapFast(
         while (current != constants.END_OF_CHAIN) {
             if (visited >= limit) return error.CorruptGraph;
             visited += 1;
-            for (current..current + span_count) |group_index_usize| {
-                const group_index: u32 = @intCast(group_index_usize);
-                if (!common.bitmapSet(bitmap, group_index)) return error.CorruptGraph;
+            for (current..current + span_count) |group_idx_usize| {
+                const group_idx: u32 = @intCast(group_idx_usize);
+                if (!common.bitmapSet(bitmap, group_idx)) return error.CorruptGraph;
             }
             current = try groupMetaNextFast(graph, current);
         }

@@ -89,8 +89,8 @@ pub fn RadixDirectory(comptime INLINE: usize, comptime L1: usize, comptime L2: u
             return max_pages;
         }
 
-        pub fn load(self: *const Self, page_index: u32) usize {
-            const flat_idx: usize = @intCast(page_index);
+        pub fn load(self: *const Self, page_idx: u32) usize {
+            const flat_idx: usize = @intCast(page_idx);
             if (flat_idx < INLINE) return self.inline_slots[flat_idx].load(.acquire);
             const tree_idx = flat_idx - INLINE;
             if (tree_idx >= L1 * L2) return 0;
@@ -102,8 +102,8 @@ pub fn RadixDirectory(comptime INLINE: usize, comptime L1: usize, comptime L2: u
             return sliceFromRawConst(leaf_raw)[tree_idx % L2].load(.acquire);
         }
 
-        pub fn slotPtr(self: *Self, allocator: std.mem.Allocator, page_index: u32) !*std.atomic.Value(usize) {
-            const flat_idx: usize = @intCast(page_index);
+        pub fn slotPtr(self: *Self, allocator: std.mem.Allocator, page_idx: u32) !*std.atomic.Value(usize) {
+            const flat_idx: usize = @intCast(page_idx);
             if (flat_idx < INLINE) return &self.inline_slots[flat_idx];
             const tree_idx = flat_idx - INLINE;
             if (tree_idx >= L1 * L2) return error.OutOfMemory;

@@ -19,9 +19,9 @@ pub fn debtStats(graph: *const graph_core.GraphCore) !types.DebtStats {
         .estimated_tombstone_fwd_nodes = 0,
     };
 
-    for (0..node_count) |node_index_usize| {
-        const node_index: u32 = @intCast(node_index_usize);
-        const node = types.NodeId{ .index = node_index };
+    for (0..node_count) |node_idx_usize| {
+        const node_idx: u32 = @intCast(node_idx_usize);
+        const node = types.NodeId{ .index = node_idx };
         const meta = node_access.loadPublishedMetaAtConst(graph, node);
         if (meta.removed) {
             stats.removed_nodes += 1;

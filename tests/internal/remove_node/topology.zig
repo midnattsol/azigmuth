@@ -10,16 +10,16 @@ test "removeNode: hub with many incoming edges cleans up forward and reverse sid
     const hub = try graph.addNode();
     const source_count: usize = 50;
     var sources: [source_count]graph_mod.NodeId = undefined;
-    for (0..source_count) |source_index| {
-        sources[source_index] = try graph.addNode();
-        try graph.addEdge(sources[source_index], hub, 0, 0);
+    for (0..source_count) |source_idx| {
+        sources[source_idx] = try graph.addNode();
+        try graph.addEdge(sources[source_idx], hub, 0, 0);
     }
 
     const target_count: usize = 8;
     var targets: [target_count]graph_mod.NodeId = undefined;
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(hub, targets[target_index], 0, 0);
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(hub, targets[target_idx], 0, 0);
     }
 
     _ = try graph.removeNode(hub);
@@ -70,9 +70,9 @@ test "block capacity: 64th edge keeps a single block, 65th triggers a second blo
 
     const source = try graph.addNode();
     var targets: [64]graph_mod.NodeId = undefined;
-    for (0..64) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], 0, 0);
+    for (0..64) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
     const after_64 = try graph.publishedNodeAdj(source);

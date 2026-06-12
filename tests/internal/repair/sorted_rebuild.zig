@@ -118,7 +118,7 @@ test "sorted rebuild reverse: removes tombstones and packs sorted sources" {
     try testing.expectEqual(@as(u7, 6), page_ops.blockLiveCount(&graph.graph, result.new_blocks.items[0], .rev));
 }
 
-test "sorted rebuild reverse: skip_source_index excludes the requested source" {
+test "sorted rebuild reverse: skip_source_idx excludes the requested source" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 

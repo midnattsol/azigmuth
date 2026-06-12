@@ -74,19 +74,19 @@ test "node_bitmap: ensurePageForNode, setBit and clearBit round-trip" {
     defer graph.deinit();
 
     const directory = &graph.graph.repair_queued_fwd_pages;
-    const node_index: u32 = 123;
+    const node_idx: u32 = 123;
 
-    try node_bitmap.ensurePageForNode(&graph.graph, directory, node_index);
-    try testing.expect(!node_bitmap.isSet(directory, node_index));
+    try node_bitmap.ensurePageForNode(&graph.graph, directory, node_idx);
+    try testing.expect(!node_bitmap.isSet(directory, node_idx));
 
-    try node_bitmap.setBit(&graph.graph, directory, node_index);
-    try testing.expect(node_bitmap.isSet(directory, node_index));
+    try node_bitmap.setBit(&graph.graph, directory, node_idx);
+    try testing.expect(node_bitmap.isSet(directory, node_idx));
     // Neighboring bits stay untouched.
-    try testing.expect(!node_bitmap.isSet(directory, node_index - 1));
-    try testing.expect(!node_bitmap.isSet(directory, node_index + 1));
+    try testing.expect(!node_bitmap.isSet(directory, node_idx - 1));
+    try testing.expect(!node_bitmap.isSet(directory, node_idx + 1));
 
-    try node_bitmap.clearBit(&graph.graph, directory, node_index);
-    try testing.expect(!node_bitmap.isSet(directory, node_index));
+    try node_bitmap.clearBit(&graph.graph, directory, node_idx);
+    try testing.expect(!node_bitmap.isSet(directory, node_idx));
 }
 
 test "radix directory: maxPages reports the inline + L1*L2 capacity" {

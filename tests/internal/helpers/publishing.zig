@@ -268,7 +268,7 @@ pub fn setPublishedFwdDegreeExact(graph: *graph_mod.Graph, node_idx: u32, deg: u
     var meta = node_meta.loadPublishedMeta();
     meta = meta.withFwdDegree(deg);
     const published = page_ops.ensureNodePublishedAt(&graph.graph, .{ .index = node_idx }) catch @panic("ensureNodePublishedAt failed");
-    published.fwd_degrees[meta.fwd_index] = deg;
+    published.fwd_degrees[meta.fwd_idx] = deg;
     node_meta.storePublishedMeta(meta);
 }
 
@@ -277,7 +277,7 @@ pub fn setPublishedRevDegreeExact(graph: *graph_mod.Graph, node_idx: u32, deg: u
     var meta = node_meta.loadPublishedMeta();
     meta = meta.withRevDegree(deg);
     const published = page_ops.ensureNodePublishedAt(&graph.graph, .{ .index = node_idx }) catch @panic("ensureNodePublishedAt failed");
-    published.rev_degrees[meta.rev_index] = deg;
+    published.rev_degrees[meta.rev_idx] = deg;
     node_meta.storePublishedMeta(meta);
 }
 
@@ -287,12 +287,12 @@ pub fn storePublishedMeta(graph: *graph_mod.Graph, node_idx: u32, meta: types.Pu
 
 pub fn publishedFwdSide(ref: NodeRef) *types.SideAdj {
     const published = publishedOf(ref);
-    return &published.fwd[metaOf(ref).loadPublishedMeta().fwd_index];
+    return &published.fwd[metaOf(ref).loadPublishedMeta().fwd_idx];
 }
 
 pub fn publishedRevSide(ref: NodeRef) *types.SideAdj {
     const published = publishedOf(ref);
-    return &published.rev[metaOf(ref).loadPublishedMeta().rev_index];
+    return &published.rev[metaOf(ref).loadPublishedMeta().rev_idx];
 }
 
 pub fn setPublishedAdjSnapshot(ref: NodeRef, adj: types.NodeAdj) void {

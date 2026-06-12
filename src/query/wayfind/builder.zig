@@ -18,8 +18,8 @@ pub const Query = struct {
         return Pipe(&[_]ir.Step{.{ .op = .seed_param, .param = slot }});
     }
 
-    pub fn fromNode(comptime node_index: u32) type {
-        return Pipe(&[_]ir.Step{.{ .op = .seed_node, .arg = node_index }});
+    pub fn fromNode(comptime node_idx: u32) type {
+        return Pipe(&[_]ir.Step{.{ .op = .seed_node, .arg = node_idx }});
     }
 
     pub fn allNodes() type {

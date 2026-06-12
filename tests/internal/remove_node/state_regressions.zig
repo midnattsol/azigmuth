@@ -16,12 +16,12 @@ test "removeNode regression: reverse-only publish does not flip forward index of
     try graph.addEdge(c, b, 0, 0);
 
     const b_node = try graph.nodeAt(b);
-    const fwd_index_before = b_node.loadPublishedMeta().fwd_index;
+    const fwd_idx_before = b_node.loadPublishedMeta().fwd_idx;
 
     _ = try graph.removeNode(a);
 
-    const fwd_index_after = b_node.loadPublishedMeta().fwd_index;
-    try testing.expectEqual(fwd_index_before, fwd_index_after);
+    const fwd_idx_after = b_node.loadPublishedMeta().fwd_idx;
+    try testing.expectEqual(fwd_idx_before, fwd_idx_after);
     try graph.validate();
 }
 

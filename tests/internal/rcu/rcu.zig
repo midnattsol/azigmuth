@@ -124,9 +124,9 @@ test "rcu: reader threads can iterate while a writer publishes updates" {
 
     const source = try graph.addNode();
     var stable_targets: [10]graph_mod.NodeId = undefined;
-    for (0..stable_targets.len) |target_index| {
-        stable_targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, stable_targets[target_index], 0, 0);
+    for (0..stable_targets.len) |target_idx| {
+        stable_targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, stable_targets[target_idx], 0, 0);
     }
     const toggled_target = try graph.addNode();
 

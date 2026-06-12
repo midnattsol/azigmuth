@@ -14,22 +14,22 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
     }
 }
 
-fn setForwardBlock(graph: *graph_mod.Graph, block_index: u32, first_destination: u32, count: u7) void {
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
-    for (0..count) |edge_index| {
-        block.destinations[edge_index] = first_destination + @as(u32, @intCast(edge_index));
-        block.relations[edge_index] = 0;
-        block.flags[edge_index] = 0;
+fn setForwardBlock(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, count: u7) void {
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
+    for (0..count) |edge_idx| {
+        block.destinations[edge_idx] = first_destination + @as(u32, @intCast(edge_idx));
+        block.relations[edge_idx] = 0;
+        block.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
-fn setReverseBlock(graph: *graph_mod.Graph, block_index: u32, first_source: u32, count: u7) void {
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
-    for (0..count) |source_index| {
-        block.sources[source_index] = first_source + @as(u32, @intCast(source_index));
+fn setReverseBlock(graph: *graph_mod.Graph, block_idx: u32, first_source: u32, count: u7) void {
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
+    for (0..count) |source_idx| {
+        block.sources[source_idx] = first_source + @as(u32, @intCast(source_idx));
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(count));
 }
 
 fn publishForwardGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups: []const u32, block_count: u16) !void {
@@ -40,10 +40,10 @@ fn publishForwardGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups:
     publish.publishedFwdSide(node_buffer).first_group = groups[0];
     publish.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     var total: usize = 0;
-    for (groups) |group_index| {
-        const group = page_ops.groupAtConst(&graph.graph, group_index);
-        for (group.start..group.start + group.count) |block_index| {
-            total += page_ops.blockLiveCount(&graph.graph, @intCast(block_index), .fwd);
+    for (groups) |group_idx| {
+        const group = page_ops.groupAtConst(&graph.graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
+            total += page_ops.blockLiveCount(&graph.graph, @intCast(block_idx), .fwd);
         }
     }
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast((total))));
@@ -58,20 +58,20 @@ fn publishReverseGroups(graph: *graph_mod.Graph, node: graph_mod.NodeId, groups:
     publish.publishedRevSide(node_buffer).first_group = groups[0];
     publish.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = false, .needs_repair_rev = true, .removed = false });
     var total: usize = 0;
-    for (groups) |group_index| {
-        const group = page_ops.groupAtConst(&graph.graph, group_index);
-        for (group.start..group.start + group.count) |block_index| {
-            total += page_ops.blockLiveCount(&graph.graph, @intCast(block_index), .rev);
+    for (groups) |group_idx| {
+        const group = page_ops.groupAtConst(&graph.graph, group_idx);
+        for (group.start..group.start + group.count) |block_idx| {
+            total += page_ops.blockLiveCount(&graph.graph, @intCast(block_idx), .rev);
         }
     }
     publish.setPublishedRevDegree(node_buffer, @as(u22, @intCast((total))));
     try publish.syncToPublished(graph, node.index);
 }
 
-fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.NodeId, source_index: u32) !void {
+fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.NodeId, source_idx: u32) !void {
     const block = try graph.allocBlockRev();
     var reverse_block = page_ops.edgeBlockAt(&graph.graph, block, .rev);
-    reverse_block.sources[0] = source_index;
+    reverse_block.sources[0] = source_idx;
     page_ops.setBlockLiveCount(&graph.graph, block, .rev, 1);
 
     const node_buffer = try graph.nodeAt(destination);
@@ -81,10 +81,10 @@ fn publishSingleReverseSource(graph: *graph_mod.Graph, destination: graph_mod.No
     try publish.syncToPublished(graph, destination.index);
 }
 
-fn publishSingleForwardEdge(graph: *graph_mod.Graph, source: graph_mod.NodeId, destination_index: u32) !void {
+fn publishSingleForwardEdge(graph: *graph_mod.Graph, source: graph_mod.NodeId, destination_idx: u32) !void {
     const block = try graph.allocBlockFwd();
     var forward_block = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    forward_block.destinations[0] = destination_index;
+    forward_block.destinations[0] = destination_idx;
     forward_block.relations[0] = 0;
     forward_block.flags[0] = 0;
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 1);
@@ -115,8 +115,8 @@ fn buildGroupedForwardGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
     page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1 };
     try publishForwardGroups(graph, source, &[_]u32{ group0, group1, group2 }, 3);
 
-    for (1..100) |destination_index| {
-        try publishSingleReverseSource(graph, .{ .index = @intCast(destination_index) }, source.index);
+    for (1..100) |destination_idx| {
+        try publishSingleReverseSource(graph, .{ .index = @intCast(destination_idx) }, source.index);
     }
     graph.graph.edge_count.store(99, .release);
     return source;
@@ -141,8 +141,8 @@ fn buildGroupedReverseGraph(graph: *graph_mod.Graph) !graph_mod.NodeId {
     page_ops.groupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1 };
     try publishReverseGroups(graph, destination, &[_]u32{ group0, group1, group2 }, 3);
 
-    for (1..100) |source_index| {
-        try publishSingleForwardEdge(graph, .{ .index = @intCast(source_index) }, destination.index);
+    for (1..100) |source_idx| {
+        try publishSingleForwardEdge(graph, .{ .index = @intCast(source_idx) }, destination.index);
     }
     graph.graph.edge_count.store(99, .release);
     return destination;
@@ -190,8 +190,8 @@ test "mutation grouped: RepairRequired in grouped forward does not publish" {
 
     const source = try buildGroupedForwardGraph(&graph);
     for (1..2) |_| {}
-    const first_block_index = page_ops.groupAtConst(&graph.graph, (try graph.publishedNodeAdj(source)).first_group_fwd).start;
-    page_ops.setBlockLiveCount(&graph.graph, first_block_index, .fwd, @intCast(48));
+    const first_block_idx = page_ops.groupAtConst(&graph.graph, (try graph.publishedNodeAdj(source)).first_group_fwd).start;
+    page_ops.setBlockLiveCount(&graph.graph, first_block_idx, .fwd, @intCast(48));
     publish.setPublishedFwdDegree(try graph.nodeAt(source), 98);
     const reverse_node = try graph.nodeAt(.{ .index = 49 });
     // Retire reverse block before clearing it to avoid orphan detection.
@@ -214,8 +214,8 @@ test "mutation grouped: RepairRequired in grouped reverse does not publish" {
     defer graph.deinit();
 
     const destination = try buildGroupedReverseGraph(&graph);
-    const first_block_index = page_ops.groupAtConst(&graph.graph, (try graph.publishedNodeAdj(destination)).first_group_rev).start;
-    page_ops.setBlockLiveCount(&graph.graph, first_block_index, .rev, @intCast(48));
+    const first_block_idx = page_ops.groupAtConst(&graph.graph, (try graph.publishedNodeAdj(destination)).first_group_rev).start;
+    page_ops.setBlockLiveCount(&graph.graph, first_block_idx, .rev, @intCast(48));
     publish.setPublishedRevDegree(try graph.nodeAt(destination), 98);
     const forward_node = try graph.nodeAt(.{ .index = 49 });
     // Retire forward block before clearing it to avoid orphan detection.
@@ -302,10 +302,10 @@ test "mutation grouped: removeEdge tail block clones chain without mutating publ
 fn publishSingleBlockGroupedForward(
     graph: *graph_mod.Graph,
     source: graph_mod.NodeId,
-    destination_index: u32,
+    destination_idx: u32,
 ) !struct { block: u32, group: u32 } {
     const block = try graph.allocBlockFwd();
-    setForwardBlock(graph, block, destination_index, 1);
+    setForwardBlock(graph, block, destination_idx, 1);
     const group = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
 
@@ -323,10 +323,10 @@ fn publishSingleBlockGroupedForward(
 fn publishSingleBlockGroupedReverse(
     graph: *graph_mod.Graph,
     destination: graph_mod.NodeId,
-    source_index: u32,
+    source_idx: u32,
 ) !struct { block: u32, group: u32 } {
     const block = try graph.allocBlockRev();
-    setReverseBlock(graph, block, source_index, 1);
+    setReverseBlock(graph, block, source_idx, 1);
     const group = try graph.allocGroup();
     page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
 
@@ -413,8 +413,8 @@ test "mutation grouped: removeEdge repacks in-call when COW split exceeds MAX_GR
     try publishForwardGroups(&graph, source, &[_]u32{ g0, g1, g2, g3 }, 6);
 
     // Reverse backlinks for destinations 1..242
-    for (1..243) |destination_index| {
-        try publishSingleReverseSource(&graph, .{ .index = @intCast(destination_index) }, source.index);
+    for (1..243) |destination_idx| {
+        try publishSingleReverseSource(&graph, .{ .index = @intCast(destination_idx) }, source.index);
     }
     graph.graph.edge_count.store(242, .release);
 

@@ -5,15 +5,15 @@ pub fn expectOutNeighbors(
     graph: *const graph_mod.Graph,
     allocator: std.mem.Allocator,
     node: graph_mod.NodeId,
-    expected_indexes: []const u32,
+    expected_idxs: []const u32,
 ) !void {
     var iterator = try graph.neighbors(node);
     const actual_neighbors = try graph_mod.materializeConsuming(&iterator, allocator);
     defer allocator.free(actual_neighbors);
 
-    try std.testing.expectEqual(expected_indexes.len, actual_neighbors.len);
-    for (expected_indexes, actual_neighbors) |expected_index, actual_neighbor| {
-        try std.testing.expectEqual(expected_index, actual_neighbor.index);
+    try std.testing.expectEqual(expected_idxs.len, actual_neighbors.len);
+    for (expected_idxs, actual_neighbors) |expected_idx, actual_neighbor| {
+        try std.testing.expectEqual(expected_idx, actual_neighbor.index);
     }
 }
 
@@ -21,15 +21,15 @@ pub fn expectInNeighbors(
     graph: *const graph_mod.Graph,
     allocator: std.mem.Allocator,
     node: graph_mod.NodeId,
-    expected_indexes: []const u32,
+    expected_idxs: []const u32,
 ) !void {
     var iterator = try graph.inNeighbors(node);
     const actual_neighbors = try graph_mod.materializeConsuming(&iterator, allocator);
     defer allocator.free(actual_neighbors);
 
-    try std.testing.expectEqual(expected_indexes.len, actual_neighbors.len);
-    for (expected_indexes, actual_neighbors) |expected_index, actual_neighbor| {
-        try std.testing.expectEqual(expected_index, actual_neighbor.index);
+    try std.testing.expectEqual(expected_idxs.len, actual_neighbors.len);
+    for (expected_idxs, actual_neighbors) |expected_idx, actual_neighbor| {
+        try std.testing.expectEqual(expected_idx, actual_neighbor.index);
     }
 }
 
@@ -45,14 +45,14 @@ pub fn expectNeighborSet(
     defer seen.deinit(allocator);
 
     for (actual_neighbors) |actual_neighbor| {
-        const actual_index: usize = @intCast(actual_neighbor.index);
-        try std.testing.expect(actual_index < total_node_count);
-        seen.set(actual_index);
+        const actual_idx: usize = @intCast(actual_neighbor.index);
+        try std.testing.expect(actual_idx < total_node_count);
+        seen.set(actual_idx);
     }
 
     for (expected_nodes) |expected_node| {
-        const expected_index: usize = @intCast(expected_node.index);
-        try std.testing.expect(seen.isSet(expected_index));
+        const expected_idx: usize = @intCast(expected_node.index);
+        try std.testing.expect(seen.isSet(expected_idx));
     }
 }
 

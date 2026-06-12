@@ -100,8 +100,8 @@ pub fn appendGlobalPropRowUniquenessViolations(
     defer seen.deinit();
 
     const node_count = graph.publishedNodeCount();
-    for (0..node_count) |node_index| {
-        const node_id: u32 = @intCast(node_index);
+    for (0..node_count) |node_idx| {
+        const node_id: u32 = @intCast(node_idx);
         const node = types.NodeId{ .index = node_id };
         if (node_validity.isNodeRemovedIndex(graph, node_id)) continue;
         const adjacency = node_access.publishedAdjAtConst(graph, node);

@@ -9,9 +9,9 @@ test "edge metadata: distinct relation values coexist in the same forward adjace
 
     const source = try graph.addNode();
     var targets: [5]graph_mod.NodeId = undefined;
-    for (0..targets.len) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], @intCast(target_index), 0);
+    for (0..targets.len) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], @intCast(target_idx), 0);
     }
 
     const adj = try graph.publishedNodeAdj(source);
@@ -35,9 +35,9 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
     const source = try graph.addNode();
     const peer_count: usize = 6;
     var peers: [peer_count]graph_mod.NodeId = undefined;
-    for (0..peer_count) |peer_index| {
-        peers[peer_index] = try graph.addNode();
-        try graph.addEdge(source, peers[peer_index], @intCast(peer_index + 1), 0);
+    for (0..peer_count) |peer_idx| {
+        peers[peer_idx] = try graph.addNode();
+        try graph.addEdge(source, peers[peer_idx], @intCast(peer_idx + 1), 0);
     }
 
     try testing.expect(try graph.removeEdge(source, peers[2]));
@@ -49,22 +49,22 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
 
     // Verify each surviving edge carries the correct destination→relation pair.
     var expected_relation_by_dest: [peer_count]?u16 = [_]?u16{null} ** peer_count;
-    for (0..peer_count) |peer_index| {
-        if (peer_index == 2 or peer_index == 4) continue;
-        expected_relation_by_dest[peer_index] = @intCast(peer_index + 1);
+    for (0..peer_count) |peer_idx| {
+        if (peer_idx == 2 or peer_idx == 4) continue;
+        expected_relation_by_dest[peer_idx] = @intCast(peer_idx + 1);
     }
 
     var seen_count: usize = 0;
     for (0..@intCast(live)) |entry_idx| {
         const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
-        const dest_index: u32 = entry.destination;
+        const dest_idx: u32 = entry.destination;
         const relation: u16 = entry.relation;
         var matched = false;
-        for (peers, 0..) |peer, peer_index| {
-            if (peer.index == dest_index) {
-                try testing.expect(expected_relation_by_dest[peer_index] != null);
-                try testing.expectEqual(expected_relation_by_dest[peer_index].?, relation);
-                expected_relation_by_dest[peer_index] = null;
+        for (peers, 0..) |peer, peer_idx| {
+            if (peer.index == dest_idx) {
+                try testing.expect(expected_relation_by_dest[peer_idx] != null);
+                try testing.expectEqual(expected_relation_by_dest[peer_idx].?, relation);
+                expected_relation_by_dest[peer_idx] = null;
                 matched = true;
                 seen_count += 1;
                 break;
@@ -84,9 +84,9 @@ test "edge metadata: non-zero flags survive a chain of mutations that force copy
     const source = try graph.addNode();
     const target_count: usize = 6;
     var targets: [target_count]graph_mod.NodeId = undefined;
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], 0, @bitCast(@as(u16, 0xDEAD)));
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, @bitCast(@as(u16, 0xDEAD)));
     }
 
     const flags_keep: u16 = @bitCast(@as(u16, 0xBEEF));
@@ -138,9 +138,9 @@ test "edge metadata: forward adjacency still finds specific destination after a 
     const source = try graph.addNode();
     const target_count: usize = 70;
     var targets: [target_count]graph_mod.NodeId = undefined;
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], @intCast(target_index % 4), 0);
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], @intCast(target_idx % 4), 0);
     }
 
     const remove_indices = [_]usize{ 69, 68, 67, 66, 65 };

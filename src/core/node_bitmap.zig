@@ -10,18 +10,18 @@ comptime {
     std.debug.assert(constants.NODES_PER_PAGE % WORD_BITS == 0);
 }
 
-fn pageForNode(node_index: u32) u32 {
-    return node_index / constants.NODES_PER_PAGE;
+fn pageForNode(node_idx: u32) u32 {
+    return node_idx / constants.NODES_PER_PAGE;
 }
 
-fn slotWithinPage(node_index: u32) u32 {
-    return node_index % constants.NODES_PER_PAGE;
+fn slotWithinPage(node_idx: u32) u32 {
+    return node_idx % constants.NODES_PER_PAGE;
 }
 
-fn bitLocation(node_index: u32) struct { page_index: u32, word_idx: usize, mask: u64 } {
-    const slot_idx = slotWithinPage(node_index);
+fn bitLocation(node_idx: u32) struct { page_idx: u32, word_idx: usize, mask: u64 } {
+    const slot_idx = slotWithinPage(node_idx);
     return .{
-        .page_index = pageForNode(node_index),
+        .page_idx = pageForNode(node_idx),
         .word_idx = @intCast(slot_idx / WORD_BITS),
         .mask = @as(u64, 1) << @as(u6, @intCast(slot_idx % WORD_BITS)),
     };
@@ -41,8 +41,8 @@ fn initPage(page: []Word) void {
     for (page) |*word| word.* = Word.init(0);
 }
 
-fn loadPage(directory: anytype, page_index: u32) ?[]const Word {
-    const raw = directory.load(page_index);
+fn loadPage(directory: anytype, page_idx: u32) ?[]const Word {
+    const raw = directory.load(page_idx);
     if (raw == 0) return null;
     return ptrFromRawConst(raw);
 }
@@ -50,9 +50,9 @@ fn loadPage(directory: anytype, page_index: u32) ?[]const Word {
 fn ensurePage(
     graph: *graph_core.GraphCore,
     directory: anytype,
-    page_index: u32,
+    page_idx: u32,
 ) ![]Word {
-    const slot = try directory.slotPtr(graph.allocator, page_index);
+    const slot = try directory.slotPtr(graph.allocator, page_idx);
     const existing = slot.load(.acquire);
     if (existing != 0) return ptrFromRaw(existing);
 
@@ -85,50 +85,50 @@ fn updateWord(word: *Word, mask: u64, set_bit: bool) bool {
 pub fn ensurePageForNode(
     graph: *graph_core.GraphCore,
     directory: anytype,
-    node_index: u32,
+    node_idx: u32,
 ) !void {
-    const location = bitLocation(node_index);
-    _ = try ensurePage(graph, directory, location.page_index);
+    const location = bitLocation(node_idx);
+    _ = try ensurePage(graph, directory, location.page_idx);
 }
 
-pub fn isSet(directory: anytype, node_index: u32) bool {
-    const location = bitLocation(node_index);
-    const page = loadPage(directory, location.page_index) orelse return false;
+pub fn isSet(directory: anytype, node_idx: u32) bool {
+    const location = bitLocation(node_idx);
+    const page = loadPage(directory, location.page_idx) orelse return false;
     return (page[location.word_idx].load(.acquire) & location.mask) != 0;
 }
 
 pub fn setBit(
     graph: *graph_core.GraphCore,
     directory: anytype,
-    node_index: u32,
+    node_idx: u32,
 ) !void {
-    const location = bitLocation(node_index);
-    const page = try ensurePage(graph, directory, location.page_index);
+    const location = bitLocation(node_idx);
+    const page = try ensurePage(graph, directory, location.page_idx);
     _ = updateWord(&page[location.word_idx], location.mask, true);
 }
 
 pub fn clearBit(
     graph: *graph_core.GraphCore,
     directory: anytype,
-    node_index: u32,
+    node_idx: u32,
 ) !void {
-    const location = bitLocation(node_index);
-    const page = try ensurePage(graph, directory, location.page_index);
+    const location = bitLocation(node_idx);
+    const page = try ensurePage(graph, directory, location.page_idx);
     _ = updateWord(&page[location.word_idx], location.mask, false);
 }
 
 pub fn testAndSetBit(
     graph: *graph_core.GraphCore,
     directory: anytype,
-    node_index: u32,
+    node_idx: u32,
 ) !bool {
-    const location = bitLocation(node_index);
-    const page = try ensurePage(graph, directory, location.page_index);
+    const location = bitLocation(node_idx);
+    const page = try ensurePage(graph, directory, location.page_idx);
     return updateWord(&page[location.word_idx], location.mask, true);
 }
 
-pub fn testAndClearBit(directory: anytype, node_index: u32) bool {
-    const location = bitLocation(node_index);
-    const page = loadPage(directory, location.page_index) orelse return false;
+pub fn testAndClearBit(directory: anytype, node_idx: u32) bool {
+    const location = bitLocation(node_idx);
+    const page = loadPage(directory, location.page_idx) orelse return false;
     return updateWord(@constCast(&page[location.word_idx]), location.mask, false);
 }

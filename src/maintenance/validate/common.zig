@@ -214,27 +214,27 @@ pub const MAX_TRACKED_GROUPS: usize = @min(constants.MAX_EDGE_GROUP_PAGES * cons
 pub const TRACKED_GROUP_BITMAP_WORDS: usize = (MAX_TRACKED_GROUPS + 63) / 64;
 
 pub const TraversedBlock = struct {
-    block_index: u32,
+    block_idx: u32,
 };
 
-pub fn bitmapSet(bitmap: []u64, block_index: u32) bool {
-    const bit_index: usize = @intCast(block_index);
+pub fn bitmapSet(bitmap: []u64, block_idx: u32) bool {
+    const bit_idx: usize = @intCast(block_idx);
     // Beyond the tracked window: untracked, never reported as a duplicate.
-    if (bit_index >= bitmap.len * 64) return true;
-    const word_index = bit_index / 64;
-    const mask = @as(u64, 1) << @as(u6, @intCast(bit_index % 64));
-    const already = (bitmap[word_index] & mask) != 0;
-    bitmap[word_index] |= mask;
+    if (bit_idx >= bitmap.len * 64) return true;
+    const word_idx = bit_idx / 64;
+    const mask = @as(u64, 1) << @as(u6, @intCast(bit_idx % 64));
+    const already = (bitmap[word_idx] & mask) != 0;
+    bitmap[word_idx] |= mask;
     return !already;
 }
 
-pub fn bitmapIsSet(bitmap: []const u64, block_index: u32) bool {
-    const bit_index: usize = @intCast(block_index);
+pub fn bitmapIsSet(bitmap: []const u64, block_idx: u32) bool {
+    const bit_idx: usize = @intCast(block_idx);
     // Beyond the tracked window: pure membership query answers false.
-    if (bit_index >= bitmap.len * 64) return false;
-    const word_index = bit_index / 64;
-    const mask = @as(u64, 1) << @as(u6, @intCast(bit_index % 64));
-    return (bitmap[word_index] & mask) != 0;
+    if (bit_idx >= bitmap.len * 64) return false;
+    const word_idx = bit_idx / 64;
+    const mask = @as(u64, 1) << @as(u6, @intCast(bit_idx % 64));
+    return (bitmap[word_idx] & mask) != 0;
 }
 
 pub fn readerEnter(graph: *const graph_core.GraphCore) types.GraphError!rcu.ReaderToken {
@@ -280,21 +280,21 @@ pub fn allocatedBlockCount(graph: *const graph_core.GraphCore, comptime side: Si
     };
 }
 
-pub fn blockExists(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) bool {
-    return block_index < allocatedBlockCount(graph, side);
+pub fn blockExists(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) bool {
+    return block_idx < allocatedBlockCount(graph, side);
 }
 
-pub fn blockLive(graph: *const graph_core.GraphCore, block_index: u32, comptime side: Side) usize {
+pub fn blockLive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) usize {
     return switch (side) {
-        .fwd => page_ops.blockLiveCount(graph, block_index, .fwd),
-        .rev => page_ops.blockLiveCount(graph, block_index, .rev),
+        .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
+        .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
     };
 }
 
-pub fn blockKey(graph: *const graph_core.GraphCore, block_index: u32, slot: usize, comptime side: Side) u32 {
+pub fn blockKey(graph: *const graph_core.GraphCore, block_idx: u32, slot: usize, comptime side: Side) u32 {
     return switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd).destinations[slot],
-        .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev).sources[slot],
+        .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd).destinations[slot],
+        .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev).sources[slot],
     };
 }
 

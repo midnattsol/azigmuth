@@ -115,7 +115,7 @@ observable variation.
 - `expand` over an empty relation (no matching edges) yields the identity
   for m == 0, else the empty set.
 
-## 4. Textual grammar (v1, frozen; parser is future work)
+## 4. Textual grammar (v1, frozen; implemented by `wayfind/parser.zig`)
 
 ```ebnf
 query    = source , { "|" , step } , "|" , terminal ;
@@ -221,5 +221,4 @@ Reserved keywords: `paths`, `shortest`, `reach`, `to`, `walk`, `sample`,
 Planned, in rough order: `shortest`/`paths` terminals (path capture needs
 its own result shape and explicit bounds), sub-pipeline set operands in
 text and builder (the IR stack already supports them), execution over
-frozen mmap graphs, the textual parser, the C ABI (`Plan` bytes + Arrow
-param arrays).
+frozen mmap graphs, the C ABI (`Plan` bytes + Arrow param arrays).

@@ -7,9 +7,9 @@ const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
-pub fn sumBlockLive(graph: *const graph_core.GraphCore, block_index: u32, comptime side: common.Side) u64 {
-    if (!common.blockExists(graph, block_index, side)) return 0;
-    return common.blockLive(graph, block_index, side);
+pub fn sumBlockLive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: common.Side) u64 {
+    if (!common.blockExists(graph, block_idx, side)) return 0;
+    return common.blockLive(graph, block_idx, side);
 }
 
 pub fn sumContiguousBlocks(
@@ -19,8 +19,8 @@ pub fn sumContiguousBlocks(
     comptime side: common.Side,
 ) u64 {
     var total: u64 = 0;
-    for (start..start + count) |block_index| {
-        total += sumBlockLive(graph, @intCast(block_index), side);
+    for (start..start + count) |block_idx| {
+        total += sumBlockLive(graph, @intCast(block_idx), side);
     }
     return total;
 }
@@ -29,9 +29,9 @@ pub fn sumGroupedRuns(graph: *const graph_core.GraphCore, first_group: u32, grou
     var total: u64 = 0;
     const end_group = std.math.add(u32, first_group, group_count) catch return total;
     if (end_group > graph.loadGroupCount()) return total;
-    for (first_group..end_group) |group_index_usize| {
-        const group_index: u32 = @intCast(group_index_usize);
-        const group = page_ops.groupAtConst(graph, group_index);
+    for (first_group..end_group) |group_idx_usize| {
+        const group_idx: u32 = @intCast(group_idx_usize);
+        const group = page_ops.groupAtConst(graph, group_idx);
         total += sumContiguousBlocks(graph, group.start, group.count, side);
     }
 
@@ -48,19 +48,19 @@ pub fn sumAdjacency(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj
     return total;
 }
 
-pub fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_index: u32, comptime side: common.Side) u64 {
+pub fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: common.Side) u64 {
     const block = switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, block_index, .fwd),
-        .rev => page_ops.edgeBlockAtConst(graph, block_index, .rev),
+        .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
+        .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
     };
-    const live = @min(common.blockLive(graph, block_index, side), constants.EDGES_PER_BLOCK);
+    const live = @min(common.blockLive(graph, block_idx, side), constants.EDGES_PER_BLOCK);
     var total: u64 = 0;
     for (0..live) |slot| {
-        const candidate_index = switch (side) {
+        const candidate_idx = switch (side) {
             .fwd => block.destinations[slot],
             .rev => block.sources[slot],
         };
-        if (node_validity.isNodeLiveIndex(graph, candidate_index)) total += 1;
+        if (node_validity.isNodeLiveIndex(graph, candidate_idx)) total += 1;
     }
     return total;
 }
@@ -70,8 +70,8 @@ pub fn sumVisibleAdjacency(graph: *const graph_core.GraphCore, adjacency: types.
 
     var total: u64 = 0;
     common.forEachNodeIdInAdj(graph, adjacency, side, &total, struct {
-        fn callback(inner_graph: *const graph_core.GraphCore, inner_total: *u64, candidate_index: u32) !void {
-            if (node_validity.isNodeLiveIndex(inner_graph, candidate_index)) inner_total.* += 1;
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_total: *u64, candidate_idx: u32) !void {
+            if (node_validity.isNodeLiveIndex(inner_graph, candidate_idx)) inner_total.* += 1;
         }
     }.callback) catch return total;
     return total;

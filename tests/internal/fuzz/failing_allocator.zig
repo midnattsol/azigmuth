@@ -30,7 +30,7 @@ test "fuzz failing allocator: random mutations with intermittent allocation fail
     const node_count: u32 = 24;
     const iterations: u32 = 400;
 
-    inline for (0..6) |seed_index| {
+    inline for (0..6) |seed_idx| {
         var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
         var graph = try graph_mod.Graph.init(failing_allocator.allocator());
 
@@ -40,15 +40,15 @@ test "fuzz failing allocator: random mutations with intermittent allocation fail
 
         var model = std.mem.zeroes([node_count][node_count]bool);
         var expected_edge_count: u64 = 0;
-        var random_state = [4]u64{ seed_index + 1, 0x1234, 0x5678, 0x9abc };
+        var random_state = [4]u64{ seed_idx + 1, 0x1234, 0x5678, 0x9abc };
 
-        for (0..iterations) |operation_index| {
-            const source_index = bounded24(&random_state, node_count);
-            const target_index = bounded24(&random_state, node_count);
-            const source = graph_mod.NodeId{ .index = source_index };
-            const target = graph_mod.NodeId{ .index = target_index };
+        for (0..iterations) |operation_idx| {
+            const source_idx = bounded24(&random_state, node_count);
+            const target_idx = bounded24(&random_state, node_count);
+            const source = graph_mod.NodeId{ .index = source_idx };
+            const target = graph_mod.NodeId{ .index = target_idx };
 
-            if (operation_index % 11 == 0) {
+            if (operation_idx % 11 == 0) {
                 failing_allocator.fail_index = failing_allocator.alloc_index + bounded24(&random_state, 3);
             } else {
                 failing_allocator.fail_index = std.math.maxInt(usize);
@@ -57,16 +57,16 @@ test "fuzz failing allocator: random mutations with intermittent allocation fail
             if (bounded24(&random_state, 2) == 0) {
                 const add_result = graph.addEdge(source, target, 0, 0);
                 if (add_result) {
-                    try testing.expect(!model[source_index][target_index]);
-                    model[source_index][target_index] = true;
+                    try testing.expect(!model[source_idx][target_idx]);
+                    model[source_idx][target_idx] = true;
                     expected_edge_count += 1;
                 } else |err| switch (err) {
                     error.OutOfMemory => {
-                        try testing.expect(!model[source_index][target_index] or
-                            model[source_index][target_index]);
+                        try testing.expect(!model[source_idx][target_idx] or
+                            model[source_idx][target_idx]);
                     },
                     error.EdgeAlreadyExists => {
-                        try testing.expect(model[source_index][target_index]);
+                        try testing.expect(model[source_idx][target_idx]);
                     },
                     else => return err,
                 }
@@ -74,18 +74,18 @@ test "fuzz failing allocator: random mutations with intermittent allocation fail
                 const remove_result = graph.removeEdge(source, target);
                 if (remove_result) |was_removed| {
                     if (was_removed) {
-                        try testing.expect(model[source_index][target_index]);
-                        model[source_index][target_index] = false;
+                        try testing.expect(model[source_idx][target_idx]);
+                        model[source_idx][target_idx] = false;
                         expected_edge_count -= 1;
                     } else {
-                        try testing.expect(!model[source_index][target_index]);
+                        try testing.expect(!model[source_idx][target_idx]);
                     }
                 } else |err| switch (err) {
                     error.OutOfMemory => {
-                        try testing.expect(model[source_index][target_index]);
+                        try testing.expect(model[source_idx][target_idx]);
                     },
                     error.RepairRequired => {
-                        try testing.expect(model[source_index][target_index]);
+                        try testing.expect(model[source_idx][target_idx]);
                     },
                     else => return err,
                 }

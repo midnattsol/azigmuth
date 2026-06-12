@@ -45,11 +45,11 @@ fn allocTrackedToken(graph: *graph_core.GraphCore, slot: u32, epoch: u64) !Reade
     const reader_id = nextReaderId(graph);
     const offset = slotScanOffset(graph_core.MAX_TOKEN_LIVENESS_SLOTS);
     for (0..graph_core.MAX_TOKEN_LIVENESS_SLOTS) |probe| {
-        const token_slot_index = (offset + probe) & (graph_core.MAX_TOKEN_LIVENESS_SLOTS - 1);
-        const token_slot = &graph.token_liveness_slots[token_slot_index];
+        const token_slot_idx = (offset + probe) & (graph_core.MAX_TOKEN_LIVENESS_SLOTS - 1);
+        const token_slot = &graph.token_liveness_slots[token_slot_idx];
         if (token_slot.id.cmpxchgWeak(0, reader_id, .acq_rel, .acquire) == null) {
             token_slot.state.store(0, .release);
-            return .{ .slot = slot, .liveness_slot = @intCast(token_slot_index), .epoch = epoch, .id = reader_id };
+            return .{ .slot = slot, .liveness_slot = @intCast(token_slot_idx), .epoch = epoch, .id = reader_id };
         }
     }
     return error.GraphBusy;
@@ -125,8 +125,8 @@ pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
         const encoded_epoch = entry_epoch +% 1;
 
         for (0..constants.MAX_READER_SLOTS) |probe| {
-            const slot_index = (offset + probe) & (constants.MAX_READER_SLOTS - 1);
-            const slot = &graph.reader_epochs[slot_index];
+            const slot_idx = (offset + probe) & (constants.MAX_READER_SLOTS - 1);
+            const slot = &graph.reader_epochs[slot_idx];
             if (slot.cmpxchgWeak(0, encoded_epoch, .acq_rel, .acquire) == null) {
                 if (graph.epoch.load(.acquire) != entry_epoch) {
                     slot.store(0, .release);
@@ -137,7 +137,7 @@ pub fn readerEnter(graph: *graph_core.GraphCore) types.GraphError!ReaderToken {
                     slot.store(0, .release);
                     return error.GraphBusy;
                 }
-                const token = allocTrackedToken(graph, @intCast(slot_index), entry_epoch) catch |err| {
+                const token = allocTrackedToken(graph, @intCast(slot_idx), entry_epoch) catch |err| {
                     slot.store(0, .release);
                     return err;
                 };

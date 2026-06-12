@@ -15,8 +15,8 @@ pub fn debugValidateLive(graph: *const graph_core.GraphCore, allocator: std.mem.
 
     var totals = shared.VisibleTotals{};
     const node_count = graph.publishedNodeCount();
-    for (0..node_count) |node_index| {
-        const node_id: u32 = @intCast(node_index);
+    for (0..node_count) |node_idx| {
+        const node_id: u32 = @intCast(node_idx);
         const node = types.NodeId{ .index = node_id };
         const adjacency = node_access.publishedAdjAtConst(graph, node);
         const meta = node_access.loadPublishedMetaAtConst(graph, node);
@@ -44,8 +44,8 @@ pub fn debugValidateSnapshot(
 
     var totals = shared.VisibleTotals{};
     const node_count = view.nodeCount();
-    for (0..node_count) |node_index| {
-        const node_id: u32 = @intCast(node_index);
+    for (0..node_count) |node_idx| {
+        const node_id: u32 = @intCast(node_idx);
         const adjacency = view.adjacency(node_id);
         const node_totals = try shared.appendSnapshotNodeViolations(graph, allocator, &list, node_id, adjacency, view.degree_fwd[node_id], view.degree_rev[node_id]);
         totals.fwd += node_totals.fwd;

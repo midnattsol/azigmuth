@@ -8,36 +8,36 @@ const AdjSide = graph_mod.adjacency_mod.AdjSide;
 
 const testing = std.testing;
 
-fn fillBlock(graph: *graph_mod.Graph, block_index: u32, first_dest: u32, count: u7, comptime side: AdjSide) void {
+fn fillBlock(graph: *graph_mod.Graph, block_idx: u32, first_dest: u32, count: u7, comptime side: AdjSide) void {
     switch (side) {
         .fwd => {
-            var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
+            var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
             for (0..count) |i| {
                 block.destinations[i] = first_dest + @as(u32, @intCast(i));
                 block.relations[i] = 0;
                 block.flags[i] = 0;
             }
-            page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
+            page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
         },
         .rev => {
-            var block = page_ops.edgeBlockAt(&graph.graph, block_index, .rev);
+            var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
             for (0..count) |i| {
                 block.sources[i] = first_dest + @as(u32, @intCast(i));
             }
-            page_ops.setBlockLiveCount(&graph.graph, block_index, .rev, @intCast(count));
+            page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(count));
         },
     }
 }
 
-fn publishReverseSource(graph: *graph_mod.Graph, destination_index: u32, source_index: u32) !void {
+fn publishReverseSource(graph: *graph_mod.Graph, destination_idx: u32, source_idx: u32) !void {
     const block = try graph.allocBlockRev();
-    fillBlock(graph, block, source_index, 1, .rev);
-    const node = try graph.nodeAt(.{ .index = destination_index });
+    fillBlock(graph, block, source_idx, 1, .rev);
+    const node = try graph.nodeAt(.{ .index = destination_idx });
     publish.clearPublishedSides(node);
     publish.publishedRevSide(node).first_block = block;
     publish.publishedRevSide(node).block_count = 1;
     publish.setPublishedRevDegree(node, 1);
-    try publish.syncToPublished(graph, destination_index);
+    try publish.syncToPublished(graph, destination_idx);
 }
 
 test "large adjacency: removeEdge from tail block preserves all blocks when adjacency has >128 blocks" {

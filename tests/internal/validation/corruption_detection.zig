@@ -20,10 +20,10 @@ fn addNodeCount(graph: *graph_mod.Graph, count: usize) !void {
     }
 }
 
-fn publishForwardBlock(graph: *graph_mod.Graph, node: graph_mod.NodeId, block_index: u32, block_count: u16) !void {
+fn publishForwardBlock(graph: *graph_mod.Graph, node: graph_mod.NodeId, block_idx: u32, block_count: u16) !void {
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
-    publish.publishedFwdSide(node_buffer).first_block = block_index;
+    publish.publishedFwdSide(node_buffer).first_block = block_idx;
     publish.publishedFwdSide(node_buffer).block_count = block_count;
     try publish.syncToPublished(graph, node.index);
 }
@@ -82,7 +82,7 @@ test "validation: detects invalid destinations" {
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(containsViolation(violations, .invalid_dst));
+    try testing.expect(containsViolation(violations, .invalid_destination));
 }
 
 test "validation: detects unsorted blocks" {
@@ -224,10 +224,10 @@ test "validation: detects underfull non-tail blocks" {
     const second_block = try graph.allocBlockFwd();
 
     var first_edges = page_ops.edgeBlockAt(&graph.graph, first_block, .fwd);
-    for (0..47) |edge_index| {
-        first_edges.destinations[edge_index] = @intCast(edge_index + 1);
-        first_edges.relations[edge_index] = 0;
-        first_edges.flags[edge_index] = 0;
+    for (0..47) |edge_idx| {
+        first_edges.destinations[edge_idx] = @intCast(edge_idx + 1);
+        first_edges.relations[edge_idx] = 0;
+        first_edges.flags[edge_idx] = 0;
     }
     page_ops.setBlockLiveCount(&graph.graph, first_block, .fwd, 47);
 
@@ -355,8 +355,8 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
 
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
-    fillBlockWithDst(&graph, b0, 1, 1);
-    fillBlockWithDst(&graph, b1, 2, 1);
+    fillBlockWithDestinations(&graph, b0, 1, 1);
+    fillBlockWithDestinations(&graph, b1, 2, 1);
 
     const g0 = try graph.allocGroup();
     // Single group covering 2 physically contiguous blocks.
@@ -398,14 +398,14 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
     try testing.expectError(error.CorruptGraph, graph.validate());
 }
 
-fn fillBlockWithDst(graph: *graph_mod.Graph, block_index: u32, first_dst: u32, count: u7) void {
-    var block = page_ops.edgeBlockAt(&graph.graph, block_index, .fwd);
+fn fillBlockWithDestinations(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, count: u7) void {
+    var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
     for (0..count) |i| {
-        block.destinations[i] = first_dst + @as(u32, @intCast(i));
+        block.destinations[i] = first_destination + @as(u32, @intCast(i));
         block.relations[i] = 0;
         block.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_index, .fwd, @intCast(count));
+    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
 test "validation: removed node entry in repair queue is currently accepted" {

@@ -33,67 +33,67 @@ pub const NodePublished = extern struct {
     }
 
     pub fn publishedFwdFromMeta(self: *const NodePublished, meta: types.PublishedMeta) types.SideAdj {
-        return self.fwd[meta.fwd_index];
+        return self.fwd[meta.fwd_idx];
     }
 
     pub fn publishedRevFromMeta(self: *const NodePublished, meta: types.PublishedMeta) types.SideAdj {
-        return self.rev[meta.rev_index];
+        return self.rev[meta.rev_idx];
     }
 
     pub fn stagingFwd(self: *NodePublished, meta: types.PublishedMeta) *types.SideAdj {
-        return &self.fwd[1 - meta.fwd_index];
+        return &self.fwd[1 - meta.fwd_idx];
     }
 
     pub fn stagingRev(self: *NodePublished, meta: types.PublishedMeta) *types.SideAdj {
-        return &self.rev[1 - meta.rev_index];
+        return &self.rev[1 - meta.rev_idx];
     }
 
     pub fn publishedFwdDegreeFromMeta(self: *const NodePublished, meta: types.PublishedMeta) u32 {
-        return if (meta.degree_fwd_overflow) self.fwd_degrees[meta.fwd_index] else meta.degree_fwd;
+        return if (meta.degree_fwd_overflow) self.fwd_degrees[meta.fwd_idx] else meta.degree_fwd;
     }
 
     pub fn publishedRevDegreeFromMeta(self: *const NodePublished, meta: types.PublishedMeta) u32 {
-        return if (meta.degree_rev_overflow) self.rev_degrees[meta.rev_index] else meta.degree_rev;
+        return if (meta.degree_rev_overflow) self.rev_degrees[meta.rev_idx] else meta.degree_rev;
     }
 
     pub fn stagingFwdDegree(self: *NodePublished, meta: types.PublishedMeta) *u32 {
-        return &self.fwd_degrees[1 - meta.fwd_index];
+        return &self.fwd_degrees[1 - meta.fwd_idx];
     }
 
     pub fn stagingRevDegree(self: *NodePublished, meta: types.PublishedMeta) *u32 {
-        return &self.rev_degrees[1 - meta.rev_index];
+        return &self.rev_degrees[1 - meta.rev_idx];
     }
 
     pub fn publishedFwdDegree(self: *NodePublished, meta: types.PublishedMeta) *u32 {
-        return &self.fwd_degrees[meta.fwd_index];
+        return &self.fwd_degrees[meta.fwd_idx];
     }
 
     pub fn publishedRevDegree(self: *NodePublished, meta: types.PublishedMeta) *u32 {
-        return &self.rev_degrees[meta.rev_index];
+        return &self.rev_degrees[meta.rev_idx];
     }
 
     pub fn copyPublishedToStagingFwd(self: *NodePublished, meta: types.PublishedMeta) void {
-        self.fwd[1 - meta.fwd_index] = self.fwd[meta.fwd_index];
+        self.fwd[1 - meta.fwd_idx] = self.fwd[meta.fwd_idx];
     }
 
     pub fn copyPublishedToStagingRev(self: *NodePublished, meta: types.PublishedMeta) void {
-        self.rev[1 - meta.rev_index] = self.rev[meta.rev_index];
+        self.rev[1 - meta.rev_idx] = self.rev[meta.rev_idx];
     }
 
     pub fn publishedFwdSortedFromMeta(self: *const NodePublished, meta: types.PublishedMeta) bool {
-        return self.fwd_sorted[meta.fwd_index] != 0;
+        return self.fwd_sorted[meta.fwd_idx] != 0;
     }
 
     pub fn publishedRevSortedFromMeta(self: *const NodePublished, meta: types.PublishedMeta) bool {
-        return self.rev_sorted[meta.rev_index] != 0;
+        return self.rev_sorted[meta.rev_idx] != 0;
     }
 
     pub fn stagingFwdSorted(self: *NodePublished, meta: types.PublishedMeta) *u8 {
-        return &self.fwd_sorted[1 - meta.fwd_index];
+        return &self.fwd_sorted[1 - meta.fwd_idx];
     }
 
     pub fn stagingRevSorted(self: *NodePublished, meta: types.PublishedMeta) *u8 {
-        return &self.rev_sorted[1 - meta.rev_index];
+        return &self.rev_sorted[1 - meta.rev_idx];
     }
 };
 

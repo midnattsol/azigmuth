@@ -133,9 +133,9 @@ fn emitNodeRecords(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) 
 /// active SideAdj per direction (node_access / NodePublished), degrees,
 /// next_local_edge_id (NodeHot), and the flag bits (removed,
 /// needs_repair_*, sorted bits). Pure — unit-test it on its own.
-pub fn makeNodeRecord(core: *const graph_core.GraphCore, node_index: u32) format.NodeRecord {
+pub fn makeNodeRecord(core: *const graph_core.GraphCore, node_idx: u32) format.NodeRecord {
     _ = core;
-    _ = node_index;
+    _ = node_idx;
     @panic("TODO: makeNodeRecord");
 }
 

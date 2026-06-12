@@ -82,10 +82,10 @@ pub fn buildRetiredGroupSet(
 
 pub fn markOwnedBlock(
     owned_blocks: *std.DynamicBitSetUnmanaged,
-    block_index: u32,
+    block_idx: u32,
 ) bool {
-    const bit_index: usize = @intCast(block_index);
-    if (owned_blocks.isSet(bit_index)) return false;
-    owned_blocks.set(bit_index);
+    const bit_idx: usize = @intCast(block_idx);
+    if (owned_blocks.isSet(bit_idx)) return false;
+    owned_blocks.set(bit_idx);
     return true;
 }

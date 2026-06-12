@@ -17,10 +17,10 @@ pub fn appendOwnershipAndShapeViolations(
     blocks: []const common.TraversedBlock,
     comptime side: common.Side,
 ) !void {
-    const tail_block_idx = if (blocks.len > 0) blocks[blocks.len - 1].block_index else constants.END_OF_CHAIN;
+    const tail_block_idx = if (blocks.len > 0) blocks[blocks.len - 1].block_idx else constants.END_OF_CHAIN;
 
     for (blocks) |traversed_block| {
-        const block_idx = traversed_block.block_index;
+        const block_idx = traversed_block.block_idx;
         if (!common.blockExists(graph, block_idx, side)) continue;
 
         if (!ownership_sets.markOwnedBlock(owned_blocks, block_idx)) {

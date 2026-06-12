@@ -8,9 +8,9 @@ const node_published = @import("../storage/node/published.zig");
 
 pub const TraversalState = struct {
     contiguous_mode: bool,
-    current_block_index: u32,
+    current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_index: u32,
+    current_group_idx: u32,
 };
 
 pub const TinyState = struct {
@@ -53,8 +53,8 @@ pub fn advanceTraversalBlock(iterator: anytype, graph: *const graph_core.GraphCo
         if (!advanceToNextGroup(iterator, graph)) return null;
     }
 
-    const block_idx = iterator.current_block_index;
-    iterator.current_block_index += 1;
+    const block_idx = iterator.current_block_idx;
+    iterator.current_block_idx += 1;
     iterator.blocks_remaining -= 1;
     return block_idx;
 }
@@ -64,35 +64,35 @@ pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
     if (side_adj.block_count == 0) {
         return .{
             .contiguous_mode = true,
-            .current_block_index = 0,
+            .current_block_idx = 0,
             .blocks_remaining = 0,
-            .current_group_index = constants.END_OF_CHAIN,
+            .current_group_idx = constants.END_OF_CHAIN,
         };
     }
 
     if (node_published.NodePublished.isTiny(&side_adj)) {
         return .{
             .contiguous_mode = true,
-            .current_block_index = 0,
+            .current_block_idx = 0,
             .blocks_remaining = 0,
-            .current_group_index = constants.END_OF_CHAIN,
+            .current_group_idx = constants.END_OF_CHAIN,
         };
     }
 
     if (side_adj.group_count == 0) {
         return .{
             .contiguous_mode = true,
-            .current_block_index = side_adj.first_block,
+            .current_block_idx = side_adj.first_block,
             .blocks_remaining = side_adj.block_count,
-            .current_group_index = constants.END_OF_CHAIN,
+            .current_group_idx = constants.END_OF_CHAIN,
         };
     }
 
     return .{
         .contiguous_mode = false,
-        .current_block_index = 0,
+        .current_block_idx = 0,
         .blocks_remaining = 0,
-        .current_group_index = side_adj.first_group,
+        .current_group_idx = side_adj.first_group,
     };
 }
 
@@ -126,14 +126,14 @@ pub fn validateReadSideQuick(
 /// Initializes a grouped traversal so the first block range is ready to consume.
 pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (iterator.contiguous_mode) return;
-    if (iterator.current_group_index == constants.END_OF_CHAIN) return;
-    if (iterator.current_group_index >= graph.loadGroupCount()) {
-        iterator.current_group_index = constants.END_OF_CHAIN;
+    if (iterator.current_group_idx == constants.END_OF_CHAIN) return;
+    if (iterator.current_group_idx >= graph.loadGroupCount()) {
+        iterator.current_group_idx = constants.END_OF_CHAIN;
         return;
     }
 
-    const first_group = page_ops.groupAtConst(graph, iterator.current_group_index);
-    iterator.current_block_index = first_group.start;
+    const first_group = page_ops.groupAtConst(graph, iterator.current_group_idx);
+    iterator.current_block_idx = first_group.start;
     iterator.blocks_remaining = first_group.count;
 }
 
@@ -141,22 +141,22 @@ pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCo
 /// Returns false when no further run is available.
 pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     if (iterator.contiguous_mode) return false;
-    if (iterator.current_group_index == constants.END_OF_CHAIN) return false;
-    if (iterator.current_group_index >= graph.loadGroupCount()) {
-        iterator.current_group_index = constants.END_OF_CHAIN;
+    if (iterator.current_group_idx == constants.END_OF_CHAIN) return false;
+    if (iterator.current_group_idx >= graph.loadGroupCount()) {
+        iterator.current_group_idx = constants.END_OF_CHAIN;
         return false;
     }
 
     if (iterator.groups_visited + 1 >= iterator.group_count_bound) {
-        iterator.current_group_index = constants.END_OF_CHAIN;
+        iterator.current_group_idx = constants.END_OF_CHAIN;
         return false;
     }
 
-    iterator.current_group_index += 1;
+    iterator.current_group_idx += 1;
     iterator.groups_visited += 1;
 
-    const next_group = page_ops.groupAtConst(graph, iterator.current_group_index);
-    iterator.current_block_index = next_group.start;
+    const next_group = page_ops.groupAtConst(graph, iterator.current_group_idx);
+    iterator.current_block_idx = next_group.start;
     iterator.blocks_remaining = next_group.count;
     return true;
 }
@@ -165,11 +165,11 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
 /// crosses a 64-block page boundary. Blocks within a run are consecutive, so
 /// sequential traversal resolves the directory once per page instead of
 /// twice per block.
-fn refreshSpanPages(iterator: anytype, graph: *const graph_core.GraphCore, page_index: u32, comptime side: adjacency.AdjSide) void {
-    if (iterator.cached_span_page_index == page_index) return;
-    iterator.cached_span_page_index = page_index;
-    iterator.cached_span_blocks_raw = page_ops.edgeBlockPageRaw(graph, page_index, side);
-    iterator.cached_span_live_raw = page_ops.blockLivePageRaw(graph, page_index, side);
+fn refreshSpanPages(iterator: anytype, graph: *const graph_core.GraphCore, page_idx: u32, comptime side: adjacency.AdjSide) void {
+    if (iterator.cached_span_page_idx == page_idx) return;
+    iterator.cached_span_page_idx = page_idx;
+    iterator.cached_span_blocks_raw = page_ops.edgeBlockPageRaw(graph, page_idx, side);
+    iterator.cached_span_live_raw = page_ops.blockLivePageRaw(graph, page_idx, side);
 }
 
 inline fn spanLiveCount(iterator: anytype, slot_in_page: u32) u7 {
@@ -182,11 +182,11 @@ inline fn spanLiveCount(iterator: anytype, slot_in_page: u32) u7 {
 pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
-        const page_index = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
+        const page_idx = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
         const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
         switch (iterator.direction) {
             .fwd => {
-                refreshSpanPages(iterator, graph, page_index, .fwd);
+                refreshSpanPages(iterator, graph, page_idx, .fwd);
                 const live = spanLiveCount(iterator, slot_in_page);
                 if (live == 0) continue;
                 iterator.current_slot = 0;
@@ -196,7 +196,7 @@ pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCor
                 iterator.cached_rev_block = null;
             },
             .rev => {
-                refreshSpanPages(iterator, graph, page_index, .rev);
+                refreshSpanPages(iterator, graph, page_idx, .rev);
                 const live = spanLiveCount(iterator, slot_in_page);
                 if (live == 0) continue;
                 iterator.current_slot = 0;
@@ -213,9 +213,9 @@ pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCor
 pub fn loadNextOutEdgeSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
-        const page_index = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
+        const page_idx = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
         const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
-        refreshSpanPages(iterator, graph, page_index, .fwd);
+        refreshSpanPages(iterator, graph, page_idx, .fwd);
         const live = spanLiveCount(iterator, slot_in_page);
         if (live == 0) continue;
 

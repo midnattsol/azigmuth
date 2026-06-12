@@ -6,10 +6,13 @@
 //!     non-comptime plans.
 //!   - `builder` — comptime fluent surface; typestate replaces validation.
 //!   - `exec`    — the executor over a `CapturedGraphView`.
+//!   - `parser`  — textual front-end; parses one pipeline string into a
+//!     validated runtime plan (1:1 with the IR, no rewriting).
 
 pub const ir = @import("wayfind/ir.zig");
 pub const builder = @import("wayfind/builder.zig");
 pub const exec = @import("wayfind/exec.zig");
+pub const parser = @import("wayfind/parser.zig");
 
 /// Wayfind language/IR version. Step layout, op numbers
 /// and grammar are frozen within a major version; extensions only append.
@@ -22,3 +25,6 @@ pub const Params = exec.Params;
 pub const Result = exec.Result;
 pub const run = exec.run;
 pub const validate = ir.validate;
+pub const parse = parser.parse;
+pub const Parsed = parser.Parsed;
+pub const RelationBinding = parser.RelationBinding;

@@ -262,31 +262,31 @@ pub fn appendRepairDebtAndReachabilityViolations(
     try consistency.appendRepairDebtViolations(graph, allocator, list);
 
     const fwd_limit = @atomicLoad(u32, @constCast(&graph.block_fwd_count), .acquire);
-    for (0..fwd_limit) |block_index| {
-        if (!tracking.owned_forward_blocks.isSet(block_index) and
-            !tracking.free_forward_blocks.isSet(block_index) and
-            !tracking.retired_forward_blocks.isSet(block_index))
+    for (0..fwd_limit) |block_idx| {
+        if (!tracking.owned_forward_blocks.isSet(block_idx) and
+            !tracking.free_forward_blocks.isSet(block_idx) and
+            !tracking.retired_forward_blocks.isSet(block_idx))
         {
-            try list.append(allocator, .{ .unreachable_forward_block = .{ .block = @intCast(block_index) } });
+            try list.append(allocator, .{ .unreachable_forward_block = .{ .block = @intCast(block_idx) } });
         }
     }
 
     const rev_limit = @atomicLoad(u32, @constCast(&graph.block_rev_count), .acquire);
-    for (0..rev_limit) |block_index| {
-        if (!tracking.owned_reverse_blocks.isSet(block_index) and
-            !tracking.free_reverse_blocks.isSet(block_index) and
-            !tracking.retired_reverse_blocks.isSet(block_index))
+    for (0..rev_limit) |block_idx| {
+        if (!tracking.owned_reverse_blocks.isSet(block_idx) and
+            !tracking.free_reverse_blocks.isSet(block_idx) and
+            !tracking.retired_reverse_blocks.isSet(block_idx))
         {
-            try list.append(allocator, .{ .unreachable_reverse_block = .{ .block = @intCast(block_index) } });
+            try list.append(allocator, .{ .unreachable_reverse_block = .{ .block = @intCast(block_idx) } });
         }
     }
 
-    for (0..tracking.group_limit) |group_index| {
-        if (!tracking.owned_groups.isSet(group_index) and
-            !tracking.free_groups.isSet(group_index) and
-            !tracking.retired_groups.isSet(group_index))
+    for (0..tracking.group_limit) |group_idx| {
+        if (!tracking.owned_groups.isSet(group_idx) and
+            !tracking.free_groups.isSet(group_idx) and
+            !tracking.retired_groups.isSet(group_idx))
         {
-            try list.append(allocator, .{ .unreachable_group = .{ .group = @intCast(group_index) } });
+            try list.append(allocator, .{ .unreachable_group = .{ .group = @intCast(group_idx) } });
         }
     }
 }

@@ -4,7 +4,7 @@ const types = @import("../../../core/types.zig");
 const common = @import("../../common.zig");
 
 pub const RelatedNode = struct {
-    node_index: u32,
+    node_idx: u32,
     node_meta: *node_meta.NodeMeta,
     /// Destinations hold their reverse claim so adjacent removeNode calls
     /// serialize; predecessor forward updates are claim-free (meta-only CAS).

@@ -137,6 +137,6 @@ pub fn setInitialPublishedRevSide(graph: *graph_core.GraphCore, node: types.Node
 
 pub fn setPublishedDegrees(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta, fwd_degree: u32, rev_degree: u32) void {
     const published = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
-    published.fwd_degrees[meta.fwd_index] = fwd_degree;
-    published.rev_degrees[meta.rev_index] = rev_degree;
+    published.fwd_degrees[meta.fwd_idx] = fwd_degree;
+    published.rev_degrees[meta.rev_idx] = rev_degree;
 }

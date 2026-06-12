@@ -12,16 +12,16 @@ test "cow guard: addEdge fails defensively when forward free-list returns publis
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     var destinations: [9]graph_mod.NodeId = undefined;
     for (0..destinations.len) |idx| {
         destinations[idx] = try graph.addNode();
-        try graph.addEdge(src, destinations[idx], 0, 0);
+        try graph.addEdge(source, destinations[idx], 0, 0);
     }
 
-    const src_node = try graph.nodeAt(src);
-    const meta = src_node.loadPublishedMeta();
-    const published_fwd_block = src_node.publishedFwdFromMeta(meta).first_block;
+    const source_node = try graph.nodeAt(source);
+    const meta = source_node.loadPublishedMeta();
+    const published_fwd_block = source_node.publishedFwdFromMeta(meta).first_block;
 
     // Push the published forward block into the free-list so allocBlock may
     // return it.  This is a deliberate corruption to test defensive guards.
@@ -29,8 +29,8 @@ test "cow guard: addEdge fails defensively when forward free-list returns publis
 
     // addEdge should detect the reuse or at minimum not silently mutate a
     // block that is still reachable by readers.
-    const new_dst = try graph.addNode();
-    const result = graph.addEdge(src, new_dst, 0, 0);
+    const new_destination = try graph.addNode();
+    const result = graph.addEdge(source, new_destination, 0, 0);
 
     if (result) |_| {
         // If the guard is not yet implemented, the mutation proceeds.
@@ -46,20 +46,20 @@ test "cow guard: removeEdge fails defensively when forward free-list returns pub
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     var destinations: [9]graph_mod.NodeId = undefined;
     for (0..destinations.len) |idx| {
         destinations[idx] = try graph.addNode();
-        try graph.addEdge(src, destinations[idx], 0, 0);
+        try graph.addEdge(source, destinations[idx], 0, 0);
     }
 
-    const src_node = try graph.nodeAt(src);
-    const meta = src_node.loadPublishedMeta();
-    const published_fwd_block = src_node.publishedFwdFromMeta(meta).first_block;
+    const source_node = try graph.nodeAt(source);
+    const meta = source_node.loadPublishedMeta();
+    const published_fwd_block = source_node.publishedFwdFromMeta(meta).first_block;
 
     page_ops.freeBlock(&graph.graph, published_fwd_block, .fwd);
 
-    const result = graph.removeEdge(src, destinations[8]);
+    const result = graph.removeEdge(source, destinations[8]);
     if (result) |removed| {
         try testing.expect(removed);
         _ = graph.validate() catch {};

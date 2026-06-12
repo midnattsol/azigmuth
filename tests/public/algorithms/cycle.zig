@@ -71,7 +71,7 @@ test "three nodes triangle" {
     defer builder.deinit();
 
     var nodes: [3]azigmuth.NodeId = undefined;
-    for (0..3) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..3) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[1], nodes[2], 0, .{});
     try builder.addEdge(nodes[2], nodes[0], 0, .{});
@@ -86,7 +86,7 @@ test "disconnected graph, one component has cycle" {
     defer builder.deinit();
 
     var nodes: [4]azigmuth.NodeId = undefined;
-    for (0..4) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..4) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
     try builder.addEdge(nodes[3], nodes[2], 0, .{});
@@ -101,7 +101,7 @@ test "disconnected graph, no cycles" {
     defer builder.deinit();
 
     var nodes: [4]azigmuth.NodeId = undefined;
-    for (0..4) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..4) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
 
@@ -115,7 +115,7 @@ test "dag with diamond shape has no cycle" {
     defer builder.deinit();
 
     var nodes: [4]azigmuth.NodeId = undefined;
-    for (0..4) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..4) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
     try builder.addEdge(nodes[1], nodes[3], 0, .{});
@@ -131,7 +131,7 @@ test "cycle reached after an acyclic prefix is detected" {
     defer builder.deinit();
 
     var nodes: [5]azigmuth.NodeId = undefined;
-    for (0..5) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..5) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[1], nodes[2], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
@@ -148,7 +148,7 @@ test "cycle detection handles duplicate paths to completed nodes" {
     defer builder.deinit();
 
     var nodes: [5]azigmuth.NodeId = undefined;
-    for (0..5) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..5) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
     try builder.addEdge(nodes[1], nodes[3], 0, .{});
@@ -180,10 +180,10 @@ test "cycle detection handles nodes with more than 64 outgoing edges" {
 
     const node_count: u32 = 71;
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try builder.addNode();
 
-    for (1..node_count) |target_index| {
-        try builder.addEdge(nodes[0], nodes[target_index], 0, .{});
+    for (1..node_count) |target_idx| {
+        try builder.addEdge(nodes[0], nodes[target_idx], 0, .{});
     }
 
     var graph = try builder.freeze();
@@ -200,10 +200,10 @@ test "cycle detection handles nodes with more than 64 outgoing edges and a self-
 
     const node_count: u32 = 71;
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try builder.addNode();
 
-    for (1..node_count) |target_index| {
-        try builder.addEdge(nodes[0], nodes[target_index], 0, .{});
+    for (1..node_count) |target_idx| {
+        try builder.addEdge(nodes[0], nodes[target_idx], 0, .{});
     }
     try builder.addEdge(nodes[0], nodes[0], 0, .{});
 

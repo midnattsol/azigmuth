@@ -31,12 +31,12 @@ test "addNode: 8 producers in parallel produce unique, sequential NodeIds" {
 
     var contexts: [producer_count]ProducerCtx = undefined;
     var threads: [producer_count]std.Thread = undefined;
-    for (0..producer_count) |producer_index| {
-        contexts[producer_index] = .{
+    for (0..producer_count) |producer_idx| {
+        contexts[producer_idx] = .{
             .graph = &graph,
             .nodes_per_producer = per_producer,
         };
-        threads[producer_index] = try std.Thread.spawn(.{}, producerLoop, .{&contexts[producer_index]});
+        threads[producer_idx] = try std.Thread.spawn(.{}, producerLoop, .{&contexts[producer_idx]});
     }
 
     for (threads) |thread| thread.join();
@@ -68,9 +68,9 @@ test "addNode: parallel producers with concurrent edge insertion keep forward/re
     var contexts: [producer_count]ProducerCtx = undefined;
     var threads: [producer_count + 1]std.Thread = undefined;
 
-    for (0..producer_count) |producer_index| {
-        contexts[producer_index] = .{ .graph = &graph, .nodes_per_producer = per_producer };
-        threads[producer_index] = try std.Thread.spawn(.{}, producerLoop, .{&contexts[producer_index]});
+    for (0..producer_count) |producer_idx| {
+        contexts[producer_idx] = .{ .graph = &graph, .nodes_per_producer = per_producer };
+        threads[producer_idx] = try std.Thread.spawn(.{}, producerLoop, .{&contexts[producer_idx]});
     }
 
     // Edge-adder thread: periodically picks two random published node indices

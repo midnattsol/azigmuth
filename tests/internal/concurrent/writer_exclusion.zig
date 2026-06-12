@@ -46,14 +46,14 @@ test "concurrent: claim on destination reverse fails when already claimed" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     const destination = try graph.addNode();
 
     const claim = try hotRev(&graph, destination);
     try testing.expectEqual(@as(u8, 0), claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer claim.store(0, .release);
 
-    try testing.expectError(error.ConcurrentMutation, graph.addEdge(src, destination, 0, 0));
+    try testing.expectError(error.ConcurrentMutation, graph.addEdge(source, destination, 0, 0));
 }
 
 test "concurrent: self-edge claims both adjacencies of same node" {

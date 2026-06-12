@@ -28,9 +28,9 @@ fn initNeighborCursor(
         .view = view,
         .direction = direction,
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
-        .current_block_index = cursor_init.traversal.current_block_index,
+        .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_index = cursor_init.traversal.current_group_index,
+        .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
@@ -57,9 +57,9 @@ fn initOutEdgeCursor(
     var iterator = SnapshotOutEdgeIterator{
         .view = view,
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
-        .current_block_index = cursor_init.traversal.current_block_index,
+        .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_index = cursor_init.traversal.current_group_index,
+        .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
@@ -78,21 +78,21 @@ pub const SnapshotNeighborIterator = struct {
     direction: adjacency.AdjSide,
 
     contiguous_mode: bool,
-    current_block_index: u32,
+    current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_index: u32,
+    current_group_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
-    tiny_index: u16 = 0,
+    tiny_idx: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
-    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
 
@@ -116,13 +116,13 @@ pub const SnapshotNeighborIterator = struct {
     }
 
     fn nextTinyNeighbor(self: *SnapshotNeighborIterator) ?types.NodeId {
-        while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
+        while (self.tiny_idx < self.tiny_count) : (self.tiny_idx += 1) {
             const candidate_idx = switch (self.direction) {
-                .fwd => self.cached_tiny_fwd.?.entries[self.tiny_index].destination,
-                .rev => self.cached_tiny_rev.?.sources[self.tiny_index],
+                .fwd => self.cached_tiny_fwd.?.entries[self.tiny_idx].destination,
+                .rev => self.cached_tiny_rev.?.sources[self.tiny_idx],
             };
             if (self.candidateExcluded(candidate_idx)) continue;
-            self.tiny_index += 1;
+            self.tiny_idx += 1;
             return types.NodeId{ .index = candidate_idx };
         }
         return null;
@@ -152,6 +152,21 @@ pub const SnapshotNeighborIterator = struct {
         return self.nextBlockNeighborImpl(false);
     }
 
+    /// Candidate ids of the cached block from `from_slot` up to the live
+    /// count, as one contiguous slice.
+    fn cachedBlockCandidates(self: *const SnapshotNeighborIterator, from_slot: u7) []const u32 {
+        return switch (self.direction) {
+            .fwd => self.cached_fwd_block.?.destinations[from_slot..self.current_live],
+            .rev => self.cached_rev_block.?.sources[from_slot..self.current_live],
+        };
+    }
+
+    fn appendCandidates(out: *std.ArrayList(types.NodeId), candidates: []const u32, len_bound: usize) void {
+        for (candidates) |candidate_idx| {
+            if (candidate_idx < len_bound) out.appendAssumeCapacity(.{ .index = candidate_idx });
+        }
+    }
+
     pub fn materialize(self: *SnapshotNeighborIterator, allocator: std.mem.Allocator) ![]types.NodeId {
         var out = try std.ArrayList(types.NodeId).initCapacity(allocator, self.degree_hint);
         defer out.deinit(allocator);
@@ -161,34 +176,18 @@ pub const SnapshotNeighborIterator = struct {
         if (!self.tiny_mode and !self.check_removed_candidates) {
             const len_bound = self.view.node_state.len;
 
-            // Drain a partially consumed block element-wise first.
-            while (self.current_slot < self.current_live) {
-                const slot = self.current_slot;
-                self.current_slot += 1;
-                const candidate_idx = switch (self.direction) {
-                    .fwd => self.cached_fwd_block.?.destinations[slot],
-                    .rev => self.cached_rev_block.?.sources[slot],
-                };
-                if (candidate_idx < len_bound) try out.append(allocator, .{ .index = candidate_idx });
+            // Drain a partially consumed block first.
+            if (self.current_slot < self.current_live) {
+                const partial = self.cachedBlockCandidates(self.current_slot);
+                try out.ensureUnusedCapacity(allocator, partial.len);
+                appendCandidates(&out, partial, len_bound);
+                self.current_slot = self.current_live;
             }
 
             while (self.loadNextNonEmptySpan()) {
-                const live: usize = self.current_live;
-                try out.ensureUnusedCapacity(allocator, live);
-                switch (self.direction) {
-                    .fwd => {
-                        const destinations = self.cached_fwd_block.?.destinations[0..live];
-                        for (destinations) |destination_idx| {
-                            if (destination_idx < len_bound) out.appendAssumeCapacity(.{ .index = destination_idx });
-                        }
-                    },
-                    .rev => {
-                        const sources = self.cached_rev_block.?.sources[0..live];
-                        for (sources) |source_idx| {
-                            if (source_idx < len_bound) out.appendAssumeCapacity(.{ .index = source_idx });
-                        }
-                    },
-                }
+                const candidates = self.cachedBlockCandidates(0);
+                try out.ensureUnusedCapacity(allocator, candidates.len);
+                appendCandidates(&out, candidates, len_bound);
                 self.current_slot = self.current_live;
             }
             return out.toOwnedSlice(allocator);
@@ -205,21 +204,21 @@ pub const SnapshotOutEdgeIterator = struct {
     view: *const snapshot_view.CapturedGraphView,
 
     contiguous_mode: bool,
-    current_block_index: u32,
+    current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_index: u32,
+    current_group_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
-    tiny_index: u16 = 0,
+    tiny_idx: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
-    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
 
@@ -242,10 +241,10 @@ pub const SnapshotOutEdgeIterator = struct {
     }
 
     fn nextTinyOutEdge(self: *SnapshotOutEdgeIterator) ?types.EdgeRef {
-        while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
-            const entry = self.cached_tiny_fwd.?.entries[self.tiny_index];
+        while (self.tiny_idx < self.tiny_count) : (self.tiny_idx += 1) {
+            const entry = self.cached_tiny_fwd.?.entries[self.tiny_idx];
             if (self.destinationExcluded(entry.destination)) continue;
-            self.tiny_index += 1;
+            self.tiny_idx += 1;
             return .{ .id = .{ .local = entry.edge_id }, .destination = entry.destination, .relation = entry.relation, .flags = entry.flags, .property_row = entry.prop_row };
         }
         return null;
@@ -330,12 +329,12 @@ pub fn forEachNeighborInView(
     var blocks_raw: usize = 0;
     var live_raw: usize = 0;
     while (cursor.next(view.core)) |block_idx| {
-        const page_index = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
+        const page_idx = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
         const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
-        if (page_index != cached_page) {
-            cached_page = page_index;
-            blocks_raw = page_ops.edgeBlockPageRaw(view.core, page_index, .fwd);
-            live_raw = page_ops.blockLivePageRaw(view.core, page_index, .fwd);
+        if (page_idx != cached_page) {
+            cached_page = page_idx;
+            blocks_raw = page_ops.edgeBlockPageRaw(view.core, page_idx, .fwd);
+            live_raw = page_ops.blockLivePageRaw(view.core, page_idx, .fwd);
         }
         const live_page: [*]const u8 = @ptrFromInt(live_raw);
         const live: usize = @min(live_page[slot_in_page], constants.EDGES_PER_BLOCK);

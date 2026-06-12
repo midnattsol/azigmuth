@@ -101,9 +101,9 @@ test "rcu: reclaimRetired handles no readers safely" {
     defer graph.deinit();
 
     const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
-    try testing.expect(try graph.removeEdge(src, dst));
+    const destination = try graph.addNode();
+    try graph.addEdge(src, destination, 0, 0);
+    try testing.expect(try graph.removeEdge(src, destination));
 
     graph.reclaimRetired();
     try graph.validate();
@@ -158,8 +158,8 @@ test "rcu: writer proceeds while a concurrent reader holds an iterator" {
     var writer_done = std.atomic.Value(bool).init(false);
 
     const writer_thread = try std.Thread.spawn(.{}, struct {
-        fn run(graph_ptr: *graph_mod.Graph, src_node: graph_mod.NodeId, dst: graph_mod.NodeId, done: *std.atomic.Value(bool)) void {
-            _ = graph_ptr.addEdge(src_node, dst, 0, 0) catch {};
+        fn run(graph_ptr: *graph_mod.Graph, src_node: graph_mod.NodeId, destination: graph_mod.NodeId, done: *std.atomic.Value(bool)) void {
+            _ = graph_ptr.addEdge(src_node, destination, 0, 0) catch {};
             done.store(true, .release);
         }
     }.run, .{ &graph, src, dst2, &writer_done });
@@ -209,13 +209,13 @@ test "rcu: retired blocks not reclaimed while reader holds old epoch" {
     defer graph.deinit();
 
     const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    const destination = try graph.addNode();
+    try graph.addEdge(src, destination, 0, 0);
 
     const token = graph.readerEnter() catch unreachable;
 
     // Remove the edge; this retires the forward/reverse blocks.
-    try testing.expect(try graph.removeEdge(src, dst));
+    try testing.expect(try graph.removeEdge(src, destination));
     graph.bumpEpoch();
 
     // With the reader still active, reclaim should be a no-op because

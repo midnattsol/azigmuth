@@ -80,9 +80,9 @@ test "mutation: duplicate addEdge in grouped adjacency leaves state unchanged" {
     const target_count: usize = 130;
     var targets: [target_count]graph_mod.NodeId = undefined;
 
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], 0, 0);
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
     try graph.validate();
@@ -105,9 +105,9 @@ test "mutation: reverse adjacency grows and iterates across multiple blocks" {
     const source_count: usize = 130;
     var sources: [source_count]graph_mod.NodeId = undefined;
 
-    for (0..source_count) |source_index| {
-        sources[source_index] = try graph.addNode();
-        try graph.addEdge(sources[source_index], destination, 0, 0);
+    for (0..source_count) |source_idx| {
+        sources[source_idx] = try graph.addNode();
+        try graph.addEdge(sources[source_idx], destination, 0, 0);
     }
 
     try graph.validate();
@@ -129,9 +129,9 @@ test "mutation: non-tail grouped reverse remove succeeds via structural rebuild"
     const source_count: usize = 65;
     var sources: [source_count]graph_mod.NodeId = undefined;
 
-    for (0..source_count) |source_index| {
-        sources[source_index] = try graph.addNode();
-        try graph.addEdge(sources[source_index], destination, 0, 0);
+    for (0..source_count) |source_idx| {
+        sources[source_idx] = try graph.addNode();
+        try graph.addEdge(sources[source_idx], destination, 0, 0);
     }
     _ = try publish.ensureForwardBlockLayout(&graph, sources[0]);
 
@@ -266,9 +266,9 @@ test "mutation: non-tail grouped reverse remove publishes coherent state" {
     const source_count: usize = 65;
     var sources: [source_count]graph_mod.NodeId = undefined;
 
-    for (0..source_count) |source_index| {
-        sources[source_index] = try graph.addNode();
-        try graph.addEdge(sources[source_index], destination, 0, 0);
+    for (0..source_count) |source_idx| {
+        sources[source_idx] = try graph.addNode();
+        try graph.addEdge(sources[source_idx], destination, 0, 0);
     }
     _ = try publish.ensureForwardBlockLayout(&graph, sources[0]);
 
@@ -368,9 +368,9 @@ test "mutation: non-tail grouped forward remove publishes coherent state" {
     const destination_count: usize = 65;
     var destinations: [destination_count]graph_mod.NodeId = undefined;
 
-    for (0..destination_count) |destination_index| {
-        destinations[destination_index] = try graph.addNode();
-        try graph.addEdge(source, destinations[destination_index], 0, 0);
+    for (0..destination_count) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, destinations[destination_idx], 0, 0);
     }
 
     try graph.validate();
@@ -467,15 +467,15 @@ test "mutation: removeEdge of last edge from multi-block adjacency retires both 
     const destination_count: usize = 64;
     var destinations: [destination_count]graph_mod.NodeId = undefined;
 
-    for (0..destination_count) |destination_index| {
-        destinations[destination_index] = try graph.addNode();
-        try graph.addEdge(source, destinations[destination_index], 0, 0);
+    for (0..destination_count) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, destinations[destination_idx], 0, 0);
     }
     try graph.validate();
 
     // Remove all edges, which should clear the entire forward adjacency.
-    for (0..destination_count) |destination_index| {
-        try testing.expect(try graph.removeEdge(source, destinations[destination_index]));
+    for (0..destination_count) |destination_idx| {
+        try testing.expect(try graph.removeEdge(source, destinations[destination_idx]));
     }
 
     try graph.validate();

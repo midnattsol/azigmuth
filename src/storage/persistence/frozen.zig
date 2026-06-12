@@ -116,48 +116,48 @@ pub const FrozenGraph = struct {
     }
 
     /// Block lookup straight off the mapped section: index → page → slot,
-    /// pure arithmetic (block_index / EDGE_BLOCKS_PER_PAGE picks the page,
+    /// pure arithmetic (block_idx / EDGE_BLOCKS_PER_PAGE picks the page,
     /// % picks the slot — pages are contiguous in the section, so this
     /// flattens to a single multiply).
-    pub fn blockFwd(self: *const FrozenGraph, block_index: u32) *const types.EdgeBlockFwd {
+    pub fn blockFwd(self: *const FrozenGraph, block_idx: u32) *const types.EdgeBlockFwd {
         _ = self;
-        _ = block_index;
+        _ = block_idx;
         @panic("TODO: blockFwd");
     }
 
-    pub fn blockRev(self: *const FrozenGraph, block_index: u32) *const types.EdgeBlockRev {
+    pub fn blockRev(self: *const FrozenGraph, block_idx: u32) *const types.EdgeBlockRev {
         _ = self;
-        _ = block_index;
+        _ = block_idx;
         @panic("TODO: blockRev");
     }
 
-    pub fn blockLiveFwd(self: *const FrozenGraph, block_index: u32) u8 {
+    pub fn blockLiveFwd(self: *const FrozenGraph, block_idx: u32) u8 {
         _ = self;
-        _ = block_index;
+        _ = block_idx;
         @panic("TODO: blockLiveFwd");
     }
 
-    pub fn blockLiveRev(self: *const FrozenGraph, block_index: u32) u8 {
+    pub fn blockLiveRev(self: *const FrozenGraph, block_idx: u32) u8 {
         _ = self;
-        _ = block_index;
+        _ = block_idx;
         @panic("TODO: blockLiveRev");
     }
 
-    pub fn groupAt(self: *const FrozenGraph, group_index: u32) *const types.EdgeBlockGroup {
+    pub fn groupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
         _ = self;
-        _ = group_index;
+        _ = group_idx;
         @panic("TODO: groupAt");
     }
 
-    pub fn tinyFwdAt(self: *const FrozenGraph, slot_index: u32) *const node_tiny.TinyFwdSlot {
+    pub fn tinyFwdAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyFwdSlot {
         _ = self;
-        _ = slot_index;
+        _ = slot_idx;
         @panic("TODO: tinyFwdAt");
     }
 
-    pub fn tinyRevAt(self: *const FrozenGraph, slot_index: u32) *const node_tiny.TinyRevSlot {
+    pub fn tinyRevAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyRevSlot {
         _ = self;
-        _ = slot_index;
+        _ = slot_idx;
         @panic("TODO: tinyRevAt");
     }
 

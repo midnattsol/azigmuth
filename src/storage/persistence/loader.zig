@@ -98,13 +98,13 @@ pub fn restoreTinyPages(core: *graph_core.GraphCore, payload: []const u8, compti
 }
 
 /// Replays one NodeRecord into the live node pools: NodeMeta (degrees,
-/// flags, fwd/rev_index = 0, version 0), NodePublished (slot 0 = the
+/// flags, fwd/rev_idx = 0, version 0), NodePublished (slot 0 = the
 /// persisted SideAdj, sorted bits), NodeHot (next_local_edge_id, claims
 /// released). Every block/group/tiny index inside the record is
 /// bounds-checked against the header counters (CorruptIndex).
-pub fn restoreNodeRecord(core: *graph_core.GraphCore, node_index: u32, record: format.NodeRecord, header: format.FileHeader) LoadError!void {
+pub fn restoreNodeRecord(core: *graph_core.GraphCore, node_idx: u32, record: format.NodeRecord, header: format.FileHeader) LoadError!void {
     _ = core;
-    _ = node_index;
+    _ = node_idx;
     _ = record;
     _ = header;
     @panic("TODO: restoreNodeRecord");

@@ -69,8 +69,8 @@ test "mixed sequence: alternating addNode and addEdge with periodic repair stays
                 _ = graph.addEdge(nodes[i], nodes[j], relation, .{}) catch {};
             }
         }
-        for (0..6) |node_index| {
-            _ = try graph.repairNode(nodes[node_index]);
+        for (0..6) |node_idx| {
+            _ = try graph.repairNode(nodes[node_idx]);
         }
         try expectNoViolations(graph, allocator);
     }

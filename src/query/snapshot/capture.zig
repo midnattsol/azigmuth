@@ -119,10 +119,10 @@ pub fn captureStorage(core: *const graph_core.GraphCore, allocator: std.mem.Allo
     // case every node in it provably has empty side headers.
     var node_idx: u32 = 0;
     while (node_idx < node_count) {
-        const page_index = page_ops.pageOf(node_idx, constants.NODES_PER_PAGE);
-        const page_end: u32 = @intCast(@min(node_count, (page_index + 1) * constants.NODES_PER_PAGE));
-        const meta_page = page_ops.nodeMetaPageAtConst(core, page_index);
-        const published_page = page_ops.nodePublishedPageAtConst(core, page_index);
+        const page_idx = page_ops.pageOf(node_idx, constants.NODES_PER_PAGE);
+        const page_end: u32 = @intCast(@min(node_count, (page_idx + 1) * constants.NODES_PER_PAGE));
+        const meta_page = page_ops.nodeMetaPageAtConst(core, page_idx);
+        const published_page = page_ops.nodePublishedPageAtConst(core, page_idx);
 
         while (node_idx < page_end) : (node_idx += 1) {
             const slot = page_ops.slotOf(node_idx, constants.NODES_PER_PAGE);

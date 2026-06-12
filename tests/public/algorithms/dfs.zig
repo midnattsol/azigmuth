@@ -8,8 +8,8 @@ fn dfsOnGraph(graph: *azigmuth.Graph, start: azigmuth.NodeId, allocator: std.mem
 }
 
 fn idxOf(order: []const azigmuth.NodeId, target: usize) usize {
-    for (order, 0..) |node, node_index| {
-        if (node.index == target) return node_index;
+    for (order, 0..) |node, node_idx| {
+        if (node.index == target) return node_idx;
     }
     unreachable;
 }
@@ -19,7 +19,7 @@ test "dfs visits all reachable nodes from start" {
     defer builder.deinit();
 
     var nodes: [5]azigmuth.NodeId = undefined;
-    for (0..5) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..5) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
     try builder.addEdge(nodes[1], nodes[3], 0, .{});
@@ -45,7 +45,7 @@ test "dfs on unconnected graph visits only reachable component" {
     defer builder.deinit();
 
     var nodes: [4]azigmuth.NodeId = undefined;
-    for (0..4) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..4) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[2], nodes[3], 0, .{});
 
@@ -65,7 +65,7 @@ test "dfs on a graph with a cycle still terminates" {
     defer builder.deinit();
 
     var nodes: [3]azigmuth.NodeId = undefined;
-    for (0..3) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..3) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[1], nodes[2], 0, .{});
     try builder.addEdge(nodes[2], nodes[0], 0, .{});
@@ -88,7 +88,7 @@ test "dfs returns actual depth-first visitation order" {
     defer builder.deinit();
 
     var nodes: [5]azigmuth.NodeId = undefined;
-    for (0..5) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..5) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
     try builder.addEdge(nodes[1], nodes[3], 0, .{});
@@ -133,7 +133,7 @@ test "dfs from isolated node returns only the start node" {
     defer builder.deinit();
 
     var nodes: [3]azigmuth.NodeId = undefined;
-    for (0..3) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..3) |node_idx| nodes[node_idx] = try builder.addNode();
 
     var graph = try builder.freeze();
     defer graph.deinit();
@@ -150,7 +150,7 @@ test "dfs handles self-loop without revisiting the node" {
     defer builder.deinit();
 
     var nodes: [2]azigmuth.NodeId = undefined;
-    for (0..2) |node_index| nodes[node_index] = try builder.addNode();
+    for (0..2) |node_idx| nodes[node_idx] = try builder.addNode();
     try builder.addEdge(nodes[0], nodes[0], 0, .{});
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
 

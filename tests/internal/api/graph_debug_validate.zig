@@ -34,7 +34,7 @@ test "graph debug validate: detects forward entry without reverse entry" {
 
     var found = false;
     for (violations) |violation| switch (violation) {
-        .forward_reverse_mismatch => |payload| found = found or (payload.node == a.index and payload.dst == b.index),
+        .forward_reverse_mismatch => |payload| found = found or (payload.node == a.index and payload.destination == b.index),
         else => {},
     };
     try testing.expect(found);
@@ -113,7 +113,7 @@ test "graph debug validate: detects reverse entry without forward entry" {
 
     var found = false;
     for (violations) |violation| switch (violation) {
-        .forward_reverse_mismatch => |payload| found = found or (payload.node == a.index and payload.dst == b.index),
+        .forward_reverse_mismatch => |payload| found = found or (payload.node == a.index and payload.destination == b.index),
         else => {},
     };
     try testing.expect(found);

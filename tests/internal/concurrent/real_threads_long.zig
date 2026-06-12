@@ -50,8 +50,8 @@ test "concurrent: many writers to a single destination serialize via reverse-cla
 
     const hub = try graph.addNode();
     var spokes: [8]graph_mod.NodeId = undefined;
-    for (0..spokes.len) |spoke_index| {
-        spokes[spoke_index] = try graph.addNode();
+    for (0..spokes.len) |spoke_idx| {
+        spokes[spoke_idx] = try graph.addNode();
     }
 
     var stop = std.atomic.Value(bool).init(false);
@@ -59,15 +59,15 @@ test "concurrent: many writers to a single destination serialize via reverse-cla
 
     var contexts: [spokes.len]SpokeWriterCtx = undefined;
     var threads: [spokes.len]std.Thread = undefined;
-    for (spokes, 0..) |spoke, thread_index| {
-        contexts[thread_index] = .{
+    for (spokes, 0..) |spoke, thread_idx| {
+        contexts[thread_idx] = .{
             .graph = &graph,
             .source = spoke,
             .destination = hub,
             .stop = &stop,
             .start_gate = &start_gate,
         };
-        threads[thread_index] = try std.Thread.spawn(.{}, spokeWriterLoop, .{&contexts[thread_index]});
+        threads[thread_idx] = try std.Thread.spawn(.{}, spokeWriterLoop, .{&contexts[thread_idx]});
     }
 
     // Let the storm run briefly, then signal stop and join. The start-gate
@@ -123,16 +123,16 @@ fn snapshotReaderLoop(ctx: *SnapshotReaderCtx) void {
     var spin: usize = 0;
     while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
         var iterator = ctx.graph.neighbors(ctx.source) catch continue;
-        var previous_index: u32 = 0;
+        var previous_idx: u32 = 0;
         var has_previous = false;
         var sorted_ok = true;
 
         while (iterator.next()) |neighbor| {
-            if (has_previous and previous_index >= neighbor.index) {
+            if (has_previous and previous_idx >= neighbor.index) {
                 sorted_ok = false;
                 break;
             }
-            previous_index = neighbor.index;
+            previous_idx = neighbor.index;
             has_previous = true;
         }
         iterator.deinit();
@@ -178,9 +178,9 @@ test "concurrent: reader sees a sorted, valid snapshot under a continuous write 
     const source = try graph.addNode();
     const target_count: usize = 32;
     var targets: [target_count]graph_mod.NodeId = undefined;
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
-        try graph.addEdge(source, targets[target_index], 0, 0);
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
     var stop = std.atomic.Value(bool).init(false);
@@ -311,8 +311,8 @@ test "concurrent: reclaimRetired does not free blocks still observed by reader" 
     const source = try graph.addNode();
     const target_count: usize = 16;
     var targets: [target_count]graph_mod.NodeId = undefined;
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
     }
     // Permanent edge so every reader snapshot is non-empty.
     try graph.addEdge(source, targets[0], 0, 0);

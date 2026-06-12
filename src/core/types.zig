@@ -131,8 +131,8 @@ pub const NodeFlags = packed struct(u32) {
 };
 
 pub const PublishedMeta = packed struct(u64) {
-    fwd_index: u1 = 0,
-    rev_index: u1 = 0,
+    fwd_idx: u1 = 0,
+    rev_idx: u1 = 0,
     needs_repair_fwd: bool = false,
     needs_repair_rev: bool = false,
     removed: bool = false,
@@ -258,14 +258,14 @@ pub const EdgeBlockRev = extern struct {
 
 /// Per-forward-block edge ID storage. Shares block_idx and lifecycle with
 /// the corresponding EdgeBlockFwd. 256 bytes.
-pub const EdgeBlockFwdIds = struct {
+pub const EdgeBlockFwdIds = extern struct {
     ids: [EDGES_PER_BLOCK]u32,
 };
 
 /// Per-forward-block property row sidecar (edge_properties mode). Shares
 /// block_idx and lifecycle with the corresponding EdgeBlockFwd. 256 bytes.
 /// Row 0 is reserved as invalid/unset.
-pub const EdgeBlockFwdProps = struct {
+pub const EdgeBlockFwdProps = extern struct {
     rows: [EDGES_PER_BLOCK]u32,
 };
 
@@ -275,7 +275,7 @@ pub const EdgeBlockFwdProps = struct {
 /// Grouped sides publish `group_count` consecutive descriptors starting at
 /// `first_group`. 8 bytes — chain linkage was removed once runs became
 /// consecutive spans.
-pub const EdgeBlockGroup = struct {
+pub const EdgeBlockGroup = extern struct {
     start: u32,
     count: u32,
 };
@@ -299,12 +299,12 @@ pub const Violation = union(enum) {
     degree_mismatch: struct { node: u32, expected: u32, actual: u32 },
     occupancy_below_threshold: struct { node: u32, block: u32, occupancy: u32 },
     mask_bit_out_of_range: struct { node: u32, block: u32 },
-    invalid_dst: struct { node: u32, block: u32, slot: u32, dst: u32 },
+    invalid_destination: struct { node: u32, block: u32, slot: u32, destination: u32 },
     invalid_edge_id: struct { node: u32, block: u32, slot: u32, edge_id: u32 },
     invalid_prop_row: struct { node: u32, block: u32, slot: u32, row: u32 },
     duplicate_prop_row: struct { node_a: u32, node_b: u32, row: u32 },
-    forward_reverse_mismatch: struct { node: u32, dst: u32 },
-    forward_reverse_multiplicity_mismatch: struct { node: u32, dst: u32, forward_count: u32, reverse_count: u32 },
+    forward_reverse_mismatch: struct { node: u32, destination: u32 },
+    forward_reverse_multiplicity_mismatch: struct { node: u32, destination: u32, forward_count: u32, reverse_count: u32 },
     unsorted_block: struct { node: u32, block: u32, slot: u32 },
     duplicate_edge_id: struct { node: u32, edge_id: u32 },
     edge_id_counter_regressed: struct { node: u32, next_id: u32, max_seen: u32 },

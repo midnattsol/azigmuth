@@ -26,23 +26,23 @@ fn expectGraphMatchesModel(
     try graph.validate();
     try testing.expectEqual(expected_edge_count, graph.edgeCount());
 
-    for (0..node_count) |source_index| {
+    for (0..node_count) |source_idx| {
         var expected_out_degree: usize = 0;
         var expected_in_degree: usize = 0;
-        for (0..node_count) |target_index| {
-            if (model[source_index][target_index]) expected_out_degree += 1;
-            if (model[target_index][source_index]) expected_in_degree += 1;
+        for (0..node_count) |target_idx| {
+            if (model[source_idx][target_idx]) expected_out_degree += 1;
+            if (model[target_idx][source_idx]) expected_in_degree += 1;
         }
-        try testing.expectEqual(expected_out_degree, try snapshot_support.outDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
-        try testing.expectEqual(expected_in_degree, try snapshot_support.inDegree(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator));
+        try testing.expectEqual(expected_out_degree, try snapshot_support.outDegree(@constCast(graph), .{ .index = @intCast(source_idx) }, testing.allocator));
+        try testing.expectEqual(expected_in_degree, try snapshot_support.inDegree(@constCast(graph), .{ .index = @intCast(source_idx) }, testing.allocator));
 
-        var iterator = try snapshot_support.neighbors(@constCast(graph), .{ .index = @intCast(source_index) }, testing.allocator);
+        var iterator = try snapshot_support.neighbors(@constCast(graph), .{ .index = @intCast(source_idx) }, testing.allocator);
         defer iterator.deinit();
         const neighbors = try iterator.materialize(testing.allocator);
         defer testing.allocator.free(neighbors);
         try testing.expectEqual(expected_out_degree, neighbors.len);
         for (neighbors) |neighbor| {
-            try testing.expect(model[source_index][neighbor.index]);
+            try testing.expect(model[source_idx][neighbor.index]);
         }
     }
 }
@@ -61,24 +61,24 @@ test "fuzz: random single-block mutations match a reference matrix" {
     var random = RandomStream{ .state = 0x1234_5678_9abc_def0 };
 
     for (0..350) |step| {
-        const source_index = random.bounded(node_count);
-        const target_index = random.bounded(node_count);
-        const source = azigmuth.NodeId{ .index = source_index };
-        const target = azigmuth.NodeId{ .index = target_index };
+        const source_idx = random.bounded(node_count);
+        const target_idx = random.bounded(node_count);
+        const source = azigmuth.NodeId{ .index = source_idx };
+        const target = azigmuth.NodeId{ .index = target_idx };
 
         if (random.bounded(2) == 0) {
-            if (model[source_index][target_index]) {
+            if (model[source_idx][target_idx]) {
                 try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(source, target, 0, .{}));
             } else {
                 try graph.addEdge(source, target, 0, .{});
-                model[source_index][target_index] = true;
+                model[source_idx][target_idx] = true;
                 expected_edge_count += 1;
             }
         } else {
             const removed = try graph.removeEdge(source, target);
-            try testing.expectEqual(model[source_index][target_index], removed);
+            try testing.expectEqual(model[source_idx][target_idx], removed);
             if (removed) {
-                model[source_index][target_index] = false;
+                model[source_idx][target_idx] = false;
                 expected_edge_count -= 1;
             }
         }
@@ -106,8 +106,8 @@ test "fuzz: random hub mutations preserve model state across multi-block adjacen
 
     const source = try graph.addNode();
     var targets: [target_count]azigmuth.NodeId = undefined;
-    for (0..target_count) |target_index| {
-        targets[target_index] = try graph.addNode();
+    for (0..target_count) |target_idx| {
+        targets[target_idx] = try graph.addNode();
     }
 
     var model = std.mem.zeroes([target_count]bool);

@@ -22,25 +22,25 @@ pub const OutEdgeIterator = struct {
     node_adj_snapshot: types.NodeAdj,
 
     contiguous_mode: bool,
-    current_block_index: u32,
+    current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_index: u32,
+    current_group_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
     tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
-    tiny_index: u16 = 0,
+    tiny_idx: u16 = 0,
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
     cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
-    cached_span_page_index: u32 = constants.END_OF_CHAIN,
+    cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
-    cached_node_page_index: u32 = constants.END_OF_CHAIN,
+    cached_node_page_idx: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
     check_removed_destinations: bool,
 
@@ -56,16 +56,16 @@ pub const OutEdgeIterator = struct {
         return side_traversal.advanceToNextGroup(self, self.core);
     }
 
-    fn destinationRemoved(self: *OutEdgeIterator, destination_index: u32) bool {
+    fn destinationRemoved(self: *OutEdgeIterator, destination_idx: u32) bool {
         if (!self.check_removed_destinations) return false;
-        return live_read_common.candidateRemoved(self, self.core, destination_index);
+        return live_read_common.candidateRemoved(self, self.core, destination_idx);
     }
 
     fn nextTinyOutEdge(self: *OutEdgeIterator) ?types.EdgeRef {
-        while (self.tiny_index < self.tiny_count) : (self.tiny_index += 1) {
-            const entry = self.cached_tiny_fwd.?.entries[self.tiny_index];
+        while (self.tiny_idx < self.tiny_count) : (self.tiny_idx += 1) {
+            const entry = self.cached_tiny_fwd.?.entries[self.tiny_idx];
             if (self.destinationRemoved(entry.destination)) continue;
-            self.tiny_index += 1;
+            self.tiny_idx += 1;
             return types.EdgeRef{
                 .id = .{ .local = entry.edge_id },
                 .destination = entry.destination,
@@ -140,9 +140,9 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .core = graph,
         .node_adj_snapshot = capture.node_adj_snapshot,
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
-        .current_block_index = cursor_init.traversal.current_block_index,
+        .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_index = cursor_init.traversal.current_group_index,
+        .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
         .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,

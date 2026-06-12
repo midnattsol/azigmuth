@@ -6,8 +6,8 @@ pub inline fn nodeExistsRaw(graph: *const graph_core.GraphCore, node: types.Node
     return graph.hasNode(node);
 }
 
-pub inline fn nodeExistsRawIndex(graph: *const graph_core.GraphCore, node_index: u32) bool {
-    return node_index < graph.publishedNodeCount();
+pub inline fn nodeExistsRawIndex(graph: *const graph_core.GraphCore, node_idx: u32) bool {
+    return node_idx < graph.publishedNodeCount();
 }
 
 pub fn isNodeRemoved(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
@@ -15,17 +15,17 @@ pub fn isNodeRemoved(graph: *const graph_core.GraphCore, node: types.NodeId) boo
     return node_access.loadPublishedMetaAtConst(graph, node).removed;
 }
 
-pub fn isNodeRemovedIndex(graph: *const graph_core.GraphCore, node_index: u32) bool {
-    if (!nodeExistsRawIndex(graph, node_index)) return false;
-    return node_access.loadPublishedMetaAtConst(graph, .{ .index = node_index }).removed;
+pub fn isNodeRemovedIndex(graph: *const graph_core.GraphCore, node_idx: u32) bool {
+    if (!nodeExistsRawIndex(graph, node_idx)) return false;
+    return node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx }).removed;
 }
 
 pub fn isNodeLive(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
     return nodeExistsRaw(graph, node) and !isNodeRemoved(graph, node);
 }
 
-pub fn isNodeLiveIndex(graph: *const graph_core.GraphCore, node_index: u32) bool {
-    return nodeExistsRawIndex(graph, node_index) and !isNodeRemovedIndex(graph, node_index);
+pub fn isNodeLiveIndex(graph: *const graph_core.GraphCore, node_idx: u32) bool {
+    return nodeExistsRawIndex(graph, node_idx) and !isNodeRemovedIndex(graph, node_idx);
 }
 
 pub inline fn snapshotIsLive(adjacency: types.NodeAdj) bool {
