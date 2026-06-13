@@ -38,7 +38,7 @@ pub fn forEachRunInAdj(
     if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (first_group_idx..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         try callback(graph, context, group.start, group.count);
     }
 }

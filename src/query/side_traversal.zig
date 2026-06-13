@@ -132,7 +132,7 @@ pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCo
         return;
     }
 
-    const first_group = page_ops.groupAtConst(graph, iterator.current_group_idx);
+    const first_group = page_ops.edgeBlockGroupAtConst(graph, iterator.current_group_idx);
     iterator.current_block_idx = first_group.start;
     iterator.blocks_remaining = first_group.count;
 }
@@ -155,7 +155,7 @@ pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore)
     iterator.current_group_idx += 1;
     iterator.groups_visited += 1;
 
-    const next_group = page_ops.groupAtConst(graph, iterator.current_group_idx);
+    const next_group = page_ops.edgeBlockGroupAtConst(graph, iterator.current_group_idx);
     iterator.current_block_idx = next_group.start;
     iterator.blocks_remaining = next_group.count;
     return true;

@@ -59,7 +59,7 @@ pub fn validateSideAdjLayoutForSide(
     if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (side_adj.first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (group.count == 0) return error.CorruptGraph;
         if (group.start >= block_limit) return error.CorruptGraph;
         const end = std.math.add(u32, group.start, group.count) catch return error.CorruptGraph;
@@ -87,7 +87,7 @@ pub fn validateSideAdjLayout(graph: *const graph_core.GraphCore, side_adj: types
     if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (side_adj.first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (group.count == 0) return error.CorruptGraph;
         total_blocks += group.count;
     }
@@ -125,7 +125,7 @@ pub fn tailBlockIndexSideChecked(graph: *graph_core.GraphCore, side_adj: *const 
 
     try validateSideAdjLayout(graph, side_adj.*);
 
-    const tail_group = page_ops.groupAt(graph, side_adj.first_group + side_adj.group_count - 1);
+    const tail_group = page_ops.edgeBlockGroupAt(graph, side_adj.first_group + side_adj.group_count - 1);
     return tail_group.start + tail_group.count - 1;
 }
 
@@ -151,7 +151,7 @@ pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: typ
     const end_group = side_adj.first_group + side_adj.group_count;
     for (side_adj.first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (hasEdgeInForwardRun(graph, group.start, group.count, target, globally_sorted)) return true;
     }
     return false;
@@ -318,7 +318,7 @@ pub fn countForwardDestinationMatchesChecked(
     const end_group = first_group + group_count;
     for (first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             total += countForwardInBlock(block, page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd), destination_idx);

@@ -26,7 +26,7 @@ pub fn runAt(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, run_id
     if (run_idx >= side_adj.group_count) return null;
     const group_idx = side_adj.first_group + run_idx;
     if (group_idx >= graph.loadGroupCount()) return null;
-    const group = page_ops.groupAtConst(graph, group_idx);
+    const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
     return .{ .start = group.start, .count = group.count };
 }
 
@@ -50,7 +50,7 @@ pub fn cloneGroupedRuns(
     const first_group_idx = try scratch.allocGroupSpan(graph, target_group_count);
     var run_idx: u16 = 0;
     while (run_idx < side_adj.group_count and run_idx < target_group_count) : (run_idx += 1) {
-        page_ops.groupAt(graph, first_group_idx + run_idx).* = page_ops.groupAtConst(graph, side_adj.first_group + run_idx).*;
+        page_ops.edgeBlockGroupAt(graph, first_group_idx + run_idx).* = page_ops.edgeBlockGroupAtConst(graph, side_adj.first_group + run_idx).*;
     }
     return first_group_idx;
 }
@@ -117,7 +117,7 @@ pub const BlockCursor = struct {
                 return null;
             }
 
-            const group = page_ops.groupAtConst(graph, self.group_idx);
+            const group = page_ops.edgeBlockGroupAtConst(graph, self.group_idx);
             self.current_block_idx = group.start;
             self.blocks_remaining = group.count;
             self.group_idx += 1;
@@ -206,7 +206,7 @@ pub const SideBuilder = struct {
         side_adj.group_count = self.run_count;
         var run_idx: u16 = 0;
         while (run_idx < self.run_count) : (run_idx += 1) {
-            page_ops.groupAt(graph, first_group_idx + run_idx).* = .{
+            page_ops.edgeBlockGroupAt(graph, first_group_idx + run_idx).* = .{
                 .start = self.runs[run_idx].start,
                 .count = self.runs[run_idx].count,
             };

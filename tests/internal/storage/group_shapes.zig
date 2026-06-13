@@ -38,10 +38,10 @@ test "invalid shape: block_count == 1 with group_count > 1 fails validate" {
 
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
 
-    page_ops.groupAt(&graph.graph, g0).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{
         .start = block, .count = 1,
     };
-    page_ops.groupAt(&graph.graph, g1).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{
         .start = block, .count = 1,
     };
 
@@ -71,7 +71,7 @@ test "shape: grouped single-block adjacency is accepted as valid layout" {
     const group = try graph.allocGroup();
 
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
-    page_ops.groupAt(&graph.graph, group).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{
         .start = block, .count = 1,
     };
 
@@ -116,7 +116,7 @@ test "shape: grouped contiguous run layout is accepted without repair flag" {
 
     try publishReverseSources(&graph, node.index, 1, 97);
 
-    page_ops.groupAt(&graph.graph, g0).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{
         .start = b0, .count = 3,
     };
 
@@ -154,11 +154,11 @@ test "invalid shape: too many groups without needs_repair fails validate" {
     for (0..groups.len) |i| groups[i] = try graph.allocGroup();
 
     for (0..groups.len - 1) |i| {
-        page_ops.groupAt(&graph.graph, groups[i]).* = .{
+        page_ops.edgeBlockGroupAt(&graph.graph, groups[i]).* = .{
             .start = blocks[i], .count = 1,
         };
     }
-    page_ops.groupAt(&graph.graph, groups[groups.len - 1]).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, groups[groups.len - 1]).* = .{
         .start = blocks[blocks.len - 1], .count = 1,
     };
 
@@ -200,10 +200,10 @@ test "shape: short non-tail run without needs_repair is accepted as valid layout
 
     try publishReverseSources(&graph, node.index, 1, 97);
 
-    page_ops.groupAt(&graph.graph, short_run_group).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, short_run_group).* = .{
         .start = head_block, .count = 2,
     };
-    page_ops.groupAt(&graph.graph, tail_group).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, tail_group).* = .{
         .start = tail_block, .count = 1,
     };
 

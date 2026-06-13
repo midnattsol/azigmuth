@@ -22,12 +22,12 @@ fn ensureGroupMetaPage(graph: *graph_core.GraphCore, page_idx: u32) ![]types.Blo
 }
 
 /// Returns mutable access to one grouped-run descriptor.
-pub fn groupAt(graph: *graph_core.GraphCore, group_idx: u32) *types.EdgeBlockGroup {
+pub fn edgeBlockGroupAt(graph: *graph_core.GraphCore, group_idx: u32) *types.EdgeBlockGroup {
     return common.pageEntryAt(types.EdgeBlockGroup, &graph.edge_block_group_pages, group_idx, constants.EDGE_GROUPS_PER_PAGE);
 }
 
 /// Returns read-only access to one grouped-run descriptor.
-pub fn groupAtConst(graph: *const graph_core.GraphCore, group_idx: u32) *const types.EdgeBlockGroup {
+pub fn edgeBlockGroupAtConst(graph: *const graph_core.GraphCore, group_idx: u32) *const types.EdgeBlockGroup {
     return common.pageEntryAtConst(types.EdgeBlockGroup, &graph.edge_block_group_pages, group_idx, constants.EDGE_GROUPS_PER_PAGE);
 }
 
@@ -85,7 +85,7 @@ fn detachGroupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, 
 fn zeroGroupRange(graph: *graph_core.GraphCore, first_group_idx: u32, end_group_idx: u32) void {
     for (first_group_idx..end_group_idx) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        groupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
+        edgeBlockGroupAt(graph, group_idx).* = std.mem.zeroes(types.EdgeBlockGroup);
     }
 }
 

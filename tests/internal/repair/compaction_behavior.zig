@@ -354,8 +354,8 @@ test "repair: grouped adjacency can compact across group boundary" {
     fillForwardBlock(&graph, second_block, 21, 20);
     try publishReverseSourcesForForwardRange(&graph, node.index, 1, 20);
     try publishReverseSourcesForForwardRange(&graph, node.index, 21, 20);
-    page_ops.groupAt(&graph.graph, first_group).* = .{ .start = first_block, .count = 1 };
-    page_ops.groupAt(&graph.graph, second_group).* = .{ .start = second_block, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, first_group).* = .{ .start = first_block, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, second_group).* = .{ .start = second_block, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
@@ -429,9 +429,9 @@ test "repair: grouped adjacency becomes contiguous after repair" {
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
     const g2 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
-    page_ops.groupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);

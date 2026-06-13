@@ -48,8 +48,8 @@ fn setUpBlocks(graph: *graph_mod.Graph) !Fixture {
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = blk0, .count = 1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = blk1, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = blk0, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = blk1, .count = 1 };
 
     return .{ .blk0 = blk0, .blk1 = blk1, .g0 = g0, .target = target };
 }

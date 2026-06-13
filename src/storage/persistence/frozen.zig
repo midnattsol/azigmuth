@@ -139,7 +139,7 @@ pub const FrozenGraph = struct {
         return self.sectionBytes(.live_rev)[block_idx];
     }
 
-    pub fn groupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
+    pub fn edgeBlockGroupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
         const bytes = self.sectionBytes(.groups);
         const ptr: *const types.EdgeBlockGroup = @ptrCast(@alignCast(bytes.ptr));
         return &ptr[group_idx];

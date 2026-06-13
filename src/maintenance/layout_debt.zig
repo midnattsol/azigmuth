@@ -27,7 +27,7 @@ pub fn forEachGroupInSide(
     const end_group = side_view.first_group + side_view.group_count;
     for (side_view.first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         const run_idx: u16 = @intCast(group_idx - side_view.first_group);
         try callback(graph, context, group_idx, group.*, run_idx + 1 == side_view.group_count);
     }
@@ -79,7 +79,7 @@ pub fn analyzeSideLayout(
     for (side_view.first_group..end_group) |group_idx_usize| {
         visited += 1;
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         const is_last_group = visited == side_view.group_count;
         if (previous_group_end) |expected_start| {
             if (group.start != expected_start) report.chain_is_contiguous = false;

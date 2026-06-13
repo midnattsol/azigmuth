@@ -39,7 +39,7 @@ pub fn validateDenseInGroupedRuns(
     if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         try validateDenseInContiguousBlocks(graph, group.start, group.count, side);
     }
 }
@@ -125,7 +125,7 @@ pub fn validateGroupedRunsFast(
     if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
     for (first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (group.count == 0) return error.CorruptGraph;
         total += try validateContiguousBlocksFast(graph, group.start, group.count, side);
     }

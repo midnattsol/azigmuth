@@ -68,7 +68,7 @@ fn replaceTailSuffixWithFreshSpan(
     }
 
     const cloned_first_group = try side_runs.cloneGroupedRuns(graph, side_adj, prefix_group_count, scratch);
-    const tail_group = page_ops.groupAt(graph, cloned_first_group + prefix_group_count - 1);
+    const tail_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + prefix_group_count - 1);
     tail_group.start = first_block_idx;
     tail_group.count = new_run_block_count;
     side_adj.first_group = cloned_first_group;
@@ -92,11 +92,11 @@ pub fn appendPreparedBlock(
         }
 
         const first_group_idx = try scratch.allocGroupSpan(graph, 2);
-        page_ops.groupAt(graph, first_group_idx).* = .{
+        page_ops.edgeBlockGroupAt(graph, first_group_idx).* = .{
             .start = side_adj.first_block,
             .count = side_adj.block_count,
         };
-        page_ops.groupAt(graph, first_group_idx + 1).* = .{
+        page_ops.edgeBlockGroupAt(graph, first_group_idx + 1).* = .{
             .start = prepared.new_block,
             .count = 1,
         };
@@ -107,7 +107,7 @@ pub fn appendPreparedBlock(
     }
 
     if (side_adj.block_count == 1) {
-        const group = page_ops.groupAtConst(graph, side_adj.first_group);
+        const group = page_ops.edgeBlockGroupAtConst(graph, side_adj.first_group);
         if (prepared.new_block == group.start + 1) {
             side_adj.first_block = group.start;
             side_adj.block_count = 2;
@@ -117,10 +117,10 @@ pub fn appendPreparedBlock(
         }
     }
 
-    const tail_group = page_ops.groupAtConst(graph, side_adj.first_group + side_adj.group_count - 1);
+    const tail_group = page_ops.edgeBlockGroupAtConst(graph, side_adj.first_group + side_adj.group_count - 1);
     if (prepared.new_block == tail_group.start + tail_group.count) {
         const cloned_first_group = try side_runs.cloneGroupedRuns(graph, side_adj, side_adj.group_count, scratch);
-        const last_group = page_ops.groupAt(graph, cloned_first_group + side_adj.group_count - 1);
+        const last_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + side_adj.group_count - 1);
         side_adj.first_group = cloned_first_group;
         last_group.count += 1;
         side_adj.block_count += 1;
@@ -139,7 +139,7 @@ pub fn appendPreparedBlock(
     }
 
     const cloned_first_group = try side_runs.cloneGroupedRuns(graph, side_adj, side_adj.group_count + 1, scratch);
-    page_ops.groupAt(graph, cloned_first_group + side_adj.group_count).* = .{
+    page_ops.edgeBlockGroupAt(graph, cloned_first_group + side_adj.group_count).* = .{
         .start = prepared.new_block,
         .count = 1,
     };
@@ -163,11 +163,11 @@ pub fn replaceTailBlock(
         }
 
         const first_group_idx = try scratch.allocGroupSpan(graph, 2);
-        page_ops.groupAt(graph, first_group_idx).* = .{
+        page_ops.edgeBlockGroupAt(graph, first_group_idx).* = .{
             .start = side_adj.first_block,
             .count = side_adj.block_count - 1,
         };
-        page_ops.groupAt(graph, first_group_idx + 1).* = .{
+        page_ops.edgeBlockGroupAt(graph, first_group_idx + 1).* = .{
             .start = prepared.new_block,
             .count = 1,
         };
@@ -183,10 +183,10 @@ pub fn replaceTailBlock(
         return .{ .block_idx = prepared.new_block };
     }
 
-    const tail_group = page_ops.groupAtConst(graph, side_adj.first_group + side_adj.group_count - 1);
+    const tail_group = page_ops.edgeBlockGroupAtConst(graph, side_adj.first_group + side_adj.group_count - 1);
     if (tail_group.count == 1) {
         const cloned_first_group = try side_runs.cloneGroupedRuns(graph, side_adj, side_adj.group_count, scratch);
-        const last_group = page_ops.groupAt(graph, cloned_first_group + side_adj.group_count - 1);
+        const last_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + side_adj.group_count - 1);
         side_adj.first_group = cloned_first_group;
         last_group.start = prepared.new_block;
         return .{ .block_idx = prepared.new_block };
@@ -205,8 +205,8 @@ pub fn replaceTailBlock(
     }
 
     const cloned_first_group = try side_runs.cloneGroupedRuns(graph, side_adj, side_adj.group_count + 1, scratch);
-    const cloned_tail_group = page_ops.groupAt(graph, cloned_first_group + side_adj.group_count - 1);
-    page_ops.groupAt(graph, cloned_first_group + side_adj.group_count).* = .{
+    const cloned_tail_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + side_adj.group_count - 1);
+    page_ops.edgeBlockGroupAt(graph, cloned_first_group + side_adj.group_count).* = .{
         .start = prepared.new_block,
         .count = 1,
     };
@@ -231,11 +231,11 @@ pub fn removeTailBlock(
         }
 
         const first_group_idx = try scratch.allocGroupSpan(graph, 2);
-        page_ops.groupAt(graph, first_group_idx).* = .{
+        page_ops.edgeBlockGroupAt(graph, first_group_idx).* = .{
             .start = published_side.first_block,
             .count = published_side.block_count - 1,
         };
-        page_ops.groupAt(graph, first_group_idx + 1).* = .{
+        page_ops.edgeBlockGroupAt(graph, first_group_idx + 1).* = .{
             .start = new_block,
             .count = 1,
         };
@@ -244,7 +244,7 @@ pub fn removeTailBlock(
         return true;
     }
 
-    const tail_group = page_ops.groupAtConst(graph, published_side.first_group + published_side.group_count - 1);
+    const tail_group = page_ops.edgeBlockGroupAtConst(graph, published_side.first_group + published_side.group_count - 1);
     if (new_live == 0) {
         if (tail_group.count > 1) {
             if (published_side.group_count == 1) {
@@ -253,7 +253,7 @@ pub fn removeTailBlock(
                 staging_side.first_group = 0;
             } else {
                 const cloned_first_group = try side_runs.cloneGroupedRuns(graph, published_side, published_side.group_count, scratch);
-                const cloned_tail_group = page_ops.groupAt(graph, cloned_first_group + published_side.group_count - 1);
+                const cloned_tail_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + published_side.group_count - 1);
                 cloned_tail_group.count -= 1;
                 staging_side.first_group = cloned_first_group;
             }
@@ -264,7 +264,7 @@ pub fn removeTailBlock(
         if (published_side.group_count == 1) return false;
 
         if (published_side.group_count == 2) {
-            const remaining_group = page_ops.groupAtConst(graph, published_side.first_group);
+            const remaining_group = page_ops.edgeBlockGroupAtConst(graph, published_side.first_group);
             staging_side.first_block = remaining_group.start;
             staging_side.group_count = 0;
             staging_side.first_group = 0;
@@ -281,7 +281,7 @@ pub fn removeTailBlock(
 
     if (tail_group.count == 1) {
         const cloned_first_group = try side_runs.cloneGroupedRuns(graph, published_side, published_side.group_count, scratch);
-        const cloned_tail_group = page_ops.groupAt(graph, cloned_first_group + published_side.group_count - 1);
+        const cloned_tail_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + published_side.group_count - 1);
         cloned_tail_group.start = new_block;
         staging_side.first_group = cloned_first_group;
         return true;
@@ -290,8 +290,8 @@ pub fn removeTailBlock(
     if (published_side.group_count >= constants.MAX_GROUPS_PER_NODE) return false;
 
     const cloned_first_group = try side_runs.cloneGroupedRuns(graph, published_side, published_side.group_count + 1, scratch);
-    const cloned_tail_group = page_ops.groupAt(graph, cloned_first_group + published_side.group_count - 1);
-    page_ops.groupAt(graph, cloned_first_group + published_side.group_count).* = .{
+    const cloned_tail_group = page_ops.edgeBlockGroupAt(graph, cloned_first_group + published_side.group_count - 1);
+    page_ops.edgeBlockGroupAt(graph, cloned_first_group + published_side.group_count).* = .{
         .start = new_block,
         .count = 1,
     };

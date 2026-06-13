@@ -45,11 +45,11 @@ test "validation: debugValidate accepts short non-tail runs as valid layout" {
     page_ops.setBlockLiveCount(&graph.graph, head_block, .fwd, 0);
     page_ops.setBlockLiveCount(&graph.graph, tail_block, .fwd, 0);
 
-    page_ops.groupAt(&graph.graph, short_run_group).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, short_run_group).* = .{
         .start = head_block,
         .count = 2,
     };
-    page_ops.groupAt(&graph.graph, tail_group).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, tail_group).* = .{
         .start = tail_block,
         .count = 1,
     };
@@ -83,7 +83,7 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
     page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, 0);
     page_ops.setBlockLiveCount(&graph.graph, block2, .fwd, 0);
 
-    page_ops.groupAt(&graph.graph, group).* = .{
+    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{
         .start = block0,
         .count = 3,
     };
@@ -214,7 +214,7 @@ test "validation: debugValidate catches group_count longer than actual chain eve
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = 0;
 
     const g0 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);

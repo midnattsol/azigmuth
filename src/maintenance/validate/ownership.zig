@@ -77,7 +77,7 @@ pub fn validateAdjacencyOwnershipAndLayoutFast(
         const group_idx: u32 = @intCast(group_idx_usize);
         visited_groups += 1;
 
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (group.count == 0) return error.CorruptGraph;
 
         if (!common.bitmapSet(owned_groups, group_idx)) return error.CorruptGraph;

@@ -111,7 +111,7 @@ fn edgeIdAppearsLater(
     if (end_group > graph.loadGroupCount()) return false;
     for (first_group_idx..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         for (group.start..group.start + group.count) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);

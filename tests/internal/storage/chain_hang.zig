@@ -20,7 +20,7 @@ fn makeAdjacencyGroupedWithInvalidDeclaredSpan(graph: *graph_mod.Graph, node: gr
 
     if (existing_groups == 0) {
         const g0 = try graph.allocGroup();
-        page_ops.groupAt(&graph.graph, g0).* = .{
+        page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{
             .start = published_adj.first_block_fwd,
             .count = existing_blocks,
         };

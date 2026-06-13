@@ -87,8 +87,8 @@ pub const retireBlock = blocks.retireBlock;
 pub const reclaimRetired = blocks.reclaimRetired;
 
 // ── grouped runs ─────────────────────────────────────────────────────
-pub const groupAt = groups.groupAt;
-pub const groupAtConst = groups.groupAtConst;
+pub const edgeBlockGroupAt = groups.edgeBlockGroupAt;
+pub const edgeBlockGroupAtConst = groups.edgeBlockGroupAtConst;
 pub const allocGroupSpan = groups.allocGroupSpan;
 pub const allocGroup = groups.allocGroup;
 pub const freeGroupSpan = groups.freeGroupSpan;

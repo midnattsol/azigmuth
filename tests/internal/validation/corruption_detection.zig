@@ -254,7 +254,7 @@ test "validation: detects grouped span declared past allocated runs" {
     const group = try graph.allocGroup();
 
     page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
     try publishForwardGroups(&graph, node, group, 1, 2);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -273,8 +273,8 @@ test "validation: detects overlapping block groups" {
     const group0 = try graph.allocGroup();
     const group1 = try graph.allocGroup();
 
-    page_ops.groupAt(&graph.graph, group0).* = .{ .start = block0, .count = 2 };
-    page_ops.groupAt(&graph.graph, group1).* = .{ .start = block0 + 1, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, group0).* = .{ .start = block0, .count = 2 };
+    page_ops.edgeBlockGroupAt(&graph.graph, group1).* = .{ .start = block0 + 1, .count = 1 };
     try publishForwardGroups(&graph, node, group0, 3, 2);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -360,7 +360,7 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
 
     const g0 = try graph.allocGroup();
     // Single group covering 2 physically contiguous blocks.
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = b0, .count = 2 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 2 };
 
     // Reverse adjacency for both destinations so forward/reverse consistency passes.
     const rb0 = try graph.allocBlockRev();
@@ -596,7 +596,7 @@ test "validation: debugValidate continues after malformed group span with later 
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     const group = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
     try publishForwardGroups(&graph, node, group, 1, 2);
 
     graph.graph.edge_count.store(2, .release);

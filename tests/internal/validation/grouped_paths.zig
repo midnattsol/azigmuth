@@ -49,8 +49,8 @@ fn setUpGroupedForward(graph: *graph_mod.Graph) !GroupedFixture {
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
-    page_ops.groupAt(&graph.graph, g0).* = .{ .start = blk0, .count = 1 };
-    page_ops.groupAt(&graph.graph, g1).* = .{ .start = blk1, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = blk0, .count = 1 };
+    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = blk1, .count = 1 };
 
     const node = nodes[69];
     const ref = try graph.nodeAt(node);
@@ -104,10 +104,10 @@ test "grouped validate paths: validateGroupedRunsFast rejects empty groups" {
 
     // Empty a group in place: the fast walk must flag it.
     const second_group = fixture.first_group + 1;
-    const saved = page_ops.groupAt(&graph.graph, second_group).*;
-    page_ops.groupAt(&graph.graph, second_group).count = 0;
+    const saved = page_ops.edgeBlockGroupAt(&graph.graph, second_group).*;
+    page_ops.edgeBlockGroupAt(&graph.graph, second_group).count = 0;
     try testing.expectError(error.CorruptGraph, shape.validateGroupedRunsFast(&graph.graph, fixture.first_group, 2, .fwd));
-    page_ops.groupAt(&graph.graph, second_group).* = saved;
+    page_ops.edgeBlockGroupAt(&graph.graph, second_group).* = saved;
 }
 
 const GroupWalk = struct {
@@ -123,7 +123,7 @@ test "grouped validate paths: forEachGroupInSide walks every group and flags the
     const fixture = try setUpGroupedForward(&graph);
 
     const side_view = types.SideAdj{
-        .first_block = page_ops.groupAtConst(&graph.graph, fixture.first_group).start,
+        .first_block = page_ops.edgeBlockGroupAtConst(&graph.graph, fixture.first_group).start,
         .block_count = 2,
         .group_count = 2,
         .first_group = fixture.first_group,

@@ -389,7 +389,7 @@ pub fn findSlotInAdjById(
     const end_group = first_group_idx + group_count;
     for (first_group_idx..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (adjacency.findForwardSlotByIdInRun(graph, group.start, group.count, destination_idx, edge_id)) |slot| {
             return .{ .block_idx = slot.block_idx, .slot = slot.slot };
         }
@@ -447,7 +447,7 @@ pub fn findSlotInAdj(
     const end_group = first_group_idx + group_count;
     for (first_group_idx..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         if (findSlotInBlockRun(graph, group.start, group.count, target, side, globally_sorted)) |slot| return slot;
     }
     return null;

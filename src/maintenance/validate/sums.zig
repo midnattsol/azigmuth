@@ -31,7 +31,7 @@ pub fn sumGroupedRuns(graph: *const graph_core.GraphCore, first_group: u32, grou
     if (end_group > graph.loadGroupCount()) return total;
     for (first_group..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.groupAtConst(graph, group_idx);
+        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         total += sumContiguousBlocks(graph, group.start, group.count, side);
     }
 
