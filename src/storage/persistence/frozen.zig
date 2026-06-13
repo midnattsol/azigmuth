@@ -23,6 +23,7 @@ const types = @import("../../core/types.zig");
 const node_tiny = @import("../node/tiny.zig");
 const format = @import("format.zig");
 const io_mod = @import("io.zig");
+const node_published = @import("../node/published.zig");
 
 pub const OpenError = anyerror; // TODO: Real errors once is done.
 
@@ -131,11 +132,11 @@ pub const FrozenGraph = struct {
         return &ptr[block_idx];
     }
 
-    pub fn blockLiveFwd(self: *const FrozenGraph, block_idx: u32) u8 {
+    pub fn liveCountInFwdBlock(self: *const FrozenGraph, block_idx: u32) u8 {
         return self.sectionBytes(.live_fwd)[block_idx];
     }
 
-    pub fn blockLiveRev(self: *const FrozenGraph, block_idx: u32) u8 {
+    pub fn liveCountInRevBlock(self: *const FrozenGraph, block_idx: u32) u8 {
         return self.sectionBytes(.live_rev)[block_idx];
     }
 
@@ -146,15 +147,15 @@ pub const FrozenGraph = struct {
     }
 
     pub fn tinyFwdAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyFwdSlot {
-        _ = self;
-        _ = slot_idx;
-        @panic("TODO: tinyFwdAt");
+        const bytes = self.sectionBytes(.tiny_fwd);
+        const ptr: node_tiny.TinyFwdSlot = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[slot_idx];
     }
 
     pub fn tinyRevAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyRevSlot {
-        _ = self;
-        _ = slot_idx;
-        @panic("TODO: tinyRevAt");
+        const bytes = self.sectionBytes(.tiny_rev);
+        const ptr: node_tiny.TinyRevSlot = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[slot_idx];
     }
 
     // ── Traversal ────────────────────────────────────────────────────
@@ -169,27 +170,153 @@ pub const FrozenGraph = struct {
     ///   - grouped runs: group_count EdgeBlockGroup descriptors starting at
     ///     first_group, each one a (first_block, span) run.
     pub fn outNeighbors(self: *const FrozenGraph, node: types.NodeId) types.GraphError!NeighborIterator {
-        _ = self;
-        _ = node;
-        @panic("TODO: outNeighbors");
+        const node_record = self.nodeRecord(node);
+        if (node_record == null) return error.InvalidNode;
+
+        const side_adj: types.SideAdj = node_record.fwd;
+        if (node_published.NodePublished.isTiny(&side_adj)) {
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .fwd,
+                .tiny_idx = 0,
+                .tiny_mode = true,
+                .tiny_slot_idx = side_adj.first_block,
+                .tiny_count = node_published.NodePublished.tinyCount(&side_adj),
+                .current_block_idx = 0,
+                .slot_idx = 0,
+                .blocks_remaining = 0,
+                .group_idx = 0,
+                .groups_remaining = 0,
+                .live_in_block = 0,
+            };
+        } else if (side_adj.group_count == 0) {
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .fwd,
+                .tiny_idx = 0,
+                .tiny_mode = false,
+                .tiny_slot_idx = 0,
+                .tiny_count = 0,
+                .current_block_idx = side_adj.first_block,
+                .slot_idx = 0,
+                .blocks_remaining = side_adj.block_count,
+                .group_idx = 0,
+                .groups_remaining = 0,
+                .live_in_block = self.liveCountInFwdBlock(side_adj.first_block),
+            };
+        } else {
+            const group = self.edgeBlockGroupAt(side_adj.first_group);
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .fwd,
+                .tiny_idx = 0,
+                .tiny_mode = false,
+                .tiny_slot_idx = 0,
+                .tiny_count = 0,
+                .current_block_idx = group.start,
+                .slot_idx = 0,
+                .blocks_remaining = group.count,
+                .group_idx = side_adj.first_group,
+                .groups_remaining = side_adj.group_count,
+                .live_in_block = self.liveCountInFwdBlock(group.start),
+            };
+        }
     }
 
     pub fn inNeighbors(self: *const FrozenGraph, node: types.NodeId) types.GraphError!NeighborIterator {
-        _ = self;
-        _ = node;
-        @panic("TODO: inNeighbors");
+        const node_record = self.nodeRecord(node);
+        if (node_record == null) return error.InvalidNode;
+
+        const side_adj: types.SideAdj = node_record.rev;
+        if (node_published.NodePublished.isTiny(&side_adj)) {
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .rev,
+                .tiny_idx = 0,
+                .tiny_mode = true,
+                .tiny_slot_idx = side_adj.first_block,
+                .tiny_count = node_published.NodePublished.tinyCount(&side_adj),
+                .current_block_idx = 0,
+                .slot_idx = 0,
+                .blocks_remaining = 0,
+                .group_idx = 0,
+                .groups_remaining = 0,
+                .live_in_block = 0,
+            };
+        } else if (side_adj.group_count == 0) {
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .rev,
+                .tiny_idx = 0,
+                .tiny_mode = false,
+                .tiny_slot_idx = 0,
+                .tiny_count = 0,
+                .current_block_idx = side_adj.first_block,
+                .slot_idx = 0,
+                .blocks_remaining = side_adj.block_count,
+                .group_idx = 0,
+                .groups_remaining = 0,
+                .live_in_block = self.liveCountInRevBlock(side_adj.first_block),
+            };
+        } else {
+            const group = self.edgeBlockGroupAt(side_adj.first_group);
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .rev,
+                .tiny_idx = 0,
+                .tiny_mode = false,
+                .tiny_slot_idx = 0,
+                .tiny_count = 0,
+                .current_block_idx = group.start,
+                .slot_idx = 0,
+                .blocks_remaining = group.count,
+                .group_idx = side_adj.first_group,
+                .groups_remaining = side_adj.group_count,
+                .live_in_block = self.liveCountInRevBlock(group.start),
+            };
+        }
     }
 
     pub const NeighborIterator = struct {
         frozen: *const FrozenGraph,
-        // TODO: cursor state — direction, the SideAdj snapshot
-        // (copied from the record: 16 bytes, cheap), current block/slot/
-        // group indices, tiny mode + index. No tokens, no liveness checks:
-        // the data cannot move.
+        direction: enum { fwd, rev },
+
+        // Tiny mode
+        tiny_mode: bool,
+        tiny_slot_idx: u32,
+        tiny_count: u16,
+        tiny_idx: u16,
+
+        // Current block
+        current_block_idx: u32,
+        blocks_remaining: u32,
+        slot_idx: u8,
+        live_in_block: u8,
+
+        // Current group
+        group_idx: u32,
+        groups_remaining: u16,
 
         pub fn next(self: *NeighborIterator) ?types.NodeId {
-            _ = self;
-            @panic("TODO: NeighborIterator.next");
+            if (self.tiny_mode) {
+                if (self.tiny_count <= self.tiny_slot_idx - 1) return null;
+                if (self.direction == .fwd) {
+                    const dest = self.frozen.tinyFwdAt(self.tiny_slot_idx).entries[self.tiny_idx].destination;
+                    return .{
+                        .frozen = self.frozen,
+                        .direction = .fwd,
+                        .tiny_slot_idx = self.tiny_slot_idx + 1,
+                        .tiny_count = self.count,
+                        .tiny_idx = self.tiny_idx + 1,
+                        .current_block_idx = 0,
+                        .blocks_remaining = 0,
+                        .slot_idx = 0,
+                        .live_in_block = 0,
+                        .group_idx = 0,
+                        .groups_remaining = 0,
+                    };
+                }
+            }
         }
     };
 
