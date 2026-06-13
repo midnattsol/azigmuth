@@ -66,35 +66,39 @@ pub const FileSink = struct {
 // error{TruncatedFile, CorruptSection} || read errors).
 pub const ValidateError = anyerror;
 
-/// Step 1 of the ladder: reinterprets the raw header block, then
+/// Reinterprets the raw header block, then
 /// `format.validateHeader` (magic, version, params vs the running comptime
 /// profile, header checksum).
 pub fn parseHeader(raw_header_block: *const [format.HEADER_BYTES]u8) ValidateError!format.FileHeader {
-    _ = raw_header_block;
-    // TODO: copy the FileHeader prefix out of the block
-    // (std.mem.bytesToValue / @memcpy — do NOT @ptrCast the file buffer:
-    // alignment is only guaranteed for the copy), then validateHeader.
-    @panic("TODO: parseHeader");
+    const header: format.FileHeader = undefined;
+    @memcpy(std.mem.asBytes(&header), raw_header_block[0..@sizeOf(format.FileHeader)]);
+    try format.validateHeader(header, raw_header_block);
+    return header;
 }
 
-/// Step 2: reinterprets and validates the fixed section table.
-pub fn parseSectionTable(header: format.FileHeader, raw_table: *const [format.SECTION_TABLE_BYTES]u8) ValidateError![format.MAX_SECTIONS]format.SectionDescriptor {
-    _ = header;
-    _ = raw_table;
-    @panic("TODO: parseSectionTable");
+/// Reinterprets and validates the fixed section table.
+pub fn parseSectionTable(
+    header: format.FileHeader,
+    raw_table: *const [format.SECTION_TABLE_BYTES]u8,
+) ValidateError![format.MAX_SECTIONS]format.SectionDescriptor {
+    const table: [format.MAX_SECTIONS]format.SectionDescriptor = undefined;
+    @memcpy(std.mem.asBytes(&table), raw_table);
+    try format.validateSectionTable(header, &table);
+    return table;
 }
 
-/// Step 3: every section must fit inside the real file
+/// Every section must fit inside the real file
 /// (offset + byte_len <= file_len), or the file was truncated.
 pub fn checkSectionsAgainstFileLen(table: *const [format.MAX_SECTIONS]format.SectionDescriptor, file_len: u64) ValidateError!void {
-    _ = table;
-    _ = file_len;
-    @panic("TODO: checkSectionsAgainstFileLen");
+    for (table.*) |descriptor| {
+        if (descriptor.byte_len == 0) continue;
+        const end = try std.math.add(descriptor.file_offset, descriptor.byte_len);
+        if (file_len < end) return error.TruncatedFile;
+    }
 }
 
-/// Step 4, per section: payload bytes vs the descriptor checksum.
+/// Per section: payload bytes vs the descriptor checksum.
 pub fn verifySectionChecksum(descriptor: format.SectionDescriptor, payload: []const u8) ValidateError!void {
-    _ = descriptor;
-    _ = payload;
-    @panic("TODO: verifySectionChecksum");
+    if (payload.len != descriptor.byte_len) return error.InvalidPayload;
+    if (format.sectionChecksum(payload) != descriptor.checksum) return error.CorruptSection;
 }

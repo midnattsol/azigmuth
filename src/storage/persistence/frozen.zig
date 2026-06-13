@@ -24,7 +24,7 @@ const node_tiny = @import("../node/tiny.zig");
 const format = @import("format.zig");
 const io_mod = @import("io.zig");
 
-pub const OpenError = anyerror; // TODO: narrow.
+pub const OpenError = anyerror; // TODO: Real errors once is done.
 
 pub const OpenOptions = struct {
     /// Verify every per-section checksum at open. This reads the whole file
@@ -70,49 +70,49 @@ pub const FrozenGraph = struct {
     /// sections). The base pointer is SECTION_ALIGN-aligned by format
     /// contract, so casting to the section's record type is sound.
     pub fn sectionBytes(self: *const FrozenGraph, id: format.SectionId) []const u8 {
-        _ = self;
-        _ = id;
-        @panic("TODO: sectionBytes");
+        const descriptor = self.table[@intFromEnum(id)];
+        const offset = descriptor.file_offset;
+        const length = descriptor.byte_len;
+
+        if (length == 0) return &[_]u8{};
+        return self.bytes[offset .. offset + length];
     }
 
     /// All NodeRecords, casted in place from the node_records section.
     pub fn nodeRecords(self: *const FrozenGraph) []const format.NodeRecord {
-        _ = self;
-        // TODO: std.mem.bytesAsSlice over sectionBytes — alignment
-        // holds because SECTION_ALIGN covers the record alignment (the
-        // format's comptime asserts pin this).
-        @panic("TODO: nodeRecords");
+        const bytes = self.sectionBytes(.node_records);
+        const records: []const format.NodeRecord = std.mem.bytesAsSlice(format.NodeRecord, bytes);
+        return records;
     }
 
     // ── Counters / point lookups ─────────────────────────────────────
 
     pub fn nodeCount(self: *const FrozenGraph) u64 {
-        _ = self;
-        @panic("TODO: nodeCount");
+        return self.header.node_count;
     }
 
     pub fn edgeCount(self: *const FrozenGraph) u64 {
-        _ = self;
-        @panic("TODO: edgeCount");
+        return self.header.edge_count;
     }
 
     pub fn nodeRecord(self: *const FrozenGraph, node: types.NodeId) ?*const format.NodeRecord {
-        _ = self;
-        _ = node;
-        // TODO: null when out of range or record.flags.removed.
-        @panic("TODO: nodeRecord");
+        if (node.index >= self.nodeCount()) return null;
+        const node_record = &self.nodeRecords()[node.index];
+
+        if (node_record.flags.removed) return null;
+        return node_record;
     }
 
     pub fn outDegree(self: *const FrozenGraph, node: types.NodeId) types.GraphError!usize {
-        _ = self;
-        _ = node;
-        @panic("TODO: outDegree");
+        const node_record = self.nodeRecord(node);
+        if (node_record == null) return error.InvalidNode;
+        return node_record.degree_fwd;
     }
 
     pub fn inDegree(self: *const FrozenGraph, node: types.NodeId) types.GraphError!usize {
-        _ = self;
-        _ = node;
-        @panic("TODO: inDegree");
+        const node_record = self.nodeRecord(node);
+        if (node_record == null) return error.InvalidNode;
+        return node_record.degree_rev;
     }
 
     /// Block lookup straight off the mapped section: index → page → slot,
@@ -120,33 +120,29 @@ pub const FrozenGraph = struct {
     /// % picks the slot — pages are contiguous in the section, so this
     /// flattens to a single multiply).
     pub fn blockFwd(self: *const FrozenGraph, block_idx: u32) *const types.EdgeBlockFwd {
-        _ = self;
-        _ = block_idx;
-        @panic("TODO: blockFwd");
+        const bytes = self.sectionBytes(.blocks_fwd);
+        const ptr: *const types.EdgeBlockFwd = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[block_idx];
     }
 
     pub fn blockRev(self: *const FrozenGraph, block_idx: u32) *const types.EdgeBlockRev {
-        _ = self;
-        _ = block_idx;
-        @panic("TODO: blockRev");
+        const bytes = self.sectionBytes(.blocks_rev);
+        const ptr: *const types.EdgeBlockRev = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[block_idx];
     }
 
     pub fn blockLiveFwd(self: *const FrozenGraph, block_idx: u32) u8 {
-        _ = self;
-        _ = block_idx;
-        @panic("TODO: blockLiveFwd");
+        return self.sectionBytes(.live_fwd)[block_idx];
     }
 
     pub fn blockLiveRev(self: *const FrozenGraph, block_idx: u32) u8 {
-        _ = self;
-        _ = block_idx;
-        @panic("TODO: blockLiveRev");
+        return self.sectionBytes(.live_rev)[block_idx];
     }
 
     pub fn groupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
-        _ = self;
-        _ = group_idx;
-        @panic("TODO: groupAt");
+        const bytes = self.sectionBytes(.groups);
+        const ptr: *const types.EdgeBlockGroup = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[group_idx];
     }
 
     pub fn tinyFwdAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyFwdSlot {
