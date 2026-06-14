@@ -19,7 +19,7 @@ const Fixture = struct {
     target: u32,
 };
 
-/// Two forward blocks (3 + 2 live) plus a two-group chain over them.
+/// Two forward blocks (3 + 2 alive) plus a two-group chain over them.
 /// `target` appears once in each block.
 fn setUpBlocks(graph: *graph_mod.Graph) !Fixture {
     var nodes: [8]graph_mod.NodeId = undefined;
@@ -34,7 +34,7 @@ fn setUpBlocks(graph: *graph_mod.Graph) !Fixture {
         b0.relations[slot] = 0;
         b0.flags[slot] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk0, .fwd, dests0.len);
+    page_ops.setBlockAliveCount(&graph.graph, blk0, .fwd, dests0.len);
 
     const blk1 = try graph.allocBlockFwd();
     const b1 = page_ops.edgeBlockAt(&graph.graph, blk1, .fwd);
@@ -44,7 +44,7 @@ fn setUpBlocks(graph: *graph_mod.Graph) !Fixture {
         b1.relations[slot] = 0;
         b1.flags[slot] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk1, .fwd, dests1.len);
+    page_ops.setBlockAliveCount(&graph.graph, blk1, .fwd, dests1.len);
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();

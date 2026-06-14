@@ -1,5 +1,5 @@
 //! White-box coverage for the grouped-run validate/sum helpers and the
-//! layout-debt group walker. Like the live-count paths, these are lazily
+//! layout-debt group walker. Like the alive-count paths, these are lazily
 //! compiled and only reachable from debug validation, so they need direct
 //! instantiation to survive layout refactors.
 
@@ -22,7 +22,7 @@ const GroupedFixture = struct {
 };
 
 /// Publishes a node whose forward side is two grouped runs: one full block
-/// (64 live) and one tail block (4 live), 68 edges total.
+/// (64 alive) and one tail block (4 alive), 68 edges total.
 fn setUpGroupedForward(graph: *graph_mod.Graph) !GroupedFixture {
     // validateBlockShapeFast rejects keys >= publishedNodeCount, so every
     // destination written below must be a published node index.
@@ -36,7 +36,7 @@ fn setUpGroupedForward(graph: *graph_mod.Graph) !GroupedFixture {
         b0.relations[slot] = 0;
         b0.flags[slot] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, blk0, .fwd, 64);
 
     const blk1 = try graph.allocBlockFwd();
     const b1 = page_ops.edgeBlockAt(&graph.graph, blk1, .fwd);
@@ -45,7 +45,7 @@ fn setUpGroupedForward(graph: *graph_mod.Graph) !GroupedFixture {
         b1.relations[slot] = 0;
         b1.flags[slot] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk1, .fwd, 4);
+    page_ops.setBlockAliveCount(&graph.graph, blk1, .fwd, 4);
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();

@@ -21,7 +21,7 @@
 //! Persisted:
 //!  - one canonical `NodeRecord` per node (published sides normalized out of
 //!    the RCU double-buffers: only the active slot survives a save),
-//!  - the raw storage pages for edge blocks, live-count sidecars, edge-id /
+//!  - the raw storage pages for edge blocks, alive-count sidecars, edge-id /
 //!    property-row sidecars (when enabled), grouped-run descriptors, and
 //!    tiny slots — exactly the engine's in-memory page layout,
 //!  - the free lists (cheap u32 index sections), so the loader does not need
@@ -99,10 +99,10 @@ pub const SectionId = enum(u16) {
     blocks_fwd = 1,
     /// Raw `EdgeBlockRev` pages.
     blocks_rev = 2,
-    /// Forward live-count sidecar: one u8 per block slot, page-for-page.
-    live_fwd = 3,
-    /// Reverse live-count sidecar.
-    live_rev = 4,
+    /// Forward alive-count sidecar: one u8 per block slot, page-for-page.
+    alive_fwd = 3,
+    /// Reverse alive-count sidecar.
+    alive_rev = 4,
     /// `EdgeBlockFwdIds` pages (present iff `multigraph`).
     edge_ids_fwd = 5,
     /// `EdgeBlockFwdProps` pages (present iff `edge_properties`).
@@ -321,8 +321,8 @@ pub fn expectedSectionBytes(header: FileHeader, id: SectionId) ?u64 {
         .node_records => header.node_count * @sizeOf(NodeRecord),
         .blocks_fwd => blockPages(header.block_fwd_count) * constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockFwd),
         .blocks_rev => blockPages(header.block_rev_count) * constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockRev),
-        .live_fwd => blockPages(header.block_fwd_count) * constants.EDGE_BLOCKS_PER_PAGE,
-        .live_rev => blockPages(header.block_rev_count) * constants.EDGE_BLOCKS_PER_PAGE,
+        .alive_fwd => blockPages(header.block_fwd_count) * constants.EDGE_BLOCKS_PER_PAGE,
+        .alive_rev => blockPages(header.block_rev_count) * constants.EDGE_BLOCKS_PER_PAGE,
         .edge_ids_fwd => if (header.flags.multigraph)
             blockPages(header.block_fwd_count) * constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockFwdIds)
         else

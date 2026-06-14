@@ -328,6 +328,6 @@ test "csr: direct live export matches snapshot export (tombstones + rows)" {
     try testing.expectEqual(via_snapshot.node_count, direct.node_count);
     try testing.expectEqualSlices(u64, via_snapshot.out_offsets, direct.out_offsets);
     try testing.expectEqualSlices(u32, via_snapshot.out_targets, direct.out_targets);
-    try testing.expectEqualSlices(u64, via_snapshot.live_words, direct.live_words);
+    try testing.expectEqualSlices(u64, via_snapshot.alive_node_bitmap, direct.alive_node_bitmap);
     try testing.expectEqualSlices(u32, via_snapshot.out_rows.?, direct.out_rows.?);
 }

@@ -223,8 +223,8 @@ pub const GraphBuilder = struct {
             if (prop_block) |fwd_props| fwd_props.* = std.mem.zeroes(types.EdgeBlockFwdProps);
 
             const remaining = run.len - edge_idx;
-            const live = @min(remaining, constants.EDGES_PER_BLOCK);
-            for (0..live) |slot| {
+            const alive = @min(remaining, constants.EDGES_PER_BLOCK);
+            for (0..alive) |slot| {
                 const edge = run[edge_idx + slot];
                 block.destinations[slot] = edge.destination;
                 block.relations[slot] = edge.relation;
@@ -238,8 +238,8 @@ pub const GraphBuilder = struct {
                     next_prop_row.* += 1;
                 }
             }
-            page_ops.setBlockLiveCount(&self.graph.graph, block_idx, .fwd, @intCast(live));
-            edge_idx += live;
+            page_ops.setBlockAliveCount(&self.graph.graph, block_idx, .fwd, @intCast(alive));
+            edge_idx += alive;
         }
 
         const node = graph_mod.NodeId{ .index = source_idx };
@@ -321,10 +321,10 @@ pub const GraphBuilder = struct {
             const first_block = rev_first_blocks[node_idx];
             var remaining = degree;
             for (0..block_count) |block_offset| {
-                const live = @min(remaining, constants.EDGES_PER_BLOCK);
+                const alive = @min(remaining, constants.EDGES_PER_BLOCK);
                 const block_idx = first_block + @as(u32, @intCast(block_offset));
-                page_ops.setBlockLiveCount(&self.graph.graph, block_idx, .rev, @intCast(live));
-                remaining -= live;
+                page_ops.setBlockAliveCount(&self.graph.graph, block_idx, .rev, @intCast(alive));
+                remaining -= alive;
             }
         }
 

@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const BlockIter = struct {
     block_idx: u32,
-    live: u7,
+    alive: u7,
     pos: u7,
     current_key: u32,
     current_id: u32 = 0,

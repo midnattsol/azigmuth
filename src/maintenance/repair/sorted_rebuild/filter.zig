@@ -8,7 +8,7 @@ const side_ops = @import("../../../adjacency/side_ops.zig");
 const rebuild_heap = @import("heap.zig");
 
 pub const Scan = struct {
-    live_after: usize = 0,
+    alive_after: usize = 0,
     block_count: usize = 0,
 };
 
@@ -71,10 +71,10 @@ fn scanBlock(
     skip_source: ?u32,
 ) !void {
     scan.block_count += 1;
-    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, side));
-    for (0..live) |slot_idx| {
+    const alive: u7 = @intCast(page_ops.blockAliveCount(graph, block_idx, side));
+    for (0..alive) |slot_idx| {
         if (keepSlot(graph, block_idx, @intCast(slot_idx), side, skip_source)) {
-            scan.live_after += 1;
+            scan.alive_after += 1;
         }
     }
 }
@@ -82,13 +82,13 @@ fn scanBlock(
 fn firstPos(
     graph: *const graph_core.GraphCore,
     block_idx: u32,
-    live: u7,
+    alive: u7,
     comptime side: adjacency.AdjSide,
     skip_source: ?u32,
     dropped: ?DroppedRows,
 ) !?u7 {
     var slot: u7 = 0;
-    while (slot < live) : (slot += 1) {
+    while (slot < alive) : (slot += 1) {
         if (keepSlot(graph, block_idx, slot, side, skip_source)) return slot;
         if (dropped) |collector| try collector.record(graph, block_idx, slot);
     }
@@ -103,12 +103,12 @@ fn pushBlock(
     skip_source: ?u32,
     dropped: ?DroppedRows,
 ) !void {
-    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, side));
-    const pos = (try firstPos(graph, block_idx, live, side, skip_source, dropped)) orelse return;
+    const alive: u7 = @intCast(page_ops.blockAliveCount(graph, block_idx, side));
+    const pos = (try firstPos(graph, block_idx, alive, side, skip_source, dropped)) orelse return;
 
     rebuild_heap.heapPush(heap, .{
         .block_idx = block_idx,
-        .live = live,
+        .alive = alive,
         .pos = pos,
         .current_key = blockKey(graph, block_idx, pos, side),
         .current_id = blockId(graph, block_idx, pos, side),
@@ -123,7 +123,7 @@ pub fn advanceIter(
     dropped: ?DroppedRows,
 ) !bool {
     var pos = iter.pos + 1;
-    while (pos < iter.live) : (pos += 1) {
+    while (pos < iter.alive) : (pos += 1) {
         if (!keepSlot(graph, iter.block_idx, pos, side, skip_source)) {
             if (dropped) |collector| try collector.record(graph, iter.block_idx, pos);
             continue;

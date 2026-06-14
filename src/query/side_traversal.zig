@@ -169,16 +169,16 @@ fn refreshSpanPages(iterator: anytype, graph: *const graph_core.GraphCore, page_
     if (iterator.cached_span_page_idx == page_idx) return;
     iterator.cached_span_page_idx = page_idx;
     iterator.cached_span_blocks_raw = page_ops.edgeBlockPageRaw(graph, page_idx, side);
-    iterator.cached_span_live_raw = page_ops.blockLivePageRaw(graph, page_idx, side);
+    iterator.cached_span_alive_raw = page_ops.blockAlivePageRaw(graph, page_idx, side);
 }
 
 inline fn spanLiveCount(iterator: anytype, slot_in_page: u32) u7 {
-    const live_page: [*]const u8 = @ptrFromInt(iterator.cached_span_live_raw);
+    const live_page: [*]const u8 = @ptrFromInt(iterator.cached_span_alive_raw);
     return @intCast(live_page[slot_in_page]);
 }
 
 /// Loads the next non-empty block as a counted span: dense storage means
-/// iteration is a plain [0, live) loop — no mask, no loop-carried bit math.
+/// iteration is a plain [0, alive) loop — no mask, no loop-carried bit math.
 pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     while (true) {
         const block_idx = advanceTraversalBlock(iterator, graph) orelse return false;
@@ -187,20 +187,20 @@ pub fn loadNextNeighborSpan(iterator: anytype, graph: *const graph_core.GraphCor
         switch (iterator.direction) {
             .fwd => {
                 refreshSpanPages(iterator, graph, page_idx, .fwd);
-                const live = spanLiveCount(iterator, slot_in_page);
-                if (live == 0) continue;
+                const alive = spanLiveCount(iterator, slot_in_page);
+                if (alive == 0) continue;
                 iterator.current_slot = 0;
-                iterator.current_live = live;
+                iterator.current_live = alive;
                 const blocks: [*]const types.EdgeBlockFwd = @ptrFromInt(iterator.cached_span_blocks_raw);
                 iterator.cached_fwd_block = &blocks[slot_in_page];
                 iterator.cached_rev_block = null;
             },
             .rev => {
                 refreshSpanPages(iterator, graph, page_idx, .rev);
-                const live = spanLiveCount(iterator, slot_in_page);
-                if (live == 0) continue;
+                const alive = spanLiveCount(iterator, slot_in_page);
+                if (alive == 0) continue;
                 iterator.current_slot = 0;
-                iterator.current_live = live;
+                iterator.current_live = alive;
                 const blocks: [*]const types.EdgeBlockRev = @ptrFromInt(iterator.cached_span_blocks_raw);
                 iterator.cached_rev_block = &blocks[slot_in_page];
                 iterator.cached_fwd_block = null;
@@ -216,11 +216,11 @@ pub fn loadNextOutEdgeSpan(iterator: anytype, graph: *const graph_core.GraphCore
         const page_idx = block_idx / constants.EDGE_BLOCKS_PER_PAGE;
         const slot_in_page = block_idx % constants.EDGE_BLOCKS_PER_PAGE;
         refreshSpanPages(iterator, graph, page_idx, .fwd);
-        const live = spanLiveCount(iterator, slot_in_page);
-        if (live == 0) continue;
+        const alive = spanLiveCount(iterator, slot_in_page);
+        if (alive == 0) continue;
 
         iterator.current_slot = 0;
-        iterator.current_live = live;
+        iterator.current_live = alive;
         const blocks: [*]const types.EdgeBlockFwd = @ptrFromInt(iterator.cached_span_blocks_raw);
         iterator.cached_fwd_block = &blocks[slot_in_page];
         iterator.cached_fwd_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else null;

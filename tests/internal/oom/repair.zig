@@ -22,14 +22,14 @@ fn fillForwardBlock(graph: *graph_mod.Graph, block_idx: u32, first_destination: 
         block.relations[edge_idx] = 0;
         block.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_idx: u32, source_idx: u32) !void {
     const block_idx = try graph.allocBlockRev();
     var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
     block.sources[0] = source_idx;
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .rev, @intCast(1));
 
     const node_buffer = try graph.nodeAt(.{ .index = destination_idx });
     publish.publishedRevSide(node_buffer).first_block = block_idx;

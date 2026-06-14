@@ -100,7 +100,7 @@ pub fn removeSingleBlockForwardTinyReverse(
     const source_build = try remove_fast_path.applyRemovalPlanSide(graph, staging.source_staging, &remove_state.source_pub, forward_plan, .fwd, &scratch, true);
     // Route the forward retirements through the bulk-style finalize.
     try scratch.markRetireBlock(graph.allocator, .fwd, source_build.old_block);
-    if (source_build.new_live == 0) try scratch.markRetireBlock(graph.allocator, .fwd, source_build.new_block);
+    if (source_build.new_alive_count == 0) try scratch.markRetireBlock(graph.allocator, .fwd, source_build.new_block);
 
     staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_pub, source.index, 1, &scratch);
 
@@ -151,7 +151,7 @@ pub fn removeSingleTinyForwardBlockReverse(
     staging.source_staging.* = new_source;
     const destination_build = try remove_fast_path.applyRemovalPlanSide(graph, staging.destination_staging, &remove_state.destination_pub, reverse_plan, .rev, &scratch, true);
     try scratch.markRetireBlock(graph.allocator, .rev, destination_build.old_block);
-    if (destination_build.new_live == 0) try scratch.markRetireBlock(graph.allocator, .rev, destination_build.new_block);
+    if (destination_build.new_alive_count == 0) try scratch.markRetireBlock(graph.allocator, .rev, destination_build.new_block);
 
     const publish_adj = remove_common.updateSingleRemovalDebt(graph, endpoints, staging, source, destination);
     scratch.disarm();

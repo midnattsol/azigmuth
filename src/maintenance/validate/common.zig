@@ -54,7 +54,7 @@ pub fn forEachRunInAdj(
     }
 }
 
-pub fn forEachLiveSlotInAdj(
+pub fn forEachAliveSlotInAdj(
     graph: *const graph_core.GraphCore,
     adjacency: types.NodeAdj,
     comptime side: Side,
@@ -71,8 +71,8 @@ pub fn forEachLiveSlotInAdj(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block_idx: u32 = @intCast(block_idx_usize);
-                const live_count = @min(blockLive(inner_graph, block_idx, side), constants.EDGES_PER_BLOCK);
-                for (0..live_count) |slot| {
+                const alive_count = @min(blockAlive(inner_graph, block_idx, side), constants.EDGES_PER_BLOCK);
+                for (0..alive_count) |slot| {
                     try callback(inner_graph, inner_context, block_idx, slot);
                 }
             }
@@ -284,10 +284,10 @@ pub fn blockExists(graph: *const graph_core.GraphCore, block_idx: u32, comptime 
     return block_idx < allocatedBlockCount(graph, side);
 }
 
-pub fn blockLive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) usize {
+pub fn blockAlive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: Side) usize {
     return switch (side) {
-        .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
-        .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+        .fwd => page_ops.blockAliveCount(graph, block_idx, .fwd),
+        .rev => page_ops.blockAliveCount(graph, block_idx, .rev),
     };
 }
 

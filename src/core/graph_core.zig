@@ -73,10 +73,10 @@ pub const GraphCore = struct {
     edge_blocks_fwd_meta_pages: EdgeBlockPageDirectory = .{},
     edge_blocks_rev_meta_pages: EdgeBlockPageDirectory = .{},
 
-    /// Per-block live-count sidecar pages (u8 each): one 64-byte page covers
+    /// Per-block alive-count sidecar pages (u8 each): one 64-byte page covers
     /// a whole block page, keeping counts dense in cache during scans.
-    edge_blocks_fwd_live_pages: EdgeBlockPageDirectory = .{},
-    edge_blocks_rev_live_pages: EdgeBlockPageDirectory = .{},
+    edge_blocks_fwd_alive_pages: EdgeBlockPageDirectory = .{},
+    edge_blocks_rev_alive_pages: EdgeBlockPageDirectory = .{},
 
     /// Tagged stack heads: low 32 bits are block index, high 32 bits are tag.
     free_blocks_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),

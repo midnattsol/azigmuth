@@ -9,7 +9,7 @@ const shared = @import("../shared.zig");
 pub const RemovalBuild = struct {
     old_block: u32,
     new_block: u32,
-    new_live: u7,
+    new_alive_count: u7,
 };
 
 pub const SingleRemovalBuilds = struct {
@@ -101,8 +101,8 @@ fn retireRemoved(
 ) !void {
     try rcu.retireBlockFwd(graph, source_build.old_block);
     try rcu.retireBlockRev(graph, destination_build.old_block);
-    if (source_build.new_live == 0) try rcu.retireBlockFwd(graph, source_build.new_block);
-    if (destination_build.new_live == 0) try rcu.retireBlockRev(graph, destination_build.new_block);
+    if (source_build.new_alive_count == 0) try rcu.retireBlockFwd(graph, source_build.new_block);
+    if (destination_build.new_alive_count == 0) try rcu.retireBlockRev(graph, destination_build.new_block);
     source_old_groups.retire(graph);
     destination_old_groups.retire(graph);
 }

@@ -153,12 +153,12 @@ test "side_ops: readNodeIdAtSlotDynamic reads both sides with a runtime side" {
         bf.relations[slot] = 0;
         bf.flags[slot] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk_f, .fwd, 3);
+    page_ops.setBlockAliveCount(&graph.graph, blk_f, .fwd, 3);
 
     const blk_r = try graph.allocBlockRev();
     const br = page_ops.edgeBlockAt(&graph.graph, blk_r, .rev);
     for (0..3) |slot| br.sources[slot] = nodes[3 - slot - 1].index;
-    page_ops.setBlockLiveCount(&graph.graph, blk_r, .rev, 3);
+    page_ops.setBlockAliveCount(&graph.graph, blk_r, .rev, 3);
 
     const sides = [_]struct { side: graph_mod.adjacency_mod.AdjSide, block: u32, slot: u7, expected: u32 }{
         .{ .side = .fwd, .block = blk_f, .slot = 0, .expected = nodes[0].index },

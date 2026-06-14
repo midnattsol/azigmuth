@@ -29,7 +29,7 @@ pub const CsrView = struct {
     node_count: u32,
     out_offsets: []u64,
     out_targets: []u32,
-    live_words: []u64,
+    alive_node_bitmap: []u64,
     /// Stable property rows aligned with `out_targets` (edge_properties
     /// mode); null when the graph has no property rows.
     out_rows: ?[]u32 = null,
@@ -37,7 +37,7 @@ pub const CsrView = struct {
     pub fn deinit(self: *CsrView, allocator: std.mem.Allocator) void {
         allocator.free(self.out_offsets);
         allocator.free(self.out_targets);
-        allocator.free(self.live_words);
+        allocator.free(self.alive_node_bitmap);
         if (self.out_rows) |rows| allocator.free(rows);
         self.* = undefined;
     }
@@ -52,7 +52,7 @@ pub const CsrView = struct {
 
     pub fn isLive(self: *const CsrView, node: types.NodeId) bool {
         if (node.index >= self.node_count) return false;
-        const word = self.live_words[node.index / 64];
+        const word = self.alive_node_bitmap[node.index / 64];
         return (word >> @as(u6, @intCast(node.index % 64))) & 1 != 0;
     }
 
@@ -76,9 +76,9 @@ pub fn materializeForwardCsr(view: *const snapshot_view.CapturedGraphView, alloc
 
     const out_offsets = try allocator.alloc(u64, node_count + 1);
     errdefer allocator.free(out_offsets);
-    const live_words = try allocator.alloc(u64, (node_count + 63) / 64);
-    errdefer allocator.free(live_words);
-    @memset(live_words, 0);
+    const alive_node_bitmap = try allocator.alloc(u64, (node_count + 63) / 64);
+    errdefer allocator.free(alive_node_bitmap);
+    @memset(alive_node_bitmap, 0);
 
     var degree_total: u64 = 0;
     for (view.degree_fwd) |degree| degree_total += degree;
@@ -96,7 +96,7 @@ pub fn materializeForwardCsr(view: *const snapshot_view.CapturedGraphView, alloc
         const node_idx: u32 = @intCast(node_idx_usize);
         out_offsets[node_idx_usize] = out_targets.items.len;
         if (!view.isLiveIndex(node_idx)) continue;
-        live_words[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
+        alive_node_bitmap[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
 
         if (with_rows) {
             // Edge-aware walk keeps property rows aligned with targets.
@@ -118,7 +118,7 @@ pub fn materializeForwardCsr(view: *const snapshot_view.CapturedGraphView, alloc
         .node_count = @intCast(node_count),
         .out_offsets = out_offsets,
         .out_targets = try out_targets.toOwnedSlice(allocator),
-        .live_words = live_words,
+        .alive_node_bitmap = alive_node_bitmap,
         .out_rows = if (with_rows) try out_rows.toOwnedSlice(allocator) else null,
     };
 }
@@ -151,9 +151,9 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
 
     const out_offsets = try allocator.alloc(u64, node_count + 1);
     errdefer allocator.free(out_offsets);
-    const live_words = try allocator.alloc(u64, (node_count + 63) / 64);
-    errdefer allocator.free(live_words);
-    @memset(live_words, 0);
+    const alive_node_bitmap = try allocator.alloc(u64, (node_count + 63) / 64);
+    errdefer allocator.free(alive_node_bitmap);
+    @memset(alive_node_bitmap, 0);
 
     var out_targets: std.ArrayList(u32) = .empty;
     errdefer out_targets.deinit(allocator);
@@ -174,7 +174,7 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
         // Logical fast path: an all-zero meta word means no publish ever
         // committed — live node, empty logical adjacency.
         if (@as(u64, @bitCast(meta)) == 0) {
-            live_words[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
+            alive_node_bitmap[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
             continue;
         }
 
@@ -191,7 +191,7 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
             meta = after;
         }
         if (removed) continue;
-        live_words[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
+        alive_node_bitmap[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
         if (side.block_count == 0) continue;
 
         var sink = DirectRowSink{
@@ -224,7 +224,7 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
         .node_count = @intCast(node_count),
         .out_offsets = out_offsets,
         .out_targets = try out_targets.toOwnedSlice(allocator),
-        .live_words = live_words,
+        .alive_node_bitmap = alive_node_bitmap,
         .out_rows = if (with_rows) try out_rows.toOwnedSlice(allocator) else null,
     };
 }

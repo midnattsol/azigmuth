@@ -48,19 +48,19 @@ pub fn hasCycleCaptured(view: *const snapshot_view.CapturedGraphView, ctx: conte
         }
     };
 
-    var processed_live: usize = 0;
+    var processed_alive: usize = 0;
     var head: usize = 0;
     while (head < zero_count) : (head += 1) {
         if (ctx.cancel_token) |token| {
             if (token.isCancelled()) return error.Cancelled;
         }
         const current_idx = zero_indegree[head];
-        processed_live += 1;
+        processed_alive += 1;
 
         if (!view.isLiveIndex(current_idx)) continue;
         var relax = Relax{ .indegrees = indegrees, .zero_indegree = zero_indegree, .zero_count = &zero_count };
         try snapshot_iterators.forEachNeighborInView(view, current_idx, &relax, Relax.onNeighbor);
     }
 
-    return processed_live != view.liveNodeCount();
+    return processed_alive != view.liveNodeCount();
 }

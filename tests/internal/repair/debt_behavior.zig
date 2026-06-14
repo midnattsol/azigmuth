@@ -147,13 +147,13 @@ test "repair debt: repairBudgeted processes queued repair debt" {
         first_block_edges.relations[edge_idx] = 0;
         first_block_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
+    page_ops.setBlockAliveCount(&graph.graph, block0, .fwd, @intCast(47));
     for (0..36) |edge_idx| {
         second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 48);
         second_block_edges.relations[edge_idx] = 0;
         second_block_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
+    page_ops.setBlockAliveCount(&graph.graph, block1, .fwd, @intCast(36));
 
     const node = try graph.nodeAt(source);
     publish.clearPublishedSides(node);
@@ -187,14 +187,14 @@ fn fillBlock(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, co
         block.relations[i] = 0;
         block.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
 fn publishSingleReverseSource(graph: *graph_mod.Graph, destination_idx: u32, source_idx: u32) !void {
     const block_idx = try graph.allocBlockRev();
     var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
     block.sources[0] = source_idx;
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .rev, @intCast(1));
 
     const node_buffer = try graph.nodeAt(.{ .index = destination_idx });
     publish.publishedRevSide(node_buffer).first_block = block_idx;
@@ -229,13 +229,13 @@ test "repair debt: needs_repair flag is cleared after repairNode" {
         first_block_edges.relations[edge_idx] = 0;
         first_block_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(47));
+    page_ops.setBlockAliveCount(&graph.graph, block0, .fwd, @intCast(47));
     for (0..36) |edge_idx| {
         second_block_edges.destinations[edge_idx] = @intCast(edge_idx + 48);
         second_block_edges.relations[edge_idx] = 0;
         second_block_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(36));
+    page_ops.setBlockAliveCount(&graph.graph, block1, .fwd, @intCast(36));
 
     const node_buffer = try graph.nodeAt(source);
     publish.clearPublishedSides(node_buffer);
@@ -274,7 +274,7 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
         first_block_edges.relations[edge_idx] = 0;
         first_block_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, @intCast(20));
+    page_ops.setBlockAliveCount(&graph.graph, block0, .fwd, @intCast(20));
 
     var second_block_edges = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
     for (0..32) |edge_idx| {
@@ -282,7 +282,7 @@ test "repair debt: updateRepairDebt sets flag when block drops below occupancy" 
         second_block_edges.relations[edge_idx] = 0;
         second_block_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, @intCast(32));
+    page_ops.setBlockAliveCount(&graph.graph, block1, .fwd, @intCast(32));
 
     const node_buffer = try graph.nodeAt(source);
     publish.clearPublishedSides(node_buffer);
@@ -614,7 +614,7 @@ test "repair debt: repairNode canonicalizes single-block grouped adjacency preve
     // Reverse backlink so forward/reverse consistency holds.
     const rb = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, rb, .rev).sources[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, rb, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, rb, .rev, @intCast(1));
     {
         const d1 = try graph.nodeAt(.{ .index = 1 });
         publish.clearPublishedSides(d1);

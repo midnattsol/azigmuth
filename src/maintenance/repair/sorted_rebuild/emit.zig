@@ -16,9 +16,9 @@ const OutputState = struct {
         graph: *graph_core.GraphCore,
         allocator: std.mem.Allocator,
         comptime side: adjacency.AdjSide,
-        live_after: usize,
+        alive_after: usize,
     ) !OutputState {
-        const out_block_count = (live_after + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK;
+        const out_block_count = (alive_after + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK;
         var new_blocks = try std.ArrayList(u32).initCapacity(allocator, out_block_count);
         errdefer {
             for (new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, side);
@@ -39,13 +39,13 @@ const OutputState = struct {
         writeItem(graph, self.out_block_idx.?, self.out_slot, iter, side);
         self.out_slot += 1;
         if (self.out_slot == constants.EDGES_PER_BLOCK) {
-            page_ops.setBlockLiveCount(graph, self.out_block_idx.?, side, constants.EDGES_PER_BLOCK);
+            page_ops.setBlockAliveCount(graph, self.out_block_idx.?, side, constants.EDGES_PER_BLOCK);
         }
     }
 
     fn finish(self: *OutputState, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) void {
         if (self.out_block_idx) |block_idx| {
-            page_ops.setBlockLiveCount(graph, block_idx, side, @intCast(self.out_slot));
+            page_ops.setBlockAliveCount(graph, block_idx, side, @intCast(self.out_slot));
         }
     }
 };
@@ -77,12 +77,12 @@ pub fn emitMergedBlocks(
     graph: *graph_core.GraphCore,
     heap: *std.ArrayList(rebuild_heap.BlockIter),
     comptime side: adjacency.AdjSide,
-    live_after: usize,
+    alive_after: usize,
     allocator: std.mem.Allocator,
     skip_source: ?u32,
     dropped: ?rebuild_filter.DroppedRows,
 ) !std.ArrayList(u32) {
-    var output_state = try OutputState.init(graph, allocator, side, live_after);
+    var output_state = try OutputState.init(graph, allocator, side, alive_after);
     errdefer {
         for (output_state.new_blocks.items) |block_idx| page_ops.freeBlock(graph, block_idx, side);
         output_state.new_blocks.deinit(allocator);

@@ -17,7 +17,7 @@ const testing = std.testing;
 
 const SlotCounter = struct { total: usize = 0 };
 
-test "live-count validator paths: sums, shape, and run search (fwd and rev)" {
+test "alive-count validator paths: sums, shape, and run search (fwd and rev)" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -31,15 +31,15 @@ test "live-count validator paths: sums, shape, and run search (fwd and rev)" {
         bf.relations[i] = 0;
         bf.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk_f, .fwd, 4);
+    page_ops.setBlockAliveCount(&graph.graph, blk_f, .fwd, 4);
 
     const blk_r = try graph.allocBlockRev();
     const br = page_ops.edgeBlockAt(&graph.graph, blk_r, .rev);
     for (0..4) |i| br.sources[i] = nodes[i].index;
-    page_ops.setBlockLiveCount(&graph.graph, blk_r, .rev, 4);
+    page_ops.setBlockAliveCount(&graph.graph, blk_r, .rev, 4);
 
-    try testing.expectEqual(@as(u64, 4), sums.sumBlockLive(&graph.graph, blk_f, .fwd));
-    try testing.expectEqual(@as(u64, 4), sums.sumBlockLive(&graph.graph, blk_r, .rev));
+    try testing.expectEqual(@as(u64, 4), sums.sumBlockAlive(&graph.graph, blk_f, .fwd));
+    try testing.expectEqual(@as(u64, 4), sums.sumBlockAlive(&graph.graph, blk_r, .rev));
     try testing.expectEqual(@as(u64, 4), sums.countVisibleEntriesInBlock(&graph.graph, blk_f, .fwd));
     try testing.expectEqual(@as(u64, 4), sums.countVisibleEntriesInBlock(&graph.graph, blk_r, .rev));
 
@@ -53,7 +53,7 @@ test "live-count validator paths: sums, shape, and run search (fwd and rev)" {
     try testing.expect(!run_search.runContainsTarget(&graph.graph, blk_f, 1, 999_999, .fwd));
 }
 
-test "live-count validator paths: tombstones are visible to sums but not counted as visible entries" {
+test "alive-count validator paths: tombstones are visible to sums but not counted as visible entries" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -67,15 +67,15 @@ test "live-count validator paths: tombstones are visible to sums but not counted
         bf.relations[i] = 0;
         bf.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk, .fwd, 4);
+    page_ops.setBlockAliveCount(&graph.graph, blk, .fwd, 4);
 
     _ = try graph.removeNode(nodes[2]);
 
-    try testing.expectEqual(@as(u64, 4), sums.sumBlockLive(&graph.graph, blk, .fwd));
+    try testing.expectEqual(@as(u64, 4), sums.sumBlockAlive(&graph.graph, blk, .fwd));
     try testing.expectEqual(@as(u64, 3), sums.countVisibleEntriesInBlock(&graph.graph, blk, .fwd));
 }
 
-test "live-count validator paths: forEachLiveSlotInAdj walks live slots of published blocks" {
+test "alive-count validator paths: forEachAliveSlotInAdj walks live slots of published blocks" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -89,12 +89,12 @@ test "live-count validator paths: forEachLiveSlotInAdj walks live slots of publi
         bf.relations[i] = 0;
         bf.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk_f, .fwd, 4);
+    page_ops.setBlockAliveCount(&graph.graph, blk_f, .fwd, 4);
 
     const blk_r = try graph.allocBlockRev();
     const br = page_ops.edgeBlockAt(&graph.graph, blk_r, .rev);
     for (0..3) |i| br.sources[i] = nodes[i].index;
-    page_ops.setBlockLiveCount(&graph.graph, blk_r, .rev, 3);
+    page_ops.setBlockAliveCount(&graph.graph, blk_r, .rev, 3);
 
     const ref = try graph.nodeAt(nodes[7]);
     publish.publishedFwdSide(ref).first_block = blk_f;
@@ -106,7 +106,7 @@ test "live-count validator paths: forEachLiveSlotInAdj walks live slots of publi
     const adj = ref.publishedAdj();
 
     var fwd_counter = SlotCounter{};
-    try common.forEachLiveSlotInAdj(&graph.graph, adj, .fwd, &fwd_counter, struct {
+    try common.forEachAliveSlotInAdj(&graph.graph, adj, .fwd, &fwd_counter, struct {
         fn cb(_: anytype, ctx: *SlotCounter, _: u32, _: usize) !void {
             ctx.total += 1;
         }
@@ -114,7 +114,7 @@ test "live-count validator paths: forEachLiveSlotInAdj walks live slots of publi
     try testing.expectEqual(@as(usize, 4), fwd_counter.total);
 
     var rev_counter = SlotCounter{};
-    try common.forEachLiveSlotInAdj(&graph.graph, adj, .rev, &rev_counter, struct {
+    try common.forEachAliveSlotInAdj(&graph.graph, adj, .rev, &rev_counter, struct {
         fn cb(_: anytype, ctx: *SlotCounter, _: u32, _: usize) !void {
             ctx.total += 1;
         }

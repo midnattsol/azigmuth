@@ -1,7 +1,7 @@
 //! Accessor layer for edge-block payloads: traversal, search,
 //! mutation, repair, and validation go through these functions instead of
 //! addressing block fields directly, so the in-block layout can evolve (SoA,
-//! compression, live-count sidecars) without touching the engine logic.
+//! compression, alive-count sidecars) without touching the engine logic.
 
 const types = @import("../core/types.zig");
 const constants = @import("../core/constants.zig");
@@ -12,11 +12,11 @@ const adjacency_side = @import("../adjacency/mod.zig");
 // ── Live count (per-block u8 sidecar) ────────────────────────────────
 
 pub inline fn liveCount(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: adjacency_side.AdjSide) u7 {
-    return page_ops.blockLiveCount(graph, block_idx, side);
+    return page_ops.blockAliveCount(graph, block_idx, side);
 }
 
-pub inline fn setLiveCount(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency_side.AdjSide, live_count: u7) void {
-    page_ops.setBlockLiveCount(graph, block_idx, side, live_count);
+pub inline fn setLiveCount(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency_side.AdjSide, alive_count: u7) void {
+    page_ops.setBlockAliveCount(graph, block_idx, side, alive_count);
 }
 
 // ── Forward entry access ─────────────────────────────────────────────
@@ -53,8 +53,8 @@ pub inline fn moveFwdEntry(block: *types.EdgeBlockFwd, destination_slot: usize, 
 
 /// Contiguous live destinations of a forward block (256 B max — 4 cache
 /// lines). Stable while the block is published (RCU immutability).
-pub inline fn fwdDestinationsView(block: *const types.EdgeBlockFwd, live_count: usize) []const u32 {
-    return block.destinations[0..live_count];
+pub inline fn fwdDestinationsView(block: *const types.EdgeBlockFwd, alive_count: usize) []const u32 {
+    return block.destinations[0..alive_count];
 }
 
 // ── Reverse entry access ─────────────────────────────────────────────
@@ -79,6 +79,6 @@ pub inline fn moveRevEntry(block: *types.EdgeBlockRev, destination_slot: usize, 
 
 /// Contiguous live source ids of a reverse block. Stable while the block is
 /// published (RCU immutability).
-pub inline fn revSourcesView(block: *const types.EdgeBlockRev, live_count: usize) []const u32 {
-    return block.sources[0..live_count];
+pub inline fn revSourcesView(block: *const types.EdgeBlockRev, alive_count: usize) []const u32 {
+    return block.sources[0..alive_count];
 }

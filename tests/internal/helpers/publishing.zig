@@ -132,14 +132,14 @@ pub fn appendForwardEntry(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, ad
     }
 
     const side = page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .fwd);
-    const live = page_ops.blockLiveCount(&graph.graph, side_adj.first_block, .fwd);
-    side.destinations[live] = entry.destination;
-    side.relations[live] = entry.relation;
-    side.flags[live] = @bitCast(entry.flags);
+    const alive = page_ops.blockAliveCount(&graph.graph, side_adj.first_block, .fwd);
+    side.destinations[alive] = entry.destination;
+    side.relations[alive] = entry.relation;
+    side.flags[alive] = @bitCast(entry.flags);
     if (graph.graph.multigraph_enabled) {
-        page_ops.edgeBlockFwdIdsAt(&graph.graph, side_adj.first_block).ids[live] = entry.edge_id;
+        page_ops.edgeBlockFwdIdsAt(&graph.graph, side_adj.first_block).ids[alive] = entry.edge_id;
     }
-    page_ops.setBlockLiveCount(&graph.graph, side_adj.first_block, .fwd, @intCast(live + 1));
+    page_ops.setBlockAliveCount(&graph.graph, side_adj.first_block, .fwd, @intCast(alive + 1));
 }
 
 pub fn appendReverseSource(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, adjacency: types.NodeAdj, source_idx: u32) !void {
@@ -155,9 +155,9 @@ pub fn appendReverseSource(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, a
         return;
     }
 
-    const live = page_ops.blockLiveCount(&graph.graph, side_adj.first_block, .rev);
-    page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .rev).sources[live] = source_idx;
-    page_ops.setBlockLiveCount(&graph.graph, side_adj.first_block, .rev, @intCast(live + 1));
+    const alive = page_ops.blockAliveCount(&graph.graph, side_adj.first_block, .rev);
+    page_ops.edgeBlockAt(&graph.graph, side_adj.first_block, .rev).sources[alive] = source_idx;
+    page_ops.setBlockAliveCount(&graph.graph, side_adj.first_block, .rev, @intCast(alive + 1));
 }
 
 pub fn truncateReverseByOne(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, adjacency: types.NodeAdj) !void {
@@ -171,8 +171,8 @@ pub fn truncateReverseByOne(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, 
         return;
     }
 
-    const live = page_ops.blockLiveCount(&graph.graph, side_adj.first_block, .rev);
-    page_ops.setBlockLiveCount(&graph.graph, side_adj.first_block, .rev, @intCast(live - 1));
+    const alive = page_ops.blockAliveCount(&graph.graph, side_adj.first_block, .rev);
+    page_ops.setBlockAliveCount(&graph.graph, side_adj.first_block, .rev, @intCast(alive - 1));
 }
 
 pub fn ensureForwardBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.NodeId) !types.NodeAdj {
@@ -193,7 +193,7 @@ pub fn ensureForwardBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
             page_ops.edgeBlockFwdIdsAt(&graph.graph, block_idx).ids[entry_idx] = entry.edge_id;
         }
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 
     var updated_adj = adjacency;
     updated_adj.first_block_fwd = block_idx;
@@ -217,7 +217,7 @@ pub fn ensureReverseBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
     for (0..count) |entry_idx| {
         block.sources[entry_idx] = page_ops.tinyBlockAtConst(&graph.graph, side_adj.first_block, .rev).sources[entry_idx];
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(count));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .rev, @intCast(count));
 
     var updated_adj = adjacency;
     updated_adj.first_block_rev = block_idx;

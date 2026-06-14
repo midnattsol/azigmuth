@@ -9,7 +9,7 @@ const rebuild_filter = @import("filter.zig");
 
 pub const SortedRebuildResult = struct {
     new_blocks: std.ArrayList(u32),
-    live_after: usize,
+    alive_after: usize,
     /// Property rows of dropped (tombstoned/skipped) forward entries; the
     /// caller retires them after publishing the rebuilt side. Always empty
     /// for reverse rebuilds or when edge_properties is disabled.
@@ -33,20 +33,20 @@ pub fn sortedRebuildSide(
     else
         null;
 
-    if (scan.live_after == 0) {
+    if (scan.alive_after == 0) {
         // Everything is dropped: collect every entry's row directly.
         if (dropped) |collector| {
             var cursor = side_ops.BlockCursor.init(side_view);
             while (cursor.next(graph)) |block_idx| {
-                const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, side));
-                for (0..live) |slot| try collector.record(graph, block_idx, @intCast(slot));
+                const alive: u7 = @intCast(page_ops.blockAliveCount(graph, block_idx, side));
+                for (0..alive) |slot| try collector.record(graph, block_idx, @intCast(slot));
             }
         }
-        return .{ .new_blocks = .empty, .live_after = 0, .dropped_prop_rows = dropped_rows };
+        return .{ .new_blocks = .empty, .alive_after = 0, .dropped_prop_rows = dropped_rows };
     }
 
     var heap = try rebuild_filter.initHeap(graph, side_view, side, skip_source, allocator, scan.block_count, dropped);
     defer heap.deinit(allocator);
-    const new_blocks = try rebuild_emit.emitMergedBlocks(graph, &heap, side, scan.live_after, allocator, skip_source, dropped);
-    return .{ .new_blocks = new_blocks, .live_after = scan.live_after, .dropped_prop_rows = dropped_rows };
+    const new_blocks = try rebuild_emit.emitMergedBlocks(graph, &heap, side, scan.alive_after, allocator, skip_source, dropped);
+    return .{ .new_blocks = new_blocks, .alive_after = scan.alive_after, .dropped_prop_rows = dropped_rows };
 }

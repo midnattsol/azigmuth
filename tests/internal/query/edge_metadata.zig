@@ -16,8 +16,8 @@ test "edge metadata: distinct relation values coexist in the same forward adjace
 
     const adj = try graph.publishedNodeAdj(source);
     var seen_relations: [5]bool = .{ false } ** 5;
-    const live = try publish.forwardLiveCount(&graph, adj);
-    for (0..live) |entry_idx| {
+    const alive = try publish.forwardLiveCount(&graph, adj);
+    for (0..alive) |entry_idx| {
         const relation: usize = (try publish.readForwardEntry(&graph, adj, entry_idx)).relation;
         try testing.expect(relation < 5);
         try testing.expect(!seen_relations[relation]);
@@ -44,8 +44,8 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
     try testing.expect(try graph.removeEdge(source, peers[4]));
 
     const adj = try graph.publishedNodeAdj(source);
-    const live = try publish.forwardLiveCount(&graph, adj);
-    try testing.expectEqual(@as(u64, peer_count - 2), live);
+    const alive = try publish.forwardLiveCount(&graph, adj);
+    try testing.expectEqual(@as(u64, peer_count - 2), alive);
 
     // Verify each surviving edge carries the correct destination→relation pair.
     var expected_relation_by_dest: [peer_count]?u16 = [_]?u16{null} ** peer_count;
@@ -55,7 +55,7 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
     }
 
     var seen_count: usize = 0;
-    for (0..@intCast(live)) |entry_idx| {
+    for (0..@intCast(alive)) |entry_idx| {
         const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
         const dest_idx: u32 = entry.destination;
         const relation: u16 = entry.relation;
@@ -112,10 +112,10 @@ test "edge metadata: non-zero flags survive a chain of mutations that force copy
     try expected.put(replacement.index, flags_keep);
 
     const adj = try graph.publishedNodeAdj(source);
-    const live = try publish.forwardLiveCount(&graph, adj);
-    try testing.expectEqual(@as(u64, expected.count()), live);
+    const alive = try publish.forwardLiveCount(&graph, adj);
+    try testing.expectEqual(@as(u64, expected.count()), alive);
 
-    for (0..@intCast(live)) |entry_idx| {
+    for (0..@intCast(alive)) |entry_idx| {
         const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
         const dest = entry.destination;
         const raw_flags = @as(u16, @bitCast(entry.flags));

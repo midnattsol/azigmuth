@@ -189,7 +189,7 @@ test "mutation: removeEdge returns CorruptGraph when reverse entry is missing" {
     forward_edges.destinations[0] = destination.index;
     forward_edges.relations[0] = 0;
     forward_edges.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, forward_block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, forward_block, .fwd, @intCast(1));
 
     const source_node = try graph.nodeAt(source);
     clearPublished(source_node);
@@ -220,7 +220,7 @@ test "mutation: reverse-only orphan does not make removeEdge report success" {
     const reverse_block = try graph.allocBlockRev();
     var reverse_sources = page_ops.edgeBlockAt(&graph.graph, reverse_block, .rev);
     reverse_sources.sources[0] = source.index;
-    page_ops.setBlockLiveCount(&graph.graph, reverse_block, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, reverse_block, .rev, @intCast(1));
 
     const destination_node = try graph.nodeAt(destination);
     clearPublished(destination_node);
@@ -500,7 +500,7 @@ test "mutation: hasEdgeInAdj works when blocks are not globally key-sorted" {
         block0.relations[i] = 0;
         block0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     // Block 1: destination 50 (appended later, key smaller than block 0's range)
     const b1 = try graph.allocBlockFwd();
@@ -508,7 +508,7 @@ test "mutation: hasEdgeInAdj works when blocks are not globally key-sorted" {
     block1.destinations[0] = 50;
     block1.relations[0] = 0;
     block1.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -540,13 +540,13 @@ test "mutation: findSlotInAdj works with blocks not globally key-sorted" {
         block0.relations[i] = 0;
         block0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
     const b1 = try graph.allocBlockFwd();
     var block1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
     block1.destinations[0] = 50;
     block1.relations[0] = 0;
     block1.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -580,13 +580,13 @@ test "mutation: outDegree returns published exact degree on manually constructed
         block0.relations[i] = 0;
         block0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
     const b1 = try graph.allocBlockFwd();
     var block1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
     block1.destinations[0] = 65;
     block1.relations[0] = 0;
     block1.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, @intCast(1));
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -609,7 +609,7 @@ test "mutation: validate detects published degree vs visible mismatch" {
     edges.destinations[0] = 1;
     edges.relations[0] = 0;
     edges.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -630,7 +630,7 @@ test "mutation: empty block between live blocks in contiguous adjacency" {
         _ = try graph.addNode();
     }
 
-    // Block 0: [1..64], Block 1: empty (live=0), Block 2: [65..128]
+    // Block 0: [1..64], Block 1: empty (alive=0), Block 2: [65..128]
     const b0 = try graph.allocBlockFwd();
     var blk0 = page_ops.edgeBlockAt(&graph.graph, b0, .fwd);
     for (0..64) |i| {
@@ -638,10 +638,10 @@ test "mutation: empty block between live blocks in contiguous adjacency" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     const b1 = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, 0); // empty
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, 0); // empty
 
     const b2 = try graph.allocBlockFwd();
     var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
@@ -650,14 +650,14 @@ test "mutation: empty block between live blocks in contiguous adjacency" {
         blk2.relations[i] = 0;
         blk2.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b2, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b2, .fwd, 64);
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
     fwd(node).first_block = b0;
     fwd(node).block_count = 3;
 
-    // Binary search would hit block 1 (live=0) at mid. Fallback must handle it.
+    // Binary search would hit block 1 (alive=0) at mid. Fallback must handle it.
     try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 1));
     try testing.expect(adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 65));
     try testing.expect(!adjacency_mod.hasEdgeInAdj(&graph.graph, node.publishedAdj(), 0));
@@ -680,10 +680,10 @@ test "mutation: empty block between live blocks in grouped adjacency" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     const b1 = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, 0);
 
     const b2 = try graph.allocBlockFwd();
     var blk2 = page_ops.edgeBlockAt(&graph.graph, b2, .fwd);
@@ -692,7 +692,7 @@ test "mutation: empty block between live blocks in grouped adjacency" {
         blk2.relations[i] = 0;
         blk2.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b2, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b2, .fwd, 64);
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
@@ -728,7 +728,7 @@ test "mutation: binary search hits target exactly at block boundaries" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     // Block 1: [65..128] (first=65, last=128)
     const b1 = try graph.allocBlockFwd();
@@ -738,7 +738,7 @@ test "mutation: binary search hits target exactly at block boundaries" {
         blk1.relations[i] = 0;
         blk1.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, 64);
 
     const node = try graph.nodeAt(src);
     clearPublished(node);
@@ -781,7 +781,7 @@ test "mutation: append creates interleaved block between existing key ranges" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     // Block 1: [129..192]
     const b1 = try graph.allocBlockFwd();
@@ -791,7 +791,7 @@ test "mutation: append creates interleaved block between existing key ranges" {
         blk1.relations[i] = 0;
         blk1.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, 64);
 
     // Block 2 (appended, out of order): [65..128] — sits between blocks 0 and 1 in key order
     const b2 = try graph.allocBlockFwd();
@@ -801,7 +801,7 @@ test "mutation: append creates interleaved block between existing key ranges" {
         blk2.relations[i] = 0;
         blk2.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b2, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b2, .fwd, 64);
 
     // Contiguous physical: b0, b1, b2. Logical key order: b0[1..64], b2[65..128], b1[129..192]
     const node = try graph.nodeAt(src);
@@ -847,7 +847,7 @@ test "mutation: hasEdgeInAdj grouped with interleaved block ranges" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     // Allocate something else to create a gap
     _ = try graph.allocBlockFwd();
@@ -859,7 +859,7 @@ test "mutation: hasEdgeInAdj grouped with interleaved block ranges" {
         blk2.relations[i] = 0;
         blk2.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b2, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b2, .fwd, 64);
 
     // Another gap
     _ = try graph.allocBlockFwd();
@@ -871,7 +871,7 @@ test "mutation: hasEdgeInAdj grouped with interleaved block ranges" {
         blk4.relations[i] = 0;
         blk4.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b4, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b4, .fwd, 64);
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
@@ -920,7 +920,7 @@ test "mutation: findSlotInAdj grouped with interleaved key ranges" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, 64);
 
     _ = try graph.allocBlockFwd();
     const b2 = try graph.allocBlockFwd();
@@ -930,7 +930,7 @@ test "mutation: findSlotInAdj grouped with interleaved key ranges" {
         blk2.relations[i] = 0;
         blk2.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b2, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b2, .fwd, 64);
 
     _ = try graph.allocBlockFwd();
     const b4 = try graph.allocBlockFwd();
@@ -940,7 +940,7 @@ test "mutation: findSlotInAdj grouped with interleaved key ranges" {
         blk4.relations[i] = 0;
         blk4.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b4, .fwd, 64);
+    page_ops.setBlockAliveCount(&graph.graph, b4, .fwd, 64);
 
     const g0 = try graph.allocGroup();
     const g1 = try graph.allocGroup();
@@ -1020,7 +1020,7 @@ test "mutation: degree cache survives repair" {
         blk0.relations[i] = 0;
         blk0.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, @intCast(47));
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, @intCast(47));
     const b1 = try graph.allocBlockFwd();
     var blk1 = page_ops.edgeBlockAt(&graph.graph, b1, .fwd);
     for (0..36) |i| {
@@ -1028,14 +1028,14 @@ test "mutation: degree cache survives repair" {
         blk1.relations[i] = 0;
         blk1.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, b1, .fwd, @intCast(36));
+    page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, @intCast(36));
 
     // Set up matching reverse adjacencies
     for (1..84) |dst| {
         const r = try graph.allocBlockRev();
         var rev_block = page_ops.edgeBlockAt(&graph.graph, r, .rev);
         rev_block.sources[0] = src.index;
-        page_ops.setBlockLiveCount(&graph.graph, r, .rev, @intCast(1));
+        page_ops.setBlockAliveCount(&graph.graph, r, .rev, @intCast(1));
         const dn = try graph.nodeAt(.{ .index = @intCast(dst) });
         rev(dn).first_block = r;
         rev(dn).block_count = 1;

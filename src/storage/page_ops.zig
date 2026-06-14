@@ -58,7 +58,7 @@ pub const allocPropRow = prop_rows.allocPropRow;
 
 // ── edge blocks ──────────────────────────────────────────────────────
 pub const edgeBlockPageRaw = blocks.edgeBlockPageRaw;
-pub const blockLivePageRaw = blocks.blockLivePageRaw;
+pub const blockAlivePageRaw = blocks.blockAlivePageRaw;
 pub const edgeBlockFwdIdsPageRaw = blocks.edgeBlockFwdIdsPageRaw;
 pub const edgeBlockFwdPropsPageRaw = blocks.edgeBlockFwdPropsPageRaw;
 pub const edgeBlockFwdAt = blocks.edgeBlockFwdAt;
@@ -71,9 +71,9 @@ pub const edgeBlockRevAt = blocks.edgeBlockRevAt;
 pub const edgeBlockRevAtConst = blocks.edgeBlockRevAtConst;
 pub const edgeBlockAt = blocks.edgeBlockAt;
 pub const edgeBlockAtConst = blocks.edgeBlockAtConst;
-pub const blockLiveCountPtr = blocks.blockLiveCountPtr;
-pub const blockLiveCount = blocks.blockLiveCount;
-pub const setBlockLiveCount = blocks.setBlockLiveCount;
+pub const blockAliveCountPtr = blocks.blockAliveCountPtr;
+pub const blockAliveCount = blocks.blockAliveCount;
+pub const setBlockAliveCount = blocks.setBlockAliveCount;
 pub const allocFreshBlockSpan = blocks.allocFreshBlockSpan;
 pub const allocFreshBlockSpanRaw = blocks.allocFreshBlockSpanRaw;
 pub const ensureBlockCapacity = blocks.ensureBlockCapacity;

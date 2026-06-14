@@ -7,9 +7,9 @@ const page_ops = @import("../../storage/page_ops.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
-pub fn sumBlockLive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: common.Side) u64 {
+pub fn sumBlockAlive(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: common.Side) u64 {
     if (!common.blockExists(graph, block_idx, side)) return 0;
-    return common.blockLive(graph, block_idx, side);
+    return common.blockAlive(graph, block_idx, side);
 }
 
 pub fn sumContiguousBlocks(
@@ -20,7 +20,7 @@ pub fn sumContiguousBlocks(
 ) u64 {
     var total: u64 = 0;
     for (start..start + count) |block_idx| {
-        total += sumBlockLive(graph, @intCast(block_idx), side);
+        total += sumBlockAlive(graph, @intCast(block_idx), side);
     }
     return total;
 }
@@ -53,9 +53,9 @@ pub fn countVisibleEntriesInBlock(graph: *const graph_core.GraphCore, block_idx:
         .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
         .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
     };
-    const live = @min(common.blockLive(graph, block_idx, side), constants.EDGES_PER_BLOCK);
+    const alive = @min(common.blockAlive(graph, block_idx, side), constants.EDGES_PER_BLOCK);
     var total: u64 = 0;
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         const candidate_idx = switch (side) {
             .fwd => block.destinations[slot],
             .rev => block.sources[slot],

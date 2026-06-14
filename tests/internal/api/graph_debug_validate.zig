@@ -20,7 +20,7 @@ test "graph debug validate: detects forward entry without reverse entry" {
     fwd.destinations[0] = b.index;
     fwd.relations[0] = 0;
     fwd.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
 
     const a_node = try graph.nodeAt(a);
     publish.clearPublishedSides(a_node);
@@ -45,20 +45,20 @@ test "graph debug validate: detects removed node with outgoing adjacency" {
     defer graph.deinit();
 
     const removed = try graph.addNode();
-    const live = try graph.addNode();
+    const alive = try graph.addNode();
     _ = try graph.removeNode(removed);
 
     const fwd_block = try graph.allocBlockFwd();
     var fwd = page_ops.edgeBlockAt(&graph.graph, fwd_block, .fwd);
-    fwd.destinations[0] = live.index;
+    fwd.destinations[0] = alive.index;
     fwd.relations[0] = 0;
     fwd.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, fwd_block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, fwd_block, .fwd, @intCast(1));
 
     const rev_block = try graph.allocBlockRev();
     var rev = page_ops.edgeBlockAt(&graph.graph, rev_block, .rev);
     rev.sources[0] = removed.index;
-    page_ops.setBlockLiveCount(&graph.graph, rev_block, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, rev_block, .rev, @intCast(1));
 
     const removed_raw = graph.nodeRefAny(removed);
     publish.publishedFwdSide(removed_raw).first_block = fwd_block;
@@ -67,11 +67,11 @@ test "graph debug validate: detects removed node with outgoing adjacency" {
     publish.setPublishedFwdDegree(removed_raw, @as(u22, @intCast(1)));
     try publish.syncToPublished(&graph, removed.index);
 
-    const live_raw = try graph.nodeAt(live);
+    const live_raw = try graph.nodeAt(alive);
     publish.publishedRevSide(live_raw).first_block = rev_block;
     publish.publishedRevSide(live_raw).block_count = 1;
     publish.setPublishedRevDegree(live_raw, @as(u22, @intCast(1)));
-    try publish.syncToPublished(&graph, live.index);
+    try publish.syncToPublished(&graph, alive.index);
     graph.graph.edge_count.store(1, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
@@ -100,7 +100,7 @@ test "graph debug validate: detects reverse entry without forward entry" {
     const block = try graph.allocBlockRev();
     var rev = page_ops.edgeBlockAt(&graph.graph, block, .rev);
     rev.sources[0] = a.index;
-    page_ops.setBlockLiveCount(&graph.graph, block, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(1));
 
     const b_node = try graph.nodeAt(b);
     publish.clearPublishedSides(b_node);

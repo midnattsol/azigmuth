@@ -24,8 +24,8 @@ fn appendReverseBlockRemovingSourceCount(
     remove_count: u32,
 ) !u32 {
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .rev);
-    const live = page_ops.blockLiveCount(graph, block_idx, .rev);
-    if (live == 0) return remove_count;
+    const alive = page_ops.blockAliveCount(graph, block_idx, .rev);
+    if (alive == 0) return remove_count;
     if (remove_count == 0) {
         // Published blocks are immutable under RCU: unchanged blocks are
         // shared between the old and the rebuilt side instead of cloned.
@@ -34,7 +34,7 @@ fn appendReverseBlockRemovingSourceCount(
     }
 
     var in_block: u32 = 0;
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         if (old_block.sources[slot] == source_idx) in_block += 1;
     }
     if (in_block == 0) {
@@ -43,8 +43,8 @@ fn appendReverseBlockRemovingSourceCount(
     }
 
     const take = @min(in_block, remove_count);
-    const new_live: u7 = @intCast(live - take);
-    if (new_live == 0) {
+    const new_alive_count: u7 = @intCast(alive - take);
+    if (new_alive_count == 0) {
         try scratch.markRetireBlock(graph.allocator, .rev, block_idx);
         return remove_count - take;
     }
@@ -53,7 +53,7 @@ fn appendReverseBlockRemovingSourceCount(
     const new_block = page_ops.edgeBlockAt(graph, new_block_idx, .rev);
     var write: u7 = 0;
     var skipped: u32 = 0;
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         if (old_block.sources[slot] == source_idx and skipped < take) {
             skipped += 1;
         } else {
@@ -61,7 +61,7 @@ fn appendReverseBlockRemovingSourceCount(
             write += 1;
         }
     }
-    page_ops.setBlockLiveCount(graph, new_block_idx, .rev, @intCast(write));
+    page_ops.setBlockAliveCount(graph, new_block_idx, .rev, @intCast(write));
     try block_list.append(graph.allocator, new_block_idx);
     try scratch.markRetireBlock(graph.allocator, .rev, block_idx);
     return remove_count - take;

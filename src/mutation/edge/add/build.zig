@@ -19,9 +19,9 @@ pub fn insertForwardEdge(
     const forward_block = page_ops.edgeBlockAt(graph, block_idx, .fwd);
     const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx) else undefined;
     const prop_block = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, block_idx) else undefined;
-    const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
+    const alive = page_ops.blockAliveCount(graph, block_idx, .fwd);
     var insertion_point: u7 = 0;
-    var search_end: u7 = @intCast(live);
+    var search_end: u7 = @intCast(alive);
     while (insertion_point < search_end) {
         const probe: u7 = insertion_point + (search_end - insertion_point) / 2;
         if (forward_block.destinations[probe] < destination.index) {
@@ -37,7 +37,7 @@ pub fn insertForwardEdge(
             search_end = probe;
         }
     }
-    var shift: u7 = @intCast(live);
+    var shift: u7 = @intCast(alive);
     while (shift > insertion_point) {
         forward_block.destinations[shift] = forward_block.destinations[shift - 1];
         forward_block.relations[shift] = forward_block.relations[shift - 1];
@@ -51,14 +51,14 @@ pub fn insertForwardEdge(
     forward_block.flags[insertion_point] = @bitCast((flags));
     if (graph.multigraph_enabled) id_block.ids[insertion_point] = edge_id;
     if (graph.edge_properties_enabled) prop_block.rows[insertion_point] = prop_row;
-    page_ops.setBlockLiveCount(graph, block_idx, .fwd, @intCast(live + 1));
+    page_ops.setBlockAliveCount(graph, block_idx, .fwd, @intCast(alive + 1));
 }
 
 pub fn insertReverseEdge(graph: *graph_core.GraphCore, block_idx: u32, source: types.NodeId) void {
     const reverse_block = page_ops.edgeBlockAt(graph, block_idx, .rev);
-    const live = page_ops.blockLiveCount(graph, block_idx, .rev);
+    const alive = page_ops.blockAliveCount(graph, block_idx, .rev);
     var insertion_point: u7 = 0;
-    var search_end: u7 = @intCast(live);
+    var search_end: u7 = @intCast(alive);
     while (insertion_point < search_end) {
         const probe: u7 = insertion_point + (search_end - insertion_point) / 2;
         if (reverse_block.sources[probe] < source.index) {
@@ -67,13 +67,13 @@ pub fn insertReverseEdge(graph: *graph_core.GraphCore, block_idx: u32, source: t
             search_end = probe;
         }
     }
-    var shift: u7 = @intCast(live);
+    var shift: u7 = @intCast(alive);
     while (shift > insertion_point) {
         reverse_block.sources[shift] = reverse_block.sources[shift - 1];
         shift -= 1;
     }
     reverse_block.sources[insertion_point] = source.index;
-    page_ops.setBlockLiveCount(graph, block_idx, .rev, @intCast(live + 1));
+    page_ops.setBlockAliveCount(graph, block_idx, .rev, @intCast(alive + 1));
 }
 
 pub fn canUseTinyFwdSide(graph: *const graph_core.GraphCore, side_adj: types.SideAdj) bool {
@@ -136,7 +136,7 @@ pub fn buildForwardTinyOrPromoted(
         if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx).ids[entry_idx] = entry.edge_id;
         if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, block_idx).rows[entry_idx] = entry.prop_row;
     }
-    page_ops.setBlockLiveCount(graph, block_idx, .fwd, @intCast(count));
+    page_ops.setBlockAliveCount(graph, block_idx, .fwd, @intCast(count));
     try insertForwardEdge(graph, block_idx, destination, relation, raw_flags, edge_id, prop_row);
     return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
 }
@@ -168,7 +168,7 @@ pub fn buildReverseTinyOrPromoted(
     block.* = std.mem.zeroes(types.EdgeBlockRev);
     const slot = page_ops.tinyBlockAtConst(graph, destination_side.first_block, .rev);
     for (0..count) |entry_idx| block.sources[entry_idx] = slot.sources[entry_idx];
-    page_ops.setBlockLiveCount(graph, block_idx, .rev, @intCast(count));
+    page_ops.setBlockAliveCount(graph, block_idx, .rev, @intCast(count));
     insertReverseEdge(graph, block_idx, source);
     return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
 }

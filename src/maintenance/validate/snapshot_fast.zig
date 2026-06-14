@@ -19,12 +19,12 @@ fn countVisibleEntriesInBlockSnapshot(
         .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
         .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
     };
-    const live = switch (side) {
-        .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
-        .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+    const alive = switch (side) {
+        .fwd => page_ops.blockAliveCount(graph, block_idx, .fwd),
+        .rev => page_ops.blockAliveCount(graph, block_idx, .rev),
     };
     var total: u64 = 0;
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         const candidate_idx = switch (side) {
             .fwd => block.destinations[slot],
             .rev => block.sources[slot],
@@ -125,11 +125,11 @@ fn hasTombstoneSnapshot(
                     .fwd => page_ops.edgeBlockAtConst(inner_graph, block_idx, .fwd),
                     .rev => page_ops.edgeBlockAtConst(inner_graph, block_idx, .rev),
                 };
-                const live = switch (side) {
-                    .fwd => page_ops.blockLiveCount(inner_graph, block_idx, .fwd),
-                    .rev => page_ops.blockLiveCount(inner_graph, block_idx, .rev),
+                const alive = switch (side) {
+                    .fwd => page_ops.blockAliveCount(inner_graph, block_idx, .fwd),
+                    .rev => page_ops.blockAliveCount(inner_graph, block_idx, .rev),
                 };
-                for (0..live) |slot| {
+                for (0..alive) |slot| {
                     const candidate_idx = switch (side) {
                         .fwd => block.destinations[slot],
                         .rev => block.sources[slot],
@@ -207,8 +207,8 @@ fn validateForwardEdgeIdsSnapshot(
             for (start..start + count) |block_idx_usize| {
                 const block_idx: u32 = @intCast(block_idx_usize);
                 const id_block = page_ops.edgeBlockFwdIdsAtConst(inner_graph, block_idx);
-                const live_count = @min(page_ops.blockLiveCount(inner_graph, block_idx, .fwd), constants.EDGES_PER_BLOCK);
-                for (0..live_count) |slot| {
+                const alive_count = @min(page_ops.blockAliveCount(inner_graph, block_idx, .fwd), constants.EDGES_PER_BLOCK);
+                for (0..alive_count) |slot| {
                     if (id_block.ids[slot] == 0) return error.CorruptGraph;
                 }
             }
@@ -261,8 +261,8 @@ fn validateForwardConsistencySnapshot(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .fwd);
-                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .fwd), constants.EDGES_PER_BLOCK);
-                for (0..live) |slot| {
+                const alive = @min(page_ops.blockAliveCount(inner_graph, @intCast(block_idx_usize), .fwd), constants.EDGES_PER_BLOCK);
+                for (0..alive) |slot| {
                     const destination_idx = block.destinations[slot];
                     if (destination_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
 
@@ -319,8 +319,8 @@ fn validateReverseConsistencySnapshot(
         ) !void {
             for (start..start + count) |block_idx_usize| {
                 const block = page_ops.edgeBlockAtConst(inner_graph, @intCast(block_idx_usize), .rev);
-                const live = @min(page_ops.blockLiveCount(inner_graph, @intCast(block_idx_usize), .rev), constants.EDGES_PER_BLOCK);
-                for (0..live) |slot| {
+                const alive = @min(page_ops.blockAliveCount(inner_graph, @intCast(block_idx_usize), .rev), constants.EDGES_PER_BLOCK);
+                for (0..alive) |slot| {
                     const source_idx = block.sources[slot];
                     if (source_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
 

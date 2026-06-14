@@ -17,14 +17,14 @@ fn fillBlock(graph: *graph_mod.Graph, block_idx: u32, first_dest: u32, count: u7
                 block.relations[i] = 0;
                 block.flags[i] = 0;
             }
-            page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
+            page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
         },
         .rev => {
             var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
             for (0..count) |i| {
                 block.sources[i] = first_dest + @as(u32, @intCast(i));
             }
-            page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(count));
+            page_ops.setBlockAliveCount(&graph.graph, block_idx, .rev, @intCast(count));
         },
     }
 }

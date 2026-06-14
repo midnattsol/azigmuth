@@ -61,7 +61,7 @@ pub fn analyzeSideLayout(
         const end = side_view.first_block + side_view.block_count - 1;
         for (side_view.first_block..end) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
-            if (page_ops.blockLiveCount(graph, block_idx, side) < constants.MIN_OCCUPANCY) {
+            if (page_ops.blockAliveCount(graph, block_idx, side) < constants.MIN_OCCUPANCY) {
                 report.has_underfull_non_tail_block = true;
                 break;
             }
@@ -92,7 +92,7 @@ pub fn analyzeSideLayout(
         const end = if (is_last_group) group.start + group.count - 1 else group.start + group.count;
         for (group.start..end) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
-            if (page_ops.blockLiveCount(graph, block_idx, side) < constants.MIN_OCCUPANCY) {
+            if (page_ops.blockAliveCount(graph, block_idx, side) < constants.MIN_OCCUPANCY) {
                 report.has_underfull_non_tail_block = true;
                 break;
             }

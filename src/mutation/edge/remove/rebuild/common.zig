@@ -32,8 +32,8 @@ pub fn blockListNeedsRepack(
 ) bool {
     if (block_list.len <= 1) return false;
     for (block_list[0 .. block_list.len - 1]) |block_idx| {
-        const live = page_ops.blockLiveCount(graph, block_idx, side);
-        if (live < constants.MIN_OCCUPANCY) return true;
+        const alive = page_ops.blockAliveCount(graph, block_idx, side);
+        if (alive < constants.MIN_OCCUPANCY) return true;
     }
     return false;
 }
@@ -139,22 +139,22 @@ pub fn repackBlockListDense(
     block_list: *std.ArrayList(u32),
     comptime side: adjacency.AdjSide,
 ) !void {
-    var total_live: usize = 0;
+    var total_alive: usize = 0;
     for (block_list.items) |block_idx| {
-        total_live += page_ops.blockLiveCount(graph, block_idx, side);
+        total_alive += page_ops.blockAliveCount(graph, block_idx, side);
     }
-    if (total_live == 0) {
+    if (total_alive == 0) {
         block_list.clearRetainingCapacity();
         return;
     }
 
-    const entries = try graph.allocator.alloc(RepackEntry, total_live);
+    const entries = try graph.allocator.alloc(RepackEntry, total_alive);
     defer graph.allocator.free(entries);
 
     var entry_idx: usize = 0;
     for (block_list.items) |block_idx| {
-        const live = page_ops.blockLiveCount(graph, block_idx, side);
-        for (0..live) |slot| {
+        const alive = page_ops.blockAliveCount(graph, block_idx, side);
+        for (0..alive) |slot| {
             entries[entry_idx] = switch (side) {
                 .fwd => blk: {
                     const block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
@@ -174,7 +174,7 @@ pub fn repackBlockListDense(
 
     std.sort.pdq(RepackEntry, entries, {}, repackEntryLessThan);
 
-    const span_count: u32 = @intCast((total_live + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK);
+    const span_count: u32 = @intCast((total_alive + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK);
     const first_block_idx = try scratch.allocFreshBlockSpanRaw(graph, side, span_count);
 
     var remaining = entries;
@@ -193,12 +193,12 @@ pub fn repackBlockListDense(
                     if (graph.multigraph_enabled) id_block.ids[slot] = entry.edge_id;
                     if (graph.edge_properties_enabled) prop_block.rows[slot] = entry.prop_row;
                 }
-                page_ops.setBlockLiveCount(graph, emit_block_idx, .fwd, @intCast(take));
+                page_ops.setBlockAliveCount(graph, emit_block_idx, .fwd, @intCast(take));
             },
             .rev => {
                 const block = page_ops.edgeBlockAt(graph, emit_block_idx, .rev);
                 for (remaining[0..take], 0..) |entry, slot| block.sources[slot] = entry.key;
-                page_ops.setBlockLiveCount(graph, emit_block_idx, .rev, @intCast(take));
+                page_ops.setBlockAliveCount(graph, emit_block_idx, .rev, @intCast(take));
             },
         }
         remaining = remaining[take..];
@@ -246,7 +246,7 @@ pub fn cloneForwardBlock(
 ) !u32 {
     const new_block_idx = try scratch.allocBlock(graph, .fwd);
     page_ops.edgeBlockAt(graph, new_block_idx, .fwd).* = page_ops.edgeBlockAtConst(graph, block_idx, .fwd).*;
-    page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, page_ops.blockLiveCount(graph, block_idx, .fwd));
+    page_ops.setBlockAliveCount(graph, new_block_idx, .fwd, page_ops.blockAliveCount(graph, block_idx, .fwd));
     if (graph.multigraph_enabled) {
         page_ops.edgeBlockFwdIdsAt(graph, new_block_idx).* = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx).*;
     }
@@ -263,6 +263,6 @@ pub fn cloneReverseBlock(
 ) !u32 {
     const new_block_idx = try scratch.allocBlock(graph, .rev);
     page_ops.edgeBlockAt(graph, new_block_idx, .rev).* = page_ops.edgeBlockAtConst(graph, block_idx, .rev).*;
-    page_ops.setBlockLiveCount(graph, new_block_idx, .rev, page_ops.blockLiveCount(graph, block_idx, .rev));
+    page_ops.setBlockAliveCount(graph, new_block_idx, .rev, page_ops.blockAliveCount(graph, block_idx, .rev));
     return new_block_idx;
 }

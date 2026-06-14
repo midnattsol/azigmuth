@@ -22,7 +22,7 @@ pub fn copyBlock(graph: *graph_core.GraphCore, source_block_idx: u32, destinatio
     switch (side) {
         .fwd => {
             page_ops.edgeBlockAt(graph, destination_block_idx, .fwd).* = page_ops.edgeBlockAtConst(graph, source_block_idx, .fwd).*;
-            page_ops.setBlockLiveCount(graph, destination_block_idx, .fwd, page_ops.blockLiveCount(graph, source_block_idx, .fwd));
+            page_ops.setBlockAliveCount(graph, destination_block_idx, .fwd, page_ops.blockAliveCount(graph, source_block_idx, .fwd));
             if (graph.multigraph_enabled) {
                 page_ops.edgeBlockFwdIdsAt(graph, destination_block_idx).* = page_ops.edgeBlockFwdIdsAtConst(graph, source_block_idx).*;
             }
@@ -32,7 +32,7 @@ pub fn copyBlock(graph: *graph_core.GraphCore, source_block_idx: u32, destinatio
         },
         .rev => {
             page_ops.edgeBlockAt(graph, destination_block_idx, .rev).* = page_ops.edgeBlockAtConst(graph, source_block_idx, .rev).*;
-            page_ops.setBlockLiveCount(graph, destination_block_idx, .rev, page_ops.blockLiveCount(graph, source_block_idx, .rev));
+            page_ops.setBlockAliveCount(graph, destination_block_idx, .rev, page_ops.blockAliveCount(graph, source_block_idx, .rev));
         },
     }
 }
@@ -221,11 +221,11 @@ pub fn removeTailBlock(
     staging_side: *types.SideAdj,
     published_side: *const types.SideAdj,
     new_block: u32,
-    new_live: u7,
+    new_alive_count: u7,
     scratch: *common.MutationScratch,
 ) !bool {
     if (published_side.group_count == 0) {
-        if (new_live == 0) {
+        if (new_alive_count == 0) {
             staging_side.block_count -= 1;
             return true;
         }
@@ -245,7 +245,7 @@ pub fn removeTailBlock(
     }
 
     const tail_group = page_ops.edgeBlockGroupAtConst(graph, published_side.first_group + published_side.group_count - 1);
-    if (new_live == 0) {
+    if (new_alive_count == 0) {
         if (tail_group.count > 1) {
             if (published_side.group_count == 1) {
                 staging_side.first_block = tail_group.start;

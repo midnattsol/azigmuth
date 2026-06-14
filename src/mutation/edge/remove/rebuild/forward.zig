@@ -25,11 +25,11 @@ fn appendForwardBlockWithoutDestination(
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAtConst(graph, block_idx) else undefined;
     const old_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAtConst(graph, block_idx) else undefined;
-    const live = page_ops.blockLiveCount(graph, block_idx, .fwd);
-    if (live == 0) return 0;
+    const alive = page_ops.blockAliveCount(graph, block_idx, .fwd);
+    if (alive == 0) return 0;
 
     var removed: u32 = 0;
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         if (old_block.destinations[slot] == destination_idx) {
             removed += 1;
             if (graph.edge_properties_enabled) try scratch.markRetirePropRow(graph.allocator, old_props.rows[slot]);
@@ -41,7 +41,7 @@ fn appendForwardBlockWithoutDestination(
         try block_list.append(graph.allocator, block_idx);
         return 0;
     }
-    if (removed == live) {
+    if (removed == alive) {
         try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
         return removed;
     }
@@ -51,7 +51,7 @@ fn appendForwardBlockWithoutDestination(
     const new_ids = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block_idx) else undefined;
     const new_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block_idx) else undefined;
     var write: u7 = 0;
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         if (old_block.destinations[slot] != destination_idx) {
             new_block.destinations[write] = old_block.destinations[slot];
             new_block.relations[write] = old_block.relations[slot];
@@ -61,7 +61,7 @@ fn appendForwardBlockWithoutDestination(
             write += 1;
         }
     }
-    page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));
+    page_ops.setBlockAliveCount(graph, new_block_idx, .fwd, @intCast(write));
     try block_list.append(graph.allocator, new_block_idx);
     try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
     return removed;
@@ -94,12 +94,12 @@ fn appendForwardBlockRemovingOneById(
     const old_block = page_ops.edgeBlockAtConst(graph, block_idx, .fwd);
     const old_ids = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
     const old_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAtConst(graph, block_idx) else undefined;
-    const live: u7 = @intCast(page_ops.blockLiveCount(graph, block_idx, .fwd));
+    const alive: u7 = @intCast(page_ops.blockAliveCount(graph, block_idx, .fwd));
 
-    for (0..live) |slot| {
+    for (0..alive) |slot| {
         if (old_block.destinations[slot] != destination_idx or old_ids.ids[slot] != edge_id) continue;
         if (graph.edge_properties_enabled) try scratch.markRetirePropRow(graph.allocator, old_props.rows[slot]);
-        if (live == 1) {
+        if (alive == 1) {
             try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
             return true;
         }
@@ -109,7 +109,7 @@ fn appendForwardBlockRemovingOneById(
         const new_ids = page_ops.edgeBlockFwdIdsAt(graph, new_block_idx);
         const new_props = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block_idx) else undefined;
         var write: u7 = 0;
-        for (0..live) |copy_slot| {
+        for (0..alive) |copy_slot| {
             if (copy_slot == slot) continue;
             new_block.destinations[write] = old_block.destinations[copy_slot];
             new_block.relations[write] = old_block.relations[copy_slot];
@@ -118,7 +118,7 @@ fn appendForwardBlockRemovingOneById(
             if (graph.edge_properties_enabled) new_props.rows[write] = old_props.rows[copy_slot];
             write += 1;
         }
-        page_ops.setBlockLiveCount(graph, new_block_idx, .fwd, @intCast(write));
+        page_ops.setBlockAliveCount(graph, new_block_idx, .fwd, @intCast(write));
         try block_list.append(graph.allocator, new_block_idx);
         try scratch.markRetireBlock(graph.allocator, .fwd, block_idx);
         return true;

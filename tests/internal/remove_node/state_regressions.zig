@@ -63,7 +63,7 @@ test "removeNode regression: validate and debugValidate agree on grouped chain s
 
     const block = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
     page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);

@@ -89,8 +89,8 @@ pub fn appendForwardConsistencyViolations(graph: *const graph_core.GraphCore, al
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_idx, .fwd)) continue;
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_idx, .fwd);
-        const live_count = @min(page_ops.blockLiveCount(graph, traversed_block.block_idx, .fwd), constants.EDGES_PER_BLOCK);
-        for (0..live_count) |slot| {
+        const alive_count = @min(page_ops.blockAliveCount(graph, traversed_block.block_idx, .fwd), constants.EDGES_PER_BLOCK);
+        for (0..alive_count) |slot| {
             try appendForwardPairViolations(graph, allocator, violations, source_node, source_adjacency, block.destinations[slot]);
         }
     }
@@ -101,8 +101,8 @@ pub fn appendReverseConsistencyViolations(graph: *const graph_core.GraphCore, al
     for (blocks) |traversed_block| {
         if (!common.blockExists(graph, traversed_block.block_idx, .rev)) continue;
         const block = page_ops.edgeBlockAtConst(graph, traversed_block.block_idx, .rev);
-        const live_count = @min(page_ops.blockLiveCount(graph, traversed_block.block_idx, .rev), constants.EDGES_PER_BLOCK);
-        for (0..live_count) |slot| {
+        const alive_count = @min(page_ops.blockAliveCount(graph, traversed_block.block_idx, .rev), constants.EDGES_PER_BLOCK);
+        for (0..alive_count) |slot| {
             try appendReversePairViolations(graph, allocator, violations, block.sources[slot], destination_node);
         }
     }
@@ -111,8 +111,8 @@ pub fn appendReverseConsistencyViolations(graph: *const graph_core.GraphCore, al
 fn validateForwardMultiplicityInContiguousBlocks(graph: *const graph_core.GraphCore, source_node: u32, source_adjacency: types.NodeAdj, start: u32, count: u16) !void {
     for (start..start + count) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-        const live_count = @min(page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd), 64);
-        for (0..live_count) |slot| {
+        const alive_count = @min(page_ops.blockAliveCount(graph, @intCast(block_idx), .fwd), 64);
+        for (0..alive_count) |slot| {
             try checkForwardPair(graph, source_node, source_adjacency, block.destinations[slot]);
         }
     }
@@ -141,8 +141,8 @@ pub fn validateForwardConsistencyInContiguousBlocks(graph: *const graph_core.Gra
     const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     for (start..start + count) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
-        const live_count = @min(page_ops.blockLiveCount(graph, @intCast(block_idx), .fwd), 64);
-        for (0..live_count) |slot| {
+        const alive_count = @min(page_ops.blockAliveCount(graph, @intCast(block_idx), .fwd), 64);
+        for (0..alive_count) |slot| {
             try checkForwardPair(graph, source_node, source_adjacency, block.destinations[slot]);
         }
     }
@@ -161,8 +161,8 @@ pub fn validateReverseConsistencyFast(graph: *const graph_core.GraphCore, destin
 pub fn validateReverseConsistencyInContiguousBlocks(graph: *const graph_core.GraphCore, destination_node: u32, start: u32, count: u16) !void {
     for (start..start + count) |block_idx| {
         const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .rev);
-        const live_count = @min(page_ops.blockLiveCount(graph, @intCast(block_idx), .rev), 64);
-        for (0..live_count) |slot| {
+        const alive_count = @min(page_ops.blockAliveCount(graph, @intCast(block_idx), .rev), 64);
+        for (0..alive_count) |slot| {
             try checkReversePair(graph, block.sources[slot], destination_node);
         }
     }

@@ -32,8 +32,8 @@ test "rcu safety: reclaimed block is not owned by any node" {
     const fwd_block = try graph.allocBlockFwd();
     const rev_block = try graph.allocBlockRev();
 
-    try testing.expectEqual(@as(u7, 0), page_ops.blockLiveCount(&graph.graph, fwd_block, .fwd));
-    try testing.expectEqual(@as(u7, 0), page_ops.blockLiveCount(&graph.graph, rev_block, .rev));
+    try testing.expectEqual(@as(u7, 0), page_ops.blockAliveCount(&graph.graph, fwd_block, .fwd));
+    try testing.expectEqual(@as(u7, 0), page_ops.blockAliveCount(&graph.graph, rev_block, .rev));
 
     _ = graph.validate() catch {};
 }

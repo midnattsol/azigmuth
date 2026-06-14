@@ -1,5 +1,5 @@
 //! Coverage for the removal-rebuild block cloners and the forward fast-path
-//! gate. cloneForwardBlock/cloneReverseBlock must copy the live-count sidecar
+//! gate. cloneForwardBlock/cloneReverseBlock must copy the alive-count sidecar
 //! along with the block payload — missing that copy was a real COW corruption
 //! bug, so it gets a direct regression test here.
 
@@ -13,7 +13,7 @@ const fast_path = graph_mod.remove_fast_path_mod;
 
 const testing = std.testing;
 
-test "cloneForwardBlock copies payload and live-count sidecar" {
+test "cloneForwardBlock copies payload and alive-count sidecar" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -27,7 +27,7 @@ test "cloneForwardBlock copies payload and live-count sidecar" {
         source_block.relations[slot] = @intCast(slot);
         source_block.flags[slot] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, blk, .fwd, 5);
+    page_ops.setBlockAliveCount(&graph.graph, blk, .fwd, 5);
 
     var scratch = common.MutationScratch{};
     defer scratch.deinit(testing.allocator);
@@ -40,10 +40,10 @@ test "cloneForwardBlock copies payload and live-count sidecar" {
         try testing.expectEqual(nodes[slot].index, cloned_block.destinations[slot]);
         try testing.expectEqual(@as(u16, @intCast(slot)), cloned_block.relations[slot]);
     }
-    try testing.expectEqual(@as(u7, 5), page_ops.blockLiveCount(&graph.graph, cloned, .fwd));
+    try testing.expectEqual(@as(u7, 5), page_ops.blockAliveCount(&graph.graph, cloned, .fwd));
 }
 
-test "cloneReverseBlock copies payload and live-count sidecar" {
+test "cloneReverseBlock copies payload and alive-count sidecar" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -53,7 +53,7 @@ test "cloneReverseBlock copies payload and live-count sidecar" {
     const blk = try graph.allocBlockRev();
     const source_block = page_ops.edgeBlockAt(&graph.graph, blk, .rev);
     for (0..3) |slot| source_block.sources[slot] = nodes[slot].index;
-    page_ops.setBlockLiveCount(&graph.graph, blk, .rev, 3);
+    page_ops.setBlockAliveCount(&graph.graph, blk, .rev, 3);
 
     var scratch = common.MutationScratch{};
     defer scratch.deinit(testing.allocator);
@@ -65,7 +65,7 @@ test "cloneReverseBlock copies payload and live-count sidecar" {
     for (0..3) |slot| {
         try testing.expectEqual(nodes[slot].index, cloned_block.sources[slot]);
     }
-    try testing.expectEqual(@as(u7, 3), page_ops.blockLiveCount(&graph.graph, cloned, .rev));
+    try testing.expectEqual(@as(u7, 3), page_ops.blockAliveCount(&graph.graph, cloned, .rev));
 }
 
 test "ensureForwardFastPathAllowedIfBlock: tiny sides always pass" {
@@ -94,14 +94,14 @@ test "ensureForwardFastPathAllowedIfBlock: block sides demand a located slot and
     b0.destinations[0] = nodes[0].index;
     b0.relations[0] = 0;
     b0.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, blk0, .fwd, 1);
+    page_ops.setBlockAliveCount(&graph.graph, blk0, .fwd, 1);
 
     const blk1 = try graph.allocBlockFwd();
     const b1 = page_ops.edgeBlockAt(&graph.graph, blk1, .fwd);
     b1.destinations[0] = nodes[1].index;
     b1.relations[0] = 0;
     b1.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, blk1, .fwd, 1);
+    page_ops.setBlockAliveCount(&graph.graph, blk1, .fwd, 1);
 
     const single = types.SideAdj{ .first_block = blk0, .block_count = 1, .group_count = 0, .first_group = 0 };
     // A block side without a located slot is corruption.

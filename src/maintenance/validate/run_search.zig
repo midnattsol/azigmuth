@@ -78,25 +78,25 @@ pub fn findSlotInRun(
             .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
             .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
         };
-        const live: u7 = @intCast(@min(switch (side) {
-            .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
-            .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+        const alive: u7 = @intCast(@min(switch (side) {
+            .fwd => page_ops.blockAliveCount(graph, block_idx, .fwd),
+            .rev => page_ops.blockAliveCount(graph, block_idx, .rev),
         }, constants.EDGES_PER_BLOCK));
-        if (live == 0) break;
+        if (alive == 0) break;
         const first_key = switch (side) {
             .fwd => block.destinations[0],
             .rev => block.sources[0],
         };
         const last_key = switch (side) {
-            .fwd => block.destinations[live - 1],
-            .rev => block.sources[live - 1],
+            .fwd => block.destinations[alive - 1],
+            .rev => block.sources[alive - 1],
         };
         if (target < first_key) {
             high = mid;
         } else if (target > last_key) {
             low = mid + 1;
         } else {
-            if (adjacency_mod.searchInBlock(BlockType, block, live, target)) |slot| return slot;
+            if (adjacency_mod.searchInBlock(BlockType, block, alive, target)) |slot| return slot;
             break;
         }
     }
@@ -107,11 +107,11 @@ pub fn findSlotInRun(
             .fwd => page_ops.edgeBlockAtConst(graph, block_idx, .fwd),
             .rev => page_ops.edgeBlockAtConst(graph, block_idx, .rev),
         };
-        const live: u7 = @intCast(@min(switch (side) {
-            .fwd => page_ops.blockLiveCount(graph, block_idx, .fwd),
-            .rev => page_ops.blockLiveCount(graph, block_idx, .rev),
+        const alive: u7 = @intCast(@min(switch (side) {
+            .fwd => page_ops.blockAliveCount(graph, block_idx, .fwd),
+            .rev => page_ops.blockAliveCount(graph, block_idx, .rev),
         }, constants.EDGES_PER_BLOCK));
-        if (adjacency_mod.searchInBlock(BlockType, block, live, target)) |slot| return slot;
+        if (adjacency_mod.searchInBlock(BlockType, block, alive, target)) |slot| return slot;
     }
     return null;
 }

@@ -98,8 +98,8 @@ pub fn forEachSlotInSide(
     while (cursor.next(graph)) |block_idx| {
         // Clamp: a corrupt sidecar must surface as a validation finding, not
         // as an out-of-bounds crash inside shared traversal helpers.
-        const live_count = @min(page_ops.blockLiveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
-        for (0..live_count) |slot| {
+        const alive_count = @min(page_ops.blockAliveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
+        for (0..alive_count) |slot| {
             try callback(graph, context, block_idx, @as(u7, @intCast(slot)));
         }
     }
@@ -201,9 +201,9 @@ pub fn forEachNodeIdInSide(
     while (cursor.next(graph)) |block_idx| {
         // Clamp: a corrupt sidecar must surface as a validation finding, not
         // as an out-of-bounds crash inside shared traversal helpers.
-        const live_count = @min(page_ops.blockLiveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
+        const alive_count = @min(page_ops.blockAliveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
         const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-        for (0..live_count) |slot| {
+        for (0..alive_count) |slot| {
             const node_id = switch (side) {
                 .fwd => block.destinations[slot],
                 .rev => block.sources[slot],
@@ -231,7 +231,7 @@ pub fn forEachForwardEntryInSide(
     }.run);
 }
 
-fn countLiveSlotsInBlock(
+fn countAliveSlotsInBlock(
     graph: *const graph_core.GraphCore,
     total: *usize,
     block_idx: u32,
@@ -241,7 +241,7 @@ fn countLiveSlotsInBlock(
         total.* += 1;
         return;
     }
-    total.* += page_ops.blockLiveCount(graph, block_idx, side);
+    total.* += page_ops.blockAliveCount(graph, block_idx, side);
 }
 
 pub fn countLiveInSide(
@@ -260,7 +260,7 @@ pub fn countLiveInSide(
             inner_total: *usize,
             block_idx: u32,
         ) !void {
-            try countLiveSlotsInBlock(inner_graph, inner_total, block_idx, side);
+            try countAliveSlotsInBlock(inner_graph, inner_total, block_idx, side);
         }
     }.callback);
     return total;
@@ -463,10 +463,10 @@ fn findSlotInBlockRunLinear(
     for (start..start + count) |block_idx_usize| {
         const block_idx: u32 = @intCast(block_idx_usize);
         const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-        const live = page_ops.blockLiveCount(graph, block_idx, side);
+        const alive = page_ops.blockAliveCount(graph, block_idx, side);
         const slot = switch (side) {
-            .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, live, target),
-            .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, live, target),
+            .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, alive, target),
+            .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, alive, target),
         } orelse continue;
         return .{ .block_idx = block_idx, .slot = slot };
     }
@@ -487,15 +487,15 @@ fn findSlotInBlockRun(
         const mid: u32 = low + (high - low) / 2;
         const block_idx = start + mid;
         const block = page_ops.edgeBlockAtConst(graph, block_idx, side);
-        const live = page_ops.blockLiveCount(graph, block_idx, side);
-        if (live == 0) break;
+        const alive = page_ops.blockAliveCount(graph, block_idx, side);
+        if (alive == 0) break;
         const first_key = switch (side) {
             .fwd => block.destinations[0],
             .rev => block.sources[0],
         };
         const last_key = switch (side) {
-            .fwd => block.destinations[live - 1],
-            .rev => block.sources[live - 1],
+            .fwd => block.destinations[alive - 1],
+            .rev => block.sources[alive - 1],
         };
         if (target < first_key) {
             high = mid;
@@ -503,8 +503,8 @@ fn findSlotInBlockRun(
             low = mid + 1;
         } else {
             const slot = switch (side) {
-                .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, live, target),
-                .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, live, target),
+                .fwd => adjacency.searchInBlock(types.EdgeBlockFwd, block, alive, target),
+                .rev => adjacency.searchInBlock(types.EdgeBlockRev, block, alive, target),
             } orelse break;
             return .{ .block_idx = block_idx, .slot = slot };
         }

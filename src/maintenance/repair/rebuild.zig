@@ -17,7 +17,7 @@ pub const SortedRebuildResult = sorted_rebuild.SortedRebuildResult;
 pub const sortedRebuildForward = sorted_rebuild.sortedRebuildForward;
 pub const sortedRebuildReverse = sorted_rebuild.sortedRebuildReverse;
 
-pub const rebuildForwardLive = cleanup.rebuildForwardLive;
+pub const rebuildForwardAlive = cleanup.rebuildForwardAlive;
 pub const rebuildReverseDrop = cleanup.rebuildReverseDrop;
 pub const countReverseMatches = cleanup.countReverseMatches;
 pub const prepareReverseDrop = cleanup.prepareReverseDrop;

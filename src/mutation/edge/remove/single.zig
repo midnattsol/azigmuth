@@ -32,8 +32,8 @@ pub fn findReverseMatchForSingleRemoval(
     // locality on multi-block sides.
     if (adjacency.tailBlockIndexSide(graph, &remove_state.destination_pub)) |tail_block_idx| {
         const tail_block = page_ops.edgeBlockAtConst(graph, tail_block_idx, .rev);
-        const tail_live = page_ops.blockLiveCount(graph, tail_block_idx, .rev);
-        if (adjacency.searchInBlock(types.EdgeBlockRev, tail_block, tail_live, source.index)) |slot| {
+        const tail_alive = page_ops.blockAliveCount(graph, tail_block_idx, .rev);
+        if (adjacency.searchInBlock(types.EdgeBlockRev, tail_block, tail_alive, source.index)) |slot| {
             return .{ .block_idx = tail_block_idx, .slot = slot };
         }
     }

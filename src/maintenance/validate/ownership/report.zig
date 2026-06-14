@@ -37,10 +37,10 @@ pub fn appendOwnershipAndShapeViolations(
 
         try block_shape.appendBlockShapeViolations(graph, allocator, violations, node_id, block_idx, side);
 
-        const live_count = common.blockLive(graph, block_idx, side);
-        const non_tail_underfull = blocks.len > 1 and block_idx != tail_block_idx and live_count < constants.MIN_OCCUPANCY;
+        const alive_count = common.blockAlive(graph, block_idx, side);
+        const non_tail_underfull = blocks.len > 1 and block_idx != tail_block_idx and alive_count < constants.MIN_OCCUPANCY;
         if (non_tail_underfull) {
-            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = block_idx, .occupancy = @intCast(live_count) } });
+            try violations.append(allocator, .{ .occupancy_below_threshold = .{ .node = node_id, .block = block_idx, .occupancy = @intCast(alive_count) } });
         }
     }
 }

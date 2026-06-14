@@ -34,13 +34,13 @@ pub fn compactForwardTombstones(
     defer allocs.cleanup(graph);
 
     const source_adj_before = node_access.publishedAdjAtConst(graph, node);
-    var source_result = try cleanup_mod.rebuildForwardLive(graph, node.index, source_adj_before, &allocs);
+    var source_result = try cleanup_mod.rebuildForwardAlive(graph, node.index, source_adj_before, &allocs);
     defer source_result.dropped_prop_rows.deinit(graph.allocator);
 
     allocs.disarm();
 
     const preserved_rev = node_access.publishedRevDegreeAtConst(graph, node);
-    const new_fwd: u32 = @intCast(source_result.live_after);
+    const new_fwd: u32 = @intCast(source_result.alive_after);
     const node_published = page_ops.nodePublishedAt(graph, node);
     // The forward side was rebuilt sorted; the reverse side is untouched.
     const rev_sorted = node_published.publishedRevSortedFromMeta(node_access.loadPublishedMetaAtConst(graph, node));

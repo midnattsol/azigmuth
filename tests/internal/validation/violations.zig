@@ -42,8 +42,8 @@ test "validation: debugValidate accepts short non-tail runs as valid layout" {
     const short_run_group = try graph.allocGroup();
     const tail_group = try graph.allocGroup();
 
-    page_ops.setBlockLiveCount(&graph.graph, head_block, .fwd, 0);
-    page_ops.setBlockLiveCount(&graph.graph, tail_block, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, head_block, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, tail_block, .fwd, 0);
 
     page_ops.edgeBlockGroupAt(&graph.graph, short_run_group).* = .{
         .start = head_block,
@@ -79,9 +79,9 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
     const block2 = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
 
-    page_ops.setBlockLiveCount(&graph.graph, block0, .fwd, 0);
-    page_ops.setBlockLiveCount(&graph.graph, block1, .fwd, 0);
-    page_ops.setBlockLiveCount(&graph.graph, block2, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block0, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block1, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block2, .fwd, 0);
 
     page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{
         .start = block0,
@@ -103,7 +103,7 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
     try testing.expect(!hasViolationTag(violations, .grouped_layout_needs_canonicalization));
 }
 
-test "validation: debugValidate emits degree_mismatch when cached degree diverges from live edges" {
+test "validation: debugValidate emits degree_mismatch when cached degree diverges from alive edges" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -156,13 +156,13 @@ test "validation: debugValidate detects forward/reverse visible count mismatch" 
         try publish.appendReverseSource(&graph, b, b_adj, try publish.readReverseSource(&graph, b_adj, 0));
     } else {
         const rev_block = page_ops.edgeBlockAt(&graph.graph, b_adj.first_block_rev, .rev);
-        const live: u7 = @intCast(page_ops.blockLiveCount(&graph.graph, b_adj.first_block_rev, .rev));
+        const alive: u7 = @intCast(page_ops.blockAliveCount(&graph.graph, b_adj.first_block_rev, .rev));
 
         // Duplicate the first source entry to create 3 reverse but only 2 forward.
-        if (live < 64) {
+        if (alive < 64) {
             const dup_source = rev_block.sources[0];
-            rev_block.sources[live] = dup_source;
-            page_ops.setBlockLiveCount(&graph.graph, b_adj.first_block_rev, .rev, @intCast(live + 1));
+            rev_block.sources[alive] = dup_source;
+            page_ops.setBlockAliveCount(&graph.graph, b_adj.first_block_rev, .rev, @intCast(alive + 1));
         }
     }
 
@@ -210,7 +210,7 @@ test "validation: debugValidate catches group_count longer than actual chain eve
 
     const node = try graph.addNode();
     const b0 = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, b0, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = 0;
 
     const g0 = try graph.allocGroup();

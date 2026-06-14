@@ -25,6 +25,7 @@ const node_tiny = @import("../node/tiny.zig");
 const format = @import("format.zig");
 const io_mod = @import("io.zig");
 const node_published = @import("../node/published.zig");
+const snapshot_csr = @import("../../query/snapshot/csr.zig");
 
 pub const OpenError = anyerror; // TODO: Real errors once is done.
 
@@ -49,21 +50,43 @@ pub const FrozenGraph = struct {
     /// rename) → validation ladder from io.zig (header, table, length,
     /// checksums per OpenOptions).
     pub fn open(io: std.Io, dir: std.Io.Dir, sub_path: []const u8, options: OpenOptions) OpenError!FrozenGraph {
-        _ = io;
-        _ = dir;
-        _ = sub_path;
-        _ = options;
-        // TODO: posix.mmap(null, len, PROT.READ, .{ .TYPE =
-        // .PRIVATE }, file.handle, 0); then io_mod.parseHeader /
-        // parseSectionTable / checkSectionsAgainstFileLen — the ladder is
-        // the loader's; only materialization differs (map vs copy).
-        @panic("TODO: FrozenGraph.open");
+        const file = try dir.openFile(io, sub_path, .{ .mode = .read_only });
+        errdefer file.close(io);
+
+        const stats = try file.stat(io);
+        const file_size = stats.size;
+        const bytes = try std.posix.mmap(
+            null,
+            file_size,
+            std.posix.PROT.READ,
+            std.posix.MAP{ .TYPE = .PRIVATE },
+            file.handle,
+            0,
+        );
+        errdefer std.posix.munmap(bytes);
+        const header = try io_mod.parseHeader(@ptrCast(bytes[0..format.HEADER_BYTES].ptr));
+        const tables = try io_mod.parseSectionTable(
+            header,
+            @ptrCast(bytes[format.SECTION_TABLE_OFFSET .. format.SECTION_TABLE_OFFSET + format.SECTION_TABLE_BYTES].ptr),
+        );
+        file.close(io);
+        try io_mod.checkSectionsAgainstFileLen(&tables, file_size);
+        if (options.verify_checksums) {
+            for (tables) |table| {
+                if (table.byte_len == 0) continue;
+                try io_mod.verifySectionChecksum(table, bytes[table.file_offset .. table.file_offset + table.byte_len]);
+            }
+        }
+        return FrozenGraph{
+            .bytes = bytes,
+            .header = header,
+            .table = tables,
+        };
     }
 
     pub fn close(self: *FrozenGraph) void {
-        _ = self;
-        // TODO: posix.munmap(self.bytes); poison self.
-        @panic("TODO: FrozenGraph.close");
+        std.posix.munmap(self.bytes);
+        self.* = undefined;
     }
 
     // ── Section access ───────────────────────────────────────────────
@@ -83,7 +106,7 @@ pub const FrozenGraph = struct {
     /// All NodeRecords, casted in place from the node_records section.
     pub fn nodeRecords(self: *const FrozenGraph) []const format.NodeRecord {
         const bytes = self.sectionBytes(.node_records);
-        const records: []const format.NodeRecord = std.mem.bytesAsSlice(format.NodeRecord, bytes);
+        const records: []const format.NodeRecord = @alignCast(std.mem.bytesAsSlice(format.NodeRecord, bytes));
         return records;
     }
 
@@ -106,15 +129,13 @@ pub const FrozenGraph = struct {
     }
 
     pub fn outDegree(self: *const FrozenGraph, node: types.NodeId) types.GraphError!usize {
-        const node_record = self.nodeRecord(node);
-        if (node_record == null) return error.InvalidNode;
-        return node_record.degree_fwd;
+        const record = self.nodeRecord(node) orelse return error.InvalidNode;
+        return @intCast(record.degree_fwd);
     }
 
     pub fn inDegree(self: *const FrozenGraph, node: types.NodeId) types.GraphError!usize {
-        const node_record = self.nodeRecord(node);
-        if (node_record == null) return error.InvalidNode;
-        return node_record.degree_rev;
+        const record = self.nodeRecord(node) orelse return error.InvalidNode;
+        return @intCast(record.degree_rev);
     }
 
     /// Block lookup straight off the mapped section: index → page → slot,
@@ -136,16 +157,16 @@ pub const FrozenGraph = struct {
         return &ptr[block_idx];
     }
 
-    pub fn liveCountInBlock(self: *const FrozenGraph, block_idx: u32, side: adjacency.AdjSide) u8 {
+    pub fn aliveCountInBlock(self: *const FrozenGraph, block_idx: u32, side: adjacency.AdjSide) u8 {
         return self.sectionBytes(switch (side) {
-            .fwd => .live_fwd,
-            .rev => .live_rev,
+            .fwd => .alive_fwd,
+            .rev => .alive_rev,
         })[block_idx];
     }
 
     pub fn edgeBlockGroupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
         const bytes = self.sectionBytes(.groups);
-        const ptr: *const types.EdgeBlockGroup = @ptrCast(@alignCast(bytes.ptr));
+        const ptr: [*]const types.EdgeBlockGroup = @ptrCast(@alignCast(bytes.ptr));
         return &ptr[group_idx];
     }
 
@@ -176,8 +197,7 @@ pub const FrozenGraph = struct {
     ///   - grouped runs: group_count EdgeBlockGroup descriptors starting at
     ///     first_group, each one a (first_block, span) run.
     pub fn outNeighbors(self: *const FrozenGraph, node: types.NodeId) types.GraphError!NeighborIterator {
-        const node_record = self.nodeRecord(node);
-        if (node_record == null) return error.InvalidNode;
+        const node_record = self.nodeRecord(node) orelse return error.InvalidNode;
 
         const side_adj: types.SideAdj = node_record.fwd;
         if (node_published.NodePublished.isTiny(&side_adj)) {
@@ -193,7 +213,7 @@ pub const FrozenGraph = struct {
                 .blocks_remaining = 0,
                 .group_idx = 0,
                 .groups_remaining = 0,
-                .live_in_block = 0,
+                .alive_in_block = 0,
             };
         } else if (side_adj.group_count == 0) {
             return NeighborIterator{
@@ -208,7 +228,7 @@ pub const FrozenGraph = struct {
                 .blocks_remaining = side_adj.block_count,
                 .group_idx = 0,
                 .groups_remaining = 0,
-                .live_in_block = self.liveCountInBlock(side_adj.first_block, .fwd),
+                .alive_in_block = self.aliveCountInBlock(side_adj.first_block, .fwd),
             };
         } else {
             const group = self.edgeBlockGroupAt(side_adj.first_group);
@@ -224,14 +244,13 @@ pub const FrozenGraph = struct {
                 .blocks_remaining = group.count,
                 .group_idx = side_adj.first_group,
                 .groups_remaining = side_adj.group_count,
-                .live_in_block = self.liveCountInBlock(group.start, .fwd),
+                .alive_in_block = self.aliveCountInBlock(group.start, .fwd),
             };
         }
     }
 
     pub fn inNeighbors(self: *const FrozenGraph, node: types.NodeId) types.GraphError!NeighborIterator {
-        const node_record = self.nodeRecord(node);
-        if (node_record == null) return error.InvalidNode;
+        const node_record = self.nodeRecord(node) orelse return error.InvalidNode;
 
         const side_adj: types.SideAdj = node_record.rev;
         if (node_published.NodePublished.isTiny(&side_adj)) {
@@ -247,7 +266,7 @@ pub const FrozenGraph = struct {
                 .blocks_remaining = 0,
                 .group_idx = 0,
                 .groups_remaining = 0,
-                .live_in_block = 0,
+                .alive_in_block = 0,
             };
         } else if (side_adj.group_count == 0) {
             return NeighborIterator{
@@ -262,7 +281,7 @@ pub const FrozenGraph = struct {
                 .blocks_remaining = side_adj.block_count,
                 .group_idx = 0,
                 .groups_remaining = 0,
-                .live_in_block = self.liveCountInBlock(side_adj.first_block, .rev),
+                .alive_in_block = self.aliveCountInBlock(side_adj.first_block, .rev),
             };
         } else {
             const group = self.edgeBlockGroupAt(side_adj.first_group);
@@ -278,7 +297,7 @@ pub const FrozenGraph = struct {
                 .blocks_remaining = group.count,
                 .group_idx = side_adj.first_group,
                 .groups_remaining = side_adj.group_count,
-                .live_in_block = self.liveCountInBlock(group.start, .rev),
+                .alive_in_block = self.aliveCountInBlock(group.start, .rev),
             };
         }
     }
@@ -293,18 +312,20 @@ pub const FrozenGraph = struct {
         tiny_count: u16,
         tiny_idx: u16,
 
-        // Current block
+        // Current block. `blocks_remaining` counts the current block too,
+        // so a run with one last block left has `blocks_remaining == 1`.
         current_block_idx: u32,
         blocks_remaining: u32,
         slot_idx: u8,
-        live_in_block: u8,
+        alive_in_block: u8,
 
-        // Current group
+        // Current group. `groups_remaining` counts the current group too,
+        // so a side already in its last group has `groups_remaining == 1`.
         group_idx: u32,
         groups_remaining: u16,
 
         pub fn next(self: *NeighborIterator) ?types.NodeId {
-            var neighbor: ?types.NodeId = undefined;
+            var neighbor: types.NodeId = undefined;
             if (self.tiny_mode) {
                 if (self.tiny_count <= self.tiny_idx) return null;
                 neighbor = switch (self.direction) {
@@ -323,7 +344,7 @@ pub const FrozenGraph = struct {
                 return neighbor;
             }
             while (true) {
-                if (self.slot_idx < self.live_in_block) {
+                if (self.slot_idx < self.alive_in_block) {
                     neighbor = switch (self.direction) {
                         .fwd => blk: {
                             const block = self.frozen.edgeBlockAt(self.current_block_idx, .fwd);
@@ -342,7 +363,7 @@ pub const FrozenGraph = struct {
                     self.current_block_idx += 1;
                     self.blocks_remaining -= 1;
                     self.slot_idx = 0;
-                    self.live_in_block = self.frozen.liveCountInBlock(self.current_block_idx, self.direction);
+                    self.alive_in_block = self.frozen.aliveCountInBlock(self.current_block_idx, self.direction);
                     continue;
                 } else if (self.groups_remaining > 1) {
                     self.group_idx += 1;
@@ -350,7 +371,7 @@ pub const FrozenGraph = struct {
                     const group = self.frozen.edgeBlockGroupAt(self.group_idx);
                     self.blocks_remaining = group.count;
                     self.current_block_idx = group.start;
-                    self.live_in_block = self.frozen.liveCountInBlock(self.current_block_idx, self.direction);
+                    self.alive_in_block = self.frozen.aliveCountInBlock(self.current_block_idx, self.direction);
                     self.slot_idx = 0;
                     continue;
                 } else return null;
@@ -358,15 +379,42 @@ pub const FrozenGraph = struct {
         }
     };
 
-    /// Optional finale: CSR export straight from the mapping (offsets from
-    /// the record degrees, targets by walking each side) so a frozen
-    /// snapshot can feed analytics without ever building a live graph.
-    pub fn materializeForwardCsr(self: *const FrozenGraph, allocator: std.mem.Allocator) anyerror!void {
-        _ = self;
-        _ = allocator;
-        // TODO (optional): mirror the shape of
-        // query/snapshot/csr.zig's CsrView (out_offsets/out_targets[/out_rows]).
-        @panic("TODO: materializeForwardCsr");
+    /// CSR export straight from the mapping (offsets from the record
+    /// degrees, targets by walking each side) so a frozen snapshot
+    /// can feed analytics without ever building a live graph.
+    pub fn materializeForwardCsr(self: *const FrozenGraph, allocator: std.mem.Allocator) types.GraphError!snapshot_csr.CsrView {
+        const node_count = self.nodeCount();
+        var out_offsets = try allocator.alloc(u64, @as(usize, @intCast(node_count + 1)));
+        errdefer allocator.free(out_offsets);
+        var alive_node_bitmap = try allocator.alloc(u64, @as(usize, @intCast((node_count + 63) / 64)));
+        errdefer allocator.free(alive_node_bitmap);
+        @memset(alive_node_bitmap, 0);
+
+        const total_edges = self.edgeCount();
+        var out_targets = try allocator.alloc(u32, @as(usize, @intCast(total_edges)));
+        errdefer allocator.free(out_targets);
+
+        const node_records = self.nodeRecords();
+        var cursor: u64 = 0;
+        for (0..node_count) |node_idx| {
+            const node_record = node_records[node_idx];
+            out_offsets[node_idx] = cursor;
+            if (node_record.flags.removed) continue;
+            alive_node_bitmap[node_idx / 64] |= @as(u64, 1) << @intCast(node_idx % 64);
+            var iter = try self.outNeighbors(.{ .index = @intCast(node_idx) });
+            while (iter.next()) |neighbor| {
+                out_targets[cursor] = neighbor.index;
+                cursor += 1;
+            }
+        }
+        out_offsets[node_count] = cursor;
+        return .{
+            .node_count = @intCast(node_count),
+            .out_offsets = out_offsets,
+            .out_targets = out_targets,
+            .alive_node_bitmap = alive_node_bitmap,
+            .out_rows = null,
+        };
     }
 };
 

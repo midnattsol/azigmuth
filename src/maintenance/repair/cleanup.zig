@@ -23,22 +23,22 @@ fn countReverseSourceMatch(_: *const graph_core.GraphCore, count: *ReverseSource
     if (source_idx == count.source_idx) count.total += 1;
 }
 
-fn countLiveTinyForwardEntries(
+fn countAliveTinyForwardEntries(
     graph: *const graph_core.GraphCore,
     published_side: types.SideAdj,
 ) !u16 {
-    var live_after: u16 = 0;
-    try side_adj.forEachForwardEntryInSide(graph, published_side, &live_after, struct {
-        fn callback(inner_graph: *const graph_core.GraphCore, inner_live_after: *u16, entry: side_adj.ForwardEntryView) !void {
+    var alive_after: u16 = 0;
+    try side_adj.forEachForwardEntryInSide(graph, published_side, &alive_after, struct {
+        fn callback(inner_graph: *const graph_core.GraphCore, inner_alive_after: *u16, entry: side_adj.ForwardEntryView) !void {
             if (entry.destination < inner_graph.publishedNodeCount() and !node_validity.isNodeRemovedIndex(inner_graph, entry.destination)) {
-                inner_live_after.* += 1;
+                inner_alive_after.* += 1;
             }
         }
     }.callback);
-    return live_after;
+    return alive_after;
 }
 
-fn fillLiveTinyForwardEntries(
+fn fillAliveTinyForwardEntries(
     graph: *const graph_core.GraphCore,
     published_side: types.SideAdj,
     slot: *node_tiny.TinyFwdBlock,
@@ -72,16 +72,16 @@ fn clearForwardSide(adj: *types.NodeAdj) void {
     adj.first_group_fwd = 0;
 }
 
-fn writeTinyForwardSide(adj: *types.NodeAdj, slot_idx: u32, live_count: u16) void {
+fn writeTinyForwardSide(adj: *types.NodeAdj, slot_idx: u32, alive_count: u16) void {
     adj.first_block_fwd = slot_idx;
-    adj.block_count_fwd = node_published.TINY_MODE_BIT | live_count;
+    adj.block_count_fwd = node_published.TINY_MODE_BIT | alive_count;
     adj.group_count_fwd = 0;
     adj.first_group_fwd = 0;
 }
 
 pub const ForwardTombstoneCompaction = struct {
     staging_adj: types.NodeAdj,
-    live_after: usize,
+    alive_after: usize,
     removed_count: usize,
     /// Rows of dropped forward entries; retire after publish, then deinit.
     dropped_prop_rows: std.ArrayList(u32) = .empty,
@@ -89,7 +89,7 @@ pub const ForwardTombstoneCompaction = struct {
 
 pub const ReverseTombstoneCompaction = struct {
     staging_adj: types.NodeAdj,
-    live_after: usize,
+    alive_after: usize,
 };
 
 fn collectDroppedTinyForwardRows(
@@ -106,14 +106,14 @@ fn collectDroppedTinyForwardRows(
     }.callback);
 }
 
-fn rebuildTinyForwardLive(
+fn rebuildTinyForwardAlive(
     graph: *graph_core.GraphCore,
     node_idx: u32,
     published_adj: types.NodeAdj,
     allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
     const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
-    const live_after = try countLiveTinyForwardEntries(graph, published_side);
+    const alive_after = try countAliveTinyForwardEntries(graph, published_side);
 
     var dropped_rows: std.ArrayList(u32) = .empty;
     errdefer dropped_rows.deinit(graph.allocator);
@@ -121,29 +121,29 @@ fn rebuildTinyForwardLive(
 
     var staging_adj = published_adj;
     const original_count = node_published.NodePublished.tinyCount(&published_side);
-    if (live_after == 0) {
+    if (alive_after == 0) {
         clearForwardSide(&staging_adj);
         debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
-        return .{ .staging_adj = staging_adj, .live_after = 0, .removed_count = original_count, .dropped_prop_rows = dropped_rows };
+        return .{ .staging_adj = staging_adj, .alive_after = 0, .removed_count = original_count, .dropped_prop_rows = dropped_rows };
     }
 
     const new_slot_idx = try allocs.allocTinyBlockRaw(graph, .fwd);
     const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
-    const copied_live_count = try fillLiveTinyForwardEntries(graph, published_side, new_block);
+    const copied_alive_count = try fillAliveTinyForwardEntries(graph, published_side, new_block);
 
-    writeTinyForwardSide(&staging_adj, new_slot_idx, copied_live_count);
+    writeTinyForwardSide(&staging_adj, new_slot_idx, copied_alive_count);
     debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
-    return .{ .staging_adj = staging_adj, .live_after = copied_live_count, .removed_count = original_count - copied_live_count, .dropped_prop_rows = dropped_rows };
+    return .{ .staging_adj = staging_adj, .alive_after = copied_alive_count, .removed_count = original_count - copied_alive_count, .dropped_prop_rows = dropped_rows };
 }
 
-pub fn rebuildForwardLive(
+pub fn rebuildForwardAlive(
     graph: *graph_core.GraphCore,
     node_idx: u32,
     published_adj: types.NodeAdj,
     allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
     const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
-    if (node_published.NodePublished.isTiny(&published_side)) return rebuildTinyForwardLive(graph, node_idx, published_adj, allocs);
+    if (node_published.NodePublished.isTiny(&published_side)) return rebuildTinyForwardAlive(graph, node_idx, published_adj, allocs);
 
     var result = try sorted_rebuild.sortedRebuildForward(
         graph,
@@ -170,7 +170,7 @@ pub fn rebuildForwardLive(
 
     const dropped_rows = result.dropped_prop_rows;
     result.dropped_prop_rows = .empty;
-    return .{ .staging_adj = staging_adj, .live_after = result.live_after, .removed_count = 0, .dropped_prop_rows = dropped_rows };
+    return .{ .staging_adj = staging_adj, .alive_after = result.alive_after, .removed_count = 0, .dropped_prop_rows = dropped_rows };
 }
 
 pub fn countReverseMatches(
@@ -238,5 +238,5 @@ pub fn rebuildReverseDrop(
     staging_adj.first_group_rev = rebuilt_side.first_group;
     debt_mod.updateRepairDebt(graph, &staging_adj, destination_idx, .rev);
 
-    return .{ .staging_adj = staging_adj, .live_after = result.live_after };
+    return .{ .staging_adj = staging_adj, .alive_after = result.alive_after };
 }

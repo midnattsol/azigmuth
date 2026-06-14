@@ -15,20 +15,20 @@ pub fn appendBlockShapeViolations(
 ) !void {
     if (!common.blockExists(graph, block_idx, side)) return;
 
-    const live_count = common.blockLive(graph, block_idx, side);
+    const alive_count = common.blockAlive(graph, block_idx, side);
     const id_block = if (side == .fwd and graph.multigraph_enabled)
         page_ops.edgeBlockFwdIdsAtConst(graph, block_idx)
     else
         null;
 
-    if (live_count > constants.EDGES_PER_BLOCK) {
+    if (alive_count > constants.EDGES_PER_BLOCK) {
         try violations.append(allocator, .{ .mask_bit_out_of_range = .{ .node = node_id, .block = block_idx } });
         return;
     }
 
     var prev_key: ?u32 = null;
     var prev_edge_id: u32 = 0;
-    for (0..live_count) |slot| {
+    for (0..alive_count) |slot| {
         const key = common.blockKey(graph, block_idx, slot, side);
         if (key >= graph.publishedNodeCount()) {
             try violations.append(allocator, .{ .invalid_destination = .{ .node = node_id, .block = block_idx, .slot = @intCast(slot), .destination = key } });

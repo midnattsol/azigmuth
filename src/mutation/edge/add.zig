@@ -29,21 +29,21 @@ fn prepareAppendBlockSide(
     switch (side) {
         .fwd => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .fwd);
-            if (page_ops.blockLiveCount(graph, tail_idx, .fwd) == constants.EDGES_PER_BLOCK) {
+            if (page_ops.blockAliveCount(graph, tail_idx, .fwd) == constants.EDGES_PER_BLOCK) {
                 return .{ .new_block = new_block, .tail_idx = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .fwd).* = tail_block.*;
-            page_ops.setBlockLiveCount(graph, new_block, .fwd, page_ops.blockLiveCount(graph, tail_idx, .fwd));
+            page_ops.setBlockAliveCount(graph, new_block, .fwd, page_ops.blockAliveCount(graph, tail_idx, .fwd));
             if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block).* = page_ops.edgeBlockFwdIdsAtConst(graph, tail_idx).*;
             if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block).* = page_ops.edgeBlockFwdPropsAtConst(graph, tail_idx).*;
         },
         .rev => {
             const tail_block = page_ops.edgeBlockAt(graph, tail_idx, .rev);
-            if (page_ops.blockLiveCount(graph, tail_idx, .rev) == constants.EDGES_PER_BLOCK) {
+            if (page_ops.blockAliveCount(graph, tail_idx, .rev) == constants.EDGES_PER_BLOCK) {
                 return .{ .new_block = new_block, .tail_idx = tail_idx };
             }
             page_ops.edgeBlockAt(graph, new_block, .rev).* = tail_block.*;
-            page_ops.setBlockLiveCount(graph, new_block, .rev, page_ops.blockLiveCount(graph, tail_idx, .rev));
+            page_ops.setBlockAliveCount(graph, new_block, .rev, page_ops.blockAliveCount(graph, tail_idx, .rev));
         },
     }
 
@@ -110,11 +110,11 @@ fn appendKeepsGloballySorted(
 ) bool {
     if (!sorted_before) return false;
     const prev_block = previousBlockInSide(graph, side_view, insertion_block) orelse return true;
-    const live = page_ops.blockLiveCount(graph, prev_block, side);
-    if (live == 0) return false;
+    const alive = page_ops.blockAliveCount(graph, prev_block, side);
+    if (alive == 0) return false;
     const last_key = switch (side) {
-        .fwd => page_ops.edgeBlockAtConst(graph, prev_block, .fwd).destinations[live - 1],
-        .rev => page_ops.edgeBlockAtConst(graph, prev_block, .rev).sources[live - 1],
+        .fwd => page_ops.edgeBlockAtConst(graph, prev_block, .fwd).destinations[alive - 1],
+        .rev => page_ops.edgeBlockAtConst(graph, prev_block, .rev).sources[alive - 1],
     };
     return key >= last_key;
 }

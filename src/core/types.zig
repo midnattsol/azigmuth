@@ -239,7 +239,7 @@ pub const NodeAdj = extern struct {
 /// cache-line aligned at the default 64), stored as struct-of-arrays: the
 /// contiguous destination array is the only thing neighbor scans touch, and
 /// in-block loops vectorize. Dense storage: live entries occupy slots
-/// [0, live_count) with no holes, sorted by destination. The live count
+/// [0, alive_count) with no holes, sorted by destination. The live count
 /// lives in a per-block u8 sidecar. Access goes through
 /// `storage/edge_blocks.zig`.
 pub const EdgeBlockFwd = extern struct {

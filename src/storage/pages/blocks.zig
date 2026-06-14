@@ -68,10 +68,10 @@ pub fn edgeBlockPageRaw(graph: *const graph_core.GraphCore, page_idx: u32, compt
     };
 }
 
-pub fn blockLivePageRaw(graph: *const graph_core.GraphCore, page_idx: u32, comptime side: adjacency.AdjSide) usize {
+pub fn blockAlivePageRaw(graph: *const graph_core.GraphCore, page_idx: u32, comptime side: adjacency.AdjSide) usize {
     return switch (side) {
-        .fwd => graph.edge_blocks_fwd_live_pages.load(page_idx),
-        .rev => graph.edge_blocks_rev_live_pages.load(page_idx),
+        .fwd => graph.edge_blocks_fwd_alive_pages.load(page_idx),
+        .rev => graph.edge_blocks_rev_alive_pages.load(page_idx),
     };
 }
 
@@ -152,12 +152,12 @@ fn ensureBlockPage(graph: *graph_core.GraphCore, page_idx: u32, comptime side: a
             if (graph.multigraph_enabled) _ = try common.ensurePage(graph, types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
             if (graph.edge_properties_enabled) _ = try common.ensurePage(graph, types.EdgeBlockFwdProps, &graph.edge_blocks_fwd_prop_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
             _ = try common.ensureMetaPage(graph, &graph.edge_blocks_fwd_meta_pages, page_idx);
-            _ = try common.ensurePage(graph, u8, &graph.edge_blocks_fwd_live_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
+            _ = try common.ensurePage(graph, u8, &graph.edge_blocks_fwd_alive_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
         },
         .rev => {
             _ = try common.ensurePage(graph, types.EdgeBlockRev, &graph.edge_blocks_rev_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
             _ = try common.ensureMetaPage(graph, &graph.edge_blocks_rev_meta_pages, page_idx);
-            _ = try common.ensurePage(graph, u8, &graph.edge_blocks_rev_live_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
+            _ = try common.ensurePage(graph, u8, &graph.edge_blocks_rev_alive_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
         },
     }
 }
@@ -167,24 +167,24 @@ fn ensureBlockPage(graph: *graph_core.GraphCore, page_idx: u32, comptime side: a
 /// Live-count sidecar access. The count is published together with the block
 /// under the same RCU discipline: blocks are immutable once published, so the
 /// sidecar entry of a published block never changes either.
-pub fn blockLiveCountPtr(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) *u8 {
-    return common.pageEntryAt(u8, if (side == .fwd) &graph.edge_blocks_fwd_live_pages else &graph.edge_blocks_rev_live_pages, block_idx, constants.EDGE_BLOCKS_PER_PAGE);
+pub fn blockAliveCountPtr(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) *u8 {
+    return common.pageEntryAt(u8, if (side == .fwd) &graph.edge_blocks_fwd_alive_pages else &graph.edge_blocks_rev_alive_pages, block_idx, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
-pub fn blockLiveCount(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) u7 {
-    const entry = common.pageEntryAtConst(u8, if (side == .fwd) &graph.edge_blocks_fwd_live_pages else &graph.edge_blocks_rev_live_pages, block_idx, constants.EDGE_BLOCKS_PER_PAGE);
+pub fn blockAliveCount(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) u7 {
+    const entry = common.pageEntryAtConst(u8, if (side == .fwd) &graph.edge_blocks_fwd_alive_pages else &graph.edge_blocks_rev_alive_pages, block_idx, constants.EDGE_BLOCKS_PER_PAGE);
     return @intCast(entry.*);
 }
 
-pub fn setBlockLiveCount(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide, live_count: u7) void {
-    blockLiveCountPtr(graph, block_idx, side).* = live_count;
+pub fn setBlockAliveCount(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide, alive_count: u7) void {
+    blockAliveCountPtr(graph, block_idx, side).* = alive_count;
 }
 
 /// Dense-storage block reset: only the live count needs clearing. Slots
-/// beyond [0, live) — including the id/property sidecars — are never read
+/// beyond [0, alive) — including the id/property sidecars — are never read
 /// under the dense contract, so the 0.5–1 KB per-block memset is skipped.
 fn resetBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) void {
-    setBlockLiveCount(graph, block_idx, side, 0);
+    setBlockAliveCount(graph, block_idx, side, 0);
 }
 
 fn zeroBlockRange(graph: *graph_core.GraphCore, first_block_idx: u32, end_block_idx: u32, comptime side: adjacency.AdjSide) void {
@@ -241,7 +241,7 @@ pub fn allocFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u32, compti
 }
 
 /// Like allocFreshBlockSpan but without zero-initialization. Safe when the
-/// caller fully writes the dense prefix [0, live) of every block (plus its
+/// caller fully writes the dense prefix [0, alive) of every block (plus its
 /// sidecars and live count) before publish; stale bytes beyond the live
 /// count are never read under the dense-storage contract.
 pub fn allocFreshBlockSpanRaw(graph: *graph_core.GraphCore, span_count: u32, comptime side: adjacency.AdjSide) !u32 {
@@ -390,7 +390,7 @@ fn rollbackFreeFrontier(graph: *graph_core.GraphCore, comptime side: adjacency.A
         // Fresh allocations skip zero-init, so recycled frontier blocks must
         // present zeroed live counts before they become reachable again.
         for (free_blocks.items[keep..]) |block_idx| {
-            setBlockLiveCount(graph, block_idx, side, 0);
+            setBlockAliveCount(graph, block_idx, side, 0);
         }
 
         const cas_result = switch (side) {

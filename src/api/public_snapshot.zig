@@ -7,7 +7,7 @@
 //! degrees come from one atomic publication of that node, but two different
 //! nodes may be captured around a concurrent multi-node mutation (e.g. a
 //! predecessor already reflecting a `removeNode` whose target was captured
-//! live). Serialize writers against `snapshot()` externally when a globally
+//! alive). Serialize writers against `snapshot()` externally when a globally
 //! consistent image is required.
 //!
 //! Lifetime/memory contract: while a `ReadSnapshot` is alive it pins a reader

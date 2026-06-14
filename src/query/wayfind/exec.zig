@@ -42,7 +42,7 @@ pub const Result = union(enum) {
     /// Sorted by (source, destination, prop_row); both endpoints in-set.
     edges: []ir.EdgeRow,
     /// Induced subgraph: offsets span ALL node ids (non-members empty),
-    /// targets are members only, live_words is the membership bitmap.
+    /// targets are members only, alive_node_bitmap is the membership bitmap.
     csr: snapshot_csr.CsrView,
 
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
@@ -348,12 +348,12 @@ fn forEachFwdEntry(
 
     var cursor = side_ops.BlockCursor.init(side);
     while (cursor.next(view.core)) |block_idx| {
-        const live = page_ops.blockLiveCount(view.core, block_idx, .fwd);
-        if (live == 0) continue;
+        const alive = page_ops.blockAliveCount(view.core, block_idx, .fwd);
+        if (alive == 0) continue;
         const block = page_ops.edgeBlockFwdAtConst(view.core, block_idx);
         const rows: ?*const types.EdgeBlockFwdProps =
             if (with_rows) page_ops.edgeBlockFwdPropsAtConst(view.core, block_idx) else null;
-        for (0..live) |slot| {
+        for (0..alive) |slot| {
             const destination = block.destinations[slot];
             if (destination >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(destination)) continue;
@@ -408,10 +408,10 @@ fn walkInNeighbors(
 
     var cursor = side_ops.BlockCursor.init(side);
     while (cursor.next(view.core)) |block_idx| {
-        const live = page_ops.blockLiveCount(view.core, block_idx, .rev);
-        if (live == 0) continue;
+        const alive = page_ops.blockAliveCount(view.core, block_idx, .rev);
+        if (alive == 0) continue;
         const block = page_ops.edgeBlockRevAtConst(view.core, block_idx);
-        for (block.sources[0..live]) |source| {
+        for (block.sources[0..alive]) |source| {
             try visitInCandidate(view, node_idx, rel, sink, source, len_bound, check_removed);
         }
     }
@@ -561,7 +561,7 @@ fn emitEdges(
 
 /// CSR of the induced subgraph: offsets span ALL node ids (non-members get
 /// empty ranges), targets are in-set forward destinations in adjacency
-/// order, live_words is the membership bitmap, out_rows aligned with
+/// order, alive_node_bitmap is the membership bitmap, out_rows aligned with
 /// targets when the graph has edge properties.
 fn emitCsr(
     view: *const snapshot_view.CapturedGraphView,
@@ -573,10 +573,10 @@ fn emitCsr(
 
     const out_offsets = try allocator.alloc(u64, node_count + 1);
     errdefer allocator.free(out_offsets);
-    const live_words = try allocator.alloc(u64, (node_count + 63) / 64);
-    errdefer allocator.free(live_words);
-    @memset(live_words, 0);
-    @memcpy(live_words[0..set.words.len], set.words);
+    const alive_node_bitmap = try allocator.alloc(u64, (node_count + 63) / 64);
+    errdefer allocator.free(alive_node_bitmap);
+    @memset(alive_node_bitmap, 0);
+    @memcpy(alive_node_bitmap[0..set.words.len], set.words);
 
     var out_targets: std.ArrayList(u32) = .empty;
     errdefer out_targets.deinit(allocator);
@@ -614,7 +614,7 @@ fn emitCsr(
         .node_count = @intCast(node_count),
         .out_offsets = out_offsets,
         .out_targets = try out_targets.toOwnedSlice(allocator),
-        .live_words = live_words,
+        .alive_node_bitmap = alive_node_bitmap,
         .out_rows = if (with_rows) try out_rows.toOwnedSlice(allocator) else blk: {
             out_rows.deinit(allocator);
             break :blk null;

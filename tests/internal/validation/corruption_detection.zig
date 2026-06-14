@@ -55,7 +55,7 @@ test "validation: detects live count beyond block capacity" {
     edges.relations[0] = 0;
     edges.flags[0] = 0;
     // Corrupt: live count beyond block capacity.
-    page_ops.blockLiveCountPtr(&graph.graph, block, .fwd).* = 65;
+    page_ops.blockAliveCountPtr(&graph.graph, block, .fwd).* = 65;
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(2, .release);
 
@@ -75,7 +75,7 @@ test "validation: detects invalid destinations" {
     edges.destinations[0] = 999;
     edges.relations[0] = 0;
     edges.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
     try publishForwardBlock(&graph, node, block, 1);
     graph.graph.edge_count.store(1, .release);
 
@@ -98,7 +98,7 @@ test "validation: detects unsorted blocks" {
     edges.destinations[1] = 1;
     edges.relations[1] = 0;
     edges.flags[1] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(2));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(2));
     try publishForwardBlock(&graph, .{ .index = 0 }, block, 1);
     graph.graph.edge_count.store(2, .release);
 
@@ -229,13 +229,13 @@ test "validation: detects underfull non-tail blocks" {
         first_edges.relations[edge_idx] = 0;
         first_edges.flags[edge_idx] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, first_block, .fwd, 47);
+    page_ops.setBlockAliveCount(&graph.graph, first_block, .fwd, 47);
 
     var second_edges = page_ops.edgeBlockAt(&graph.graph, second_block, .fwd);
     second_edges.destinations[0] = 48;
     second_edges.relations[0] = 0;
     second_edges.flags[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, second_block, .fwd, 1);
+    page_ops.setBlockAliveCount(&graph.graph, second_block, .fwd, 1);
 
     try publishForwardBlock(&graph, .{ .index = 0 }, first_block, 2);
     graph.graph.edge_count.store(48, .release);
@@ -253,7 +253,7 @@ test "validation: detects grouped span declared past allocated runs" {
     const block = try graph.allocBlockFwd();
     const group = try graph.allocGroup();
 
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, 0);
     page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
     try publishForwardGroups(&graph, node, group, 1, 2);
 
@@ -290,7 +290,7 @@ test "validation: detects double-owned blocks" {
     const node0 = try graph.addNode();
     const node1 = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, 0);
 
     try publishForwardBlock(&graph, node0, block, 1);
     try publishForwardBlock(&graph, node1, block, 1);
@@ -307,7 +307,7 @@ test "validation: detects owned blocks present in free list" {
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, 0);
     try publishForwardBlock(&graph, node, block, 1);
     page_ops.freeBlock(&graph.graph, block, .fwd);
 
@@ -323,7 +323,7 @@ test "validation: detects retired blocks still reachable" {
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, 0);
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, 0);
     try publishForwardBlock(&graph, node, block, 1);
     try graph.retireBlockFwd(block);
 
@@ -366,9 +366,9 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
     const rb0 = try graph.allocBlockRev();
     const rb1 = try graph.allocBlockRev();
     page_ops.edgeBlockAt(&graph.graph, rb0, .rev).sources[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, rb0, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, rb0, .rev, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, rb1, .rev).sources[0] = 0;
-    page_ops.setBlockLiveCount(&graph.graph, rb1, .rev, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, rb1, .rev, @intCast(1));
     {
         const d1 = try graph.nodeAt(.{ .index = 1 });
         publish.clearPublishedSides(d1);
@@ -405,7 +405,7 @@ fn fillBlockWithDestinations(graph: *graph_mod.Graph, block_idx: u32, first_dest
         block.relations[i] = 0;
         block.flags[i] = 0;
     }
-    page_ops.setBlockLiveCount(&graph.graph, block_idx, .fwd, @intCast(count));
+    page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
 
 test "validation: removed node entry in repair queue is currently accepted" {
@@ -572,7 +572,7 @@ test "validation: debugValidate survives invalid first_group" {
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
@@ -591,7 +591,7 @@ test "validation: debugValidate continues after malformed group span with later 
     try addNodeCount(&graph, 3);
     const node = graph_mod.NodeId{ .index = 0 };
     const block = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
@@ -614,7 +614,7 @@ test "validation: validate returns CorruptGraph for invalid first_group" {
     const node = try graph.addNode();
     _ = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    page_ops.setBlockLiveCount(&graph.graph, block, .fwd, @intCast(1));
+    page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;

@@ -181,7 +181,7 @@ test "api repair: RepairRequired is resolved by explicit repairNode" {
         try graph.addEdge(extra_sources[i], hub, 0, .{});
     }
 
-    // Drain the hub's block down to the occupancy floor (48 live).
+    // Drain the hub's block down to the occupancy floor (48 alive).
     for (fillers[0..16]) |filler| {
         _ = try graph.removeEdge(source, filler);
     }

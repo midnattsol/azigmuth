@@ -94,7 +94,7 @@ pub const SnapshotNeighborIterator = struct {
     cached_tiny_rev: ?*const node_tiny.TinyRevBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
-    cached_span_live_raw: usize = 0,
+    cached_span_alive_raw: usize = 0,
 
     check_removed_candidates: bool,
     groups_visited: u16 = 0,
@@ -152,7 +152,7 @@ pub const SnapshotNeighborIterator = struct {
         return self.nextBlockNeighborImpl(false);
     }
 
-    /// Candidate ids of the cached block from `from_slot` up to the live
+    /// Candidate ids of the cached block from `from_slot` up to the alive
     /// count, as one contiguous slice.
     fn cachedBlockCandidates(self: *const SnapshotNeighborIterator, from_slot: u7) []const u32 {
         return switch (self.direction) {
@@ -220,7 +220,7 @@ pub const SnapshotOutEdgeIterator = struct {
     cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
-    cached_span_live_raw: usize = 0,
+    cached_span_alive_raw: usize = 0,
 
     check_removed_destinations: bool,
     groups_visited: u16 = 0,
@@ -334,13 +334,13 @@ pub fn forEachNeighborInView(
         if (page_idx != cached_page) {
             cached_page = page_idx;
             blocks_raw = page_ops.edgeBlockPageRaw(view.core, page_idx, .fwd);
-            live_raw = page_ops.blockLivePageRaw(view.core, page_idx, .fwd);
+            live_raw = page_ops.blockAlivePageRaw(view.core, page_idx, .fwd);
         }
         const live_page: [*]const u8 = @ptrFromInt(live_raw);
-        const live: usize = @min(live_page[slot_in_page], constants.EDGES_PER_BLOCK);
-        if (live == 0) continue;
+        const alive: usize = @min(live_page[slot_in_page], constants.EDGES_PER_BLOCK);
+        if (alive == 0) continue;
         const blocks: [*]const types.EdgeBlockFwd = @ptrFromInt(blocks_raw);
-        for (blocks[slot_in_page].destinations[0..live]) |candidate| {
+        for (blocks[slot_in_page].destinations[0..alive]) |candidate| {
             if (candidate >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(candidate)) continue;
             try callback(context, candidate);
@@ -384,11 +384,11 @@ pub const FrameNeighborCursor = struct {
 
     fn loadNextBlock(self: *FrameNeighborCursor, view: *const snapshot_view.CapturedGraphView) bool {
         while (self.block_cursor.next(view.core)) |block_idx| {
-            const live = page_ops.blockLiveCount(view.core, block_idx, .fwd);
-            if (live == 0) continue;
+            const alive = page_ops.blockAliveCount(view.core, block_idx, .fwd);
+            if (alive == 0) continue;
             self.destinations = &page_ops.edgeBlockFwdAtConst(view.core, block_idx).destinations;
             self.current_slot = 0;
-            self.current_live = live;
+            self.current_live = alive;
             return true;
         }
         return false;

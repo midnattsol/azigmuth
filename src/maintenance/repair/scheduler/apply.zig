@@ -23,7 +23,7 @@ const RepairPreparation = struct {
 
 const RepairRebuild = struct {
     staging_adj: types.NodeAdj,
-    live_total: usize,
+    alive_total: usize,
     dropped_prop_rows: std.ArrayList(u32) = .empty,
 };
 
@@ -64,8 +64,8 @@ fn sideIsCanonical(
     const tail_block_idx = side_view.first_block + side_view.block_count - 1;
     for (side_view.first_block..tail_block_idx) |block_idx_usize| {
         const block_idx: u32 = @intCast(block_idx_usize);
-        const live = page_ops.blockLiveCount(graph, block_idx, side);
-        if (live != constants.EDGES_PER_BLOCK) return false;
+        const alive = page_ops.blockAliveCount(graph, block_idx, side);
+        if (alive != constants.EDGES_PER_BLOCK) return false;
     }
     return true;
 }
@@ -116,18 +116,18 @@ fn rebuildTinyReverseSideForRepair(
     const count = node_published.NodePublished.tinyCount(published_side);
     const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .rev);
 
-    var live_total: u16 = 0;
+    var alive_total: u16 = 0;
     for (0..count) |entry_idx| {
         const source_idx = slot.sources[entry_idx];
         if (source_idx < graph.publishedNodeCount() and !node_validity.isNodeRemovedIndex(graph, source_idx)) {
-            live_total += 1;
+            alive_total += 1;
         }
     }
 
     var staging_adj = published_adj.*;
-    if (live_total == 0) {
+    if (alive_total == 0) {
         side_adj.writeSide(&staging_adj, .rev, std.mem.zeroes(types.SideAdj));
-        return .{ .staging_adj = staging_adj, .live_total = 0 };
+        return .{ .staging_adj = staging_adj, .alive_total = 0 };
     }
 
     const new_slot_idx = try page_ops.allocTinyBlockRaw(graph, .rev);
@@ -141,7 +141,7 @@ fn rebuildTinyReverseSideForRepair(
     }
 
     side_adj.writeSide(&staging_adj, .rev, node_published.NodePublished.makeTiny(new_slot_idx, write_idx));
-    return .{ .staging_adj = staging_adj, .live_total = write_idx };
+    return .{ .staging_adj = staging_adj, .alive_total = write_idx };
 }
 
 fn rebuildSideForRepair(
@@ -174,7 +174,7 @@ fn rebuildSideForRepair(
     sorted.dropped_prop_rows = .empty;
     return .{
         .staging_adj = staging_adj,
-        .live_total = sorted.live_after,
+        .alive_total = sorted.alive_after,
         .dropped_prop_rows = dropped_rows,
     };
 }
@@ -183,13 +183,13 @@ fn repairedDegrees(
     graph: *const graph_core.GraphCore,
     node: types.NodeId,
     meta: types.PublishedMeta,
-    live_total: usize,
+    alive_total: usize,
     comptime side: adjacency.AdjSide,
 ) PublishedDegrees {
-    const new_live: u32 = @intCast(live_total);
+    const new_alive_count: u32 = @intCast(alive_total);
     return switch (side) {
-        .fwd => .{ .fwd = new_live, .rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta) },
-        .rev => .{ .fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta), .rev = new_live },
+        .fwd => .{ .fwd = new_alive_count, .rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta) },
+        .rev => .{ .fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta), .rev = new_alive_count },
     };
 }
 
@@ -224,12 +224,12 @@ fn publishRepairedSide(
     published_adj: types.NodeAdj,
     staging_adj: *types.NodeAdj,
     node_idx: u32,
-    live_total: usize,
+    alive_total: usize,
     comptime side: adjacency.AdjSide,
 ) !usize {
     debt_mod.updateRepairDebt(graph, staging_adj, node_idx, side);
     const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
-    const degrees = repairedDegrees(graph, .{ .index = node_idx }, meta, live_total, side);
+    const degrees = repairedDegrees(graph, .{ .index = node_idx }, meta, alive_total, side);
 
     try publishRepairedAdjacency(graph, node_idx, staging_adj.*, degrees, side);
 
@@ -258,7 +258,7 @@ fn repairPublishedSide(
 
     var rebuild = try rebuildSideForRepair(graph, &published_side, &published_adj, side);
     defer rebuild.dropped_prop_rows.deinit(graph.allocator);
-    _ = try publishRepairedSide(graph, published_adj, &rebuild.staging_adj, node_idx, rebuild.live_total, side);
+    _ = try publishRepairedSide(graph, published_adj, &rebuild.staging_adj, node_idx, rebuild.alive_total, side);
     for (rebuild.dropped_prop_rows.items) |row| rcu.retirePropRow(graph, row);
     outcome.repaired = true;
     outcome.left_repair_debt = sideFlagAfter(graph, node_idx, side);

@@ -100,8 +100,8 @@ pub fn emitSection(core: *const graph_core.GraphCore, id: format.SectionId, sink
         .node_records => emitNodeRecords(core, sink),
         .blocks_fwd => emitBlockPages(core, sink, .fwd),
         .blocks_rev => emitBlockPages(core, sink, .rev),
-        .live_fwd => emitLivePages(core, sink, .fwd),
-        .live_rev => emitLivePages(core, sink, .rev),
+        .alive_fwd => emitLivePages(core, sink, .fwd),
+        .alive_rev => emitLivePages(core, sink, .rev),
         .edge_ids_fwd => emitEdgeIdPages(core, sink),
         .prop_rows_fwd => emitPropRowPages(core, sink),
         .groups => emitGroupPages(core, sink),
@@ -153,8 +153,8 @@ fn emitBlockPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, c
     @panic("TODO: emitBlockPages");
 }
 
-/// Emits the u8 live-count sidecar pages for `side`, same page walk as
-/// emitBlockPages (page_ops.blockLivePageRaw).
+/// Emits the u8 alive-count sidecar pages for `side`, same page walk as
+/// emitBlockPages (page_ops.blockAlivePageRaw).
 fn emitLivePages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
     _ = core;
     _ = sink;

@@ -43,7 +43,7 @@ pub const NeighborIterator = struct {
     cached_tiny_rev: ?*const node_tiny.TinyRevBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
-    cached_span_live_raw: usize = 0,
+    cached_span_alive_raw: usize = 0,
     cached_node_page_idx: u32 = constants.END_OF_CHAIN,
     cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
 

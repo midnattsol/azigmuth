@@ -131,7 +131,7 @@ fn buildForwardSide(
             if (graph.multigraph_enabled) id_block.ids[slot] = entry.edge_id;
             if (graph.edge_properties_enabled) prop_block.rows[slot] = entry.prop_row;
         }
-        page_ops.setBlockLiveCount(graph, emit_block_idx, .fwd, @intCast(take));
+        page_ops.setBlockAliveCount(graph, emit_block_idx, .fwd, @intCast(take));
         remaining = remaining[take..];
     }
     _ = source;
@@ -191,7 +191,7 @@ fn buildReverseSide(
         const take = @min(remaining.len, constants.EDGES_PER_BLOCK);
         const block = page_ops.edgeBlockAt(graph, emit_block_idx, .rev);
         for (remaining[0..take], 0..) |source_idx, slot| block.sources[slot] = source_idx;
-        page_ops.setBlockLiveCount(graph, emit_block_idx, .rev, @intCast(take));
+        page_ops.setBlockAliveCount(graph, emit_block_idx, .rev, @intCast(take));
         remaining = remaining[take..];
     }
     return .{ .first_block = first_block_idx, .block_count = span_count, .group_count = 0, .first_group = 0 };

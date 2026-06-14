@@ -212,9 +212,9 @@ test "group chain: validate does not hang on cyclic chain with forward tombstone
     const published_fwd = src_buf.publishedFwd();
     if (published_fwd.block_count > 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, published_fwd.first_block, .fwd);
-        const live: u7 = @intCast(page_ops.blockLiveCount(&graph.graph, published_fwd.first_block, .fwd));
+        const alive: u7 = @intCast(page_ops.blockAliveCount(&graph.graph, published_fwd.first_block, .fwd));
         // Overwrite the first entry to point to the removed node.
-        if (live > 0) {
+        if (alive > 0) {
             block.destinations[0] = removed.index;
         }
     }
@@ -267,8 +267,8 @@ test "group chain: debugValidate terminates on cyclic chain with tombstone" {
     const published_fwd = src_buf.publishedFwd();
     if (published_fwd.block_count > 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, published_fwd.first_block, .fwd);
-        const live: u7 = @intCast(page_ops.blockLiveCount(&graph.graph, published_fwd.first_block, .fwd));
-        if (live > 0) {
+        const alive: u7 = @intCast(page_ops.blockAliveCount(&graph.graph, published_fwd.first_block, .fwd));
+        if (alive > 0) {
             block.destinations[0] = removed.index;
         }
     }

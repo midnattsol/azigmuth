@@ -11,7 +11,7 @@ const remove_finalize = @import("finalize.zig");
 
 pub const RemovalPlan = struct {
     found: common.AdjSlot,
-    live_before: u7,
+    alive_before: u7,
 };
 
 pub const SingleRemovalPlans = struct {
@@ -82,39 +82,39 @@ pub fn applyRemovalPlanSide(
     const old_block = plan.found.block_idx;
     const new_block = try scratch.allocBlock(graph, side);
     if (new_block == old_block) return error.CorruptGraph;
-    const new_live: u7 = switch (side) {
-        .fwd => copyForwardBlockWithoutSlot(graph, old_block, new_block, plan.found.slot, plan.live_before),
-        .rev => copyReverseBlockWithoutSlot(graph, old_block, new_block, plan.found.slot, plan.live_before),
+    const new_alive_count: u7 = switch (side) {
+        .fwd => copyForwardBlockWithoutSlot(graph, old_block, new_block, plan.found.slot, plan.alive_before),
+        .rev => copyReverseBlockWithoutSlot(graph, old_block, new_block, plan.found.slot, plan.alive_before),
     };
 
     if (published_side.block_count == 1) {
-        if (new_live == 0) {
+        if (new_alive_count == 0) {
             staging_side.first_block = 0;
             staging_side.block_count = 0;
             staging_side.group_count = 0;
             staging_side.first_group = 0;
-            return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
+            return .{ .old_block = old_block, .new_block = new_block, .new_alive_count = new_alive_count };
         }
 
         staging_side.first_block = new_block;
         staging_side.block_count = 1;
         staging_side.group_count = 0;
         staging_side.first_group = 0;
-        return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
+        return .{ .old_block = old_block, .new_block = new_block, .new_alive_count = new_alive_count };
     }
 
     const tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, published_side)) orelse return error.CorruptGraph;
     if (plan.found.block_idx == tail_idx) {
-        if (try local_repair.removeTailBlock(graph, staging_side, published_side, new_block, new_live, scratch)) {
-            return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
+        if (try local_repair.removeTailBlock(graph, staging_side, published_side, new_block, new_alive_count, scratch)) {
+            return .{ .old_block = old_block, .new_block = new_block, .new_alive_count = new_alive_count };
         }
     }
 
     if (!allow_structural_rebuild) return error.RepairRequired;
 
-    try structural_rebuild.rebuildAfterSingleRemoval(graph, staging_side, published_side, old_block, if (new_live > 0) new_block else null, side, scratch);
+    try structural_rebuild.rebuildAfterSingleRemoval(graph, staging_side, published_side, old_block, if (new_alive_count > 0) new_block else null, side, scratch);
 
-    return .{ .old_block = old_block, .new_block = new_block, .new_live = new_live };
+    return .{ .old_block = old_block, .new_block = new_block, .new_alive_count = new_alive_count };
 }
 
 pub fn planRemovalSide(
@@ -123,15 +123,15 @@ pub fn planRemovalSide(
     found: common.AdjSlot,
     comptime side: adjacency.AdjSide,
 ) !RemovalPlan {
-    const live_before: u7 = switch (side) {
-        .fwd => @intCast(page_ops.blockLiveCount(graph, found.block_idx, .fwd)),
-        .rev => @intCast(page_ops.blockLiveCount(graph, found.block_idx, .rev)),
+    const alive_before: u7 = switch (side) {
+        .fwd => @intCast(page_ops.blockAliveCount(graph, found.block_idx, .fwd)),
+        .rev => @intCast(page_ops.blockAliveCount(graph, found.block_idx, .rev)),
     };
-    const new_live: u7 = live_before - 1;
+    const new_alive_count: u7 = alive_before - 1;
     const tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, side_adj)) orelse return error.CorruptGraph;
     const is_tail = found.block_idx == tail_idx;
-    if (!is_tail and new_live < constants.MIN_OCCUPANCY) return error.RepairRequired;
-    return .{ .found = found, .live_before = live_before };
+    if (!is_tail and new_alive_count < constants.MIN_OCCUPANCY) return error.RepairRequired;
+    return .{ .found = found, .alive_before = alive_before };
 }
 
 fn ensureRemovalFastPathAllowed(
@@ -151,7 +151,7 @@ fn copyForwardBlockWithoutSlot(
     old_block: u32,
     new_block: u32,
     slot: u7,
-    live_before: u7,
+    alive_before: u7,
 ) u7 {
     const block_before = page_ops.edgeBlockAtConst(graph, old_block, .fwd);
     page_ops.edgeBlockAt(graph, new_block, .fwd).* = block_before.*;
@@ -167,7 +167,7 @@ fn copyForwardBlockWithoutSlot(
     const id_block = if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, new_block) else undefined;
     const prop_block = if (graph.edge_properties_enabled) page_ops.edgeBlockFwdPropsAt(graph, new_block) else undefined;
     var shift: u7 = slot;
-    while (shift < live_before - 1) : (shift += 1) {
+    while (shift < alive_before - 1) : (shift += 1) {
         block.destinations[shift] = block.destinations[shift + 1];
         block.relations[shift] = block.relations[shift + 1];
         block.flags[shift] = block.flags[shift + 1];
@@ -175,9 +175,9 @@ fn copyForwardBlockWithoutSlot(
         if (graph.edge_properties_enabled) prop_block.rows[shift] = prop_block.rows[shift + 1];
     }
 
-    const new_live: u7 = live_before - 1;
-    page_ops.setBlockLiveCount(graph, new_block, .fwd, @intCast(new_live));
-    return new_live;
+    const new_alive_count: u7 = alive_before - 1;
+    page_ops.setBlockAliveCount(graph, new_block, .fwd, @intCast(new_alive_count));
+    return new_alive_count;
 }
 
 fn copyReverseBlockWithoutSlot(
@@ -185,16 +185,16 @@ fn copyReverseBlockWithoutSlot(
     old_block: u32,
     new_block: u32,
     slot: u7,
-    live_before: u7,
+    alive_before: u7,
 ) u7 {
     const block_before = page_ops.edgeBlockAtConst(graph, old_block, .rev);
     page_ops.edgeBlockAt(graph, new_block, .rev).* = block_before.*;
 
     const block = page_ops.edgeBlockAt(graph, new_block, .rev);
     var shift: u7 = slot;
-    while (shift < live_before - 1) : (shift += 1) block.sources[shift] = block.sources[shift + 1];
+    while (shift < alive_before - 1) : (shift += 1) block.sources[shift] = block.sources[shift + 1];
 
-    const new_live: u7 = live_before - 1;
-    page_ops.setBlockLiveCount(graph, new_block, .rev, @intCast(new_live));
-    return new_live;
+    const new_alive_count: u7 = alive_before - 1;
+    page_ops.setBlockAliveCount(graph, new_block, .rev, @intCast(new_alive_count));
+    return new_alive_count;
 }
