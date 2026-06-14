@@ -70,7 +70,7 @@ pub const ValidateError = anyerror;
 /// `format.validateHeader` (magic, version, params vs the running comptime
 /// profile, header checksum).
 pub fn parseHeader(raw_header_block: *const [format.HEADER_BYTES]u8) ValidateError!format.FileHeader {
-    const header: format.FileHeader = undefined;
+    var header: format.FileHeader = undefined;
     @memcpy(std.mem.asBytes(&header), raw_header_block[0..@sizeOf(format.FileHeader)]);
     try format.validateHeader(header, raw_header_block);
     return header;
@@ -81,7 +81,7 @@ pub fn parseSectionTable(
     header: format.FileHeader,
     raw_table: *const [format.SECTION_TABLE_BYTES]u8,
 ) ValidateError![format.MAX_SECTIONS]format.SectionDescriptor {
-    const table: [format.MAX_SECTIONS]format.SectionDescriptor = undefined;
+    var table: [format.MAX_SECTIONS]format.SectionDescriptor = undefined;
     @memcpy(std.mem.asBytes(&table), raw_table);
     try format.validateSectionTable(header, &table);
     return table;
@@ -92,7 +92,7 @@ pub fn parseSectionTable(
 pub fn checkSectionsAgainstFileLen(table: *const [format.MAX_SECTIONS]format.SectionDescriptor, file_len: u64) ValidateError!void {
     for (table.*) |descriptor| {
         if (descriptor.byte_len == 0) continue;
-        const end = try std.math.add(descriptor.file_offset, descriptor.byte_len);
+        const end = try std.math.add(u64, descriptor.file_offset, descriptor.byte_len);
         if (file_len < end) return error.TruncatedFile;
     }
 }

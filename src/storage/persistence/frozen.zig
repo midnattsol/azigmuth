@@ -58,7 +58,7 @@ pub const FrozenGraph = struct {
         const bytes = try std.posix.mmap(
             null,
             file_size,
-            std.posix.PROT.READ,
+            std.posix.PROT{ .READ = true },
             std.posix.MAP{ .TYPE = .PRIVATE },
             file.handle,
             0,
@@ -150,7 +150,7 @@ pub const FrozenGraph = struct {
             .fwd => .blocks_fwd,
             .rev => .blocks_rev,
         });
-        const ptr: *const switch (side) {
+        const ptr: [*]const switch (side) {
             .fwd => types.EdgeBlockFwd,
             .rev => types.EdgeBlockRev,
         } = @ptrCast(@alignCast(bytes.ptr));
@@ -178,7 +178,7 @@ pub const FrozenGraph = struct {
             .fwd => .tiny_fwd,
             .rev => .tiny_rev,
         });
-        const ptr: *const switch (side) {
+        const ptr: [*]const switch (side) {
             .fwd => node_tiny.TinyFwdBlock,
             .rev => node_tiny.TinyRevBlock,
         } = @ptrCast(@alignCast(bytes.ptr));
@@ -304,7 +304,7 @@ pub const FrozenGraph = struct {
 
     pub const NeighborIterator = struct {
         frozen: *const FrozenGraph,
-        direction: enum { fwd, rev },
+        direction: adjacency.AdjSide,
 
         // Tiny mode
         tiny_mode: bool,
