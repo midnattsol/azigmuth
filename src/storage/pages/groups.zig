@@ -36,7 +36,7 @@ fn ensureGroupPage(graph: *graph_core.GraphCore, page_idx: u32) !void {
     _ = try ensureGroupMetaPage(graph, page_idx);
 }
 
-fn ensureGroupCapacity(graph: *graph_core.GraphCore, required_group_count: u32) !void {
+pub fn ensureGroupCapacity(graph: *graph_core.GraphCore, required_group_count: u32) !void {
     if (required_group_count == 0) return;
 
     const last_page_idx = common.pageOf(required_group_count - 1, constants.EDGE_GROUPS_PER_PAGE);

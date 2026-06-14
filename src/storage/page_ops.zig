@@ -48,6 +48,7 @@ pub const tinyBlockAt = tiny.tinyBlockAt;
 pub const tinyBlockAtConst = tiny.tinyBlockAtConst;
 pub const allocTinyBlock = tiny.allocTinyBlock;
 pub const allocTinyBlockRaw = tiny.allocTinyBlockRaw;
+pub const ensureTinyCapacity = tiny.ensureTinyCapacity;
 
 // ── property rows ────────────────────────────────────────────────────
 pub const freePropRow = prop_rows.freePropRow;
@@ -85,6 +86,7 @@ pub const reclaimRetired = blocks.reclaimRetired;
 // ── grouped runs ─────────────────────────────────────────────────────
 pub const edgeBlockGroupAt = groups.edgeBlockGroupAt;
 pub const edgeBlockGroupAtConst = groups.edgeBlockGroupAtConst;
+pub const ensureGroupCapacity = groups.ensureGroupCapacity;
 pub const allocGroupSpan = groups.allocGroupSpan;
 pub const allocGroup = groups.allocGroup;
 pub const freeGroupSpan = groups.freeGroupSpan;

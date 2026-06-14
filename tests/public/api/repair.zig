@@ -139,6 +139,10 @@ test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
 
     const worker = Worker{ .graph = graph, .stop = &stop, .successes = &success_count };
     const worker_thread = try std.Thread.spawn(.{}, Worker.run, .{worker});
+    errdefer {
+        stop.store(true, .release);
+        worker_thread.join();
+    }
 
     var attempt: usize = 0;
     while (attempt < 5000) : (attempt += 1) {

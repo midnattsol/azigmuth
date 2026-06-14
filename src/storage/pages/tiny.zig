@@ -162,3 +162,27 @@ fn allocFreshTinyRevBlock(graph: *graph_core.GraphCore) !u32 {
         }
     }
 }
+
+/// Ensures tiny-block pages exist for `required_slot_count` slots on the
+/// given side, following the same frontier-invariant strategy as
+/// `ensureBlockCapacity`.
+pub fn ensureTinyCapacity(graph: *graph_core.GraphCore, required_slot_count: u32, comptime side: adjacency.AdjSide) !void {
+    if (required_slot_count == 0) return;
+
+    const per_page = switch (side) {
+        .fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
+        .rev => node_tiny.TINY_BLOCKS_REV_PER_PAGE,
+    };
+    const last_page_idx = common.pageOf(required_slot_count - 1, per_page);
+    const frontier = switch (side) {
+        .fwd => graph.loadTinyFwdCount(),
+        .rev => graph.loadTinyRevCount(),
+    };
+    var page_idx: u32 = common.pageOf(frontier, per_page);
+    while (page_idx <= last_page_idx) : (page_idx += 1) {
+        switch (side) {
+            .fwd => _ = try ensureTinyFwdPage(graph, page_idx),
+            .rev => _ = try ensureTinyRevPage(graph, page_idx),
+        }
+    }
+}
