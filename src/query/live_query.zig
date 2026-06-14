@@ -63,7 +63,7 @@ pub fn edgePropertyRow(core: *graph_core.GraphCore, source: types.NodeId, destin
     ) orelse return null;
 
     if (node_published.NodePublished.isTiny(&side)) {
-        return page_ops.tinyFwdAtConst(core, side.first_block).entries[found.slot].prop_row;
+        return page_ops.tinyBlockAtConst(core, side.first_block, .fwd).entries[found.slot].prop_row;
     }
     return page_ops.edgeBlockFwdPropsAtConst(core, found.block_idx).rows[found.slot];
 }

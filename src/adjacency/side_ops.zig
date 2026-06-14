@@ -112,10 +112,10 @@ pub fn readNodeIdAtSlot(
     comptime side: adjacency.AdjSide,
 ) u32 {
     if ((block_idx & TINY_SLOT_TAG) != 0) {
-        const tiny_slot_idx = block_idx & ~TINY_SLOT_TAG;
+        const tiny_block_idx = block_idx & ~TINY_SLOT_TAG;
         return switch (side) {
-            .fwd => page_ops.tinyFwdAtConst(graph, tiny_slot_idx).entries[slot].destination,
-            .rev => page_ops.tinyRevAtConst(graph, tiny_slot_idx).sources[slot],
+            .fwd => page_ops.tinyBlockAtConst(graph, tiny_block_idx, .fwd).entries[slot].destination,
+            .rev => page_ops.tinyBlockAtConst(graph, tiny_block_idx, .rev).sources[slot],
         };
     }
 
@@ -145,7 +145,7 @@ pub fn readForwardEntryAtSlot(
 ) ForwardEntryView {
     if ((block_idx & TINY_SLOT_TAG) != 0) {
         const tagged_block_idx = block_idx;
-        const entry = page_ops.tinyFwdAtConst(graph, block_idx & ~TINY_SLOT_TAG).entries[slot];
+        const entry = page_ops.tinyBlockAtConst(graph, block_idx & ~TINY_SLOT_TAG, .fwd).entries[slot];
         return .{
             .block_idx = tagged_block_idx,
             .slot = slot,
@@ -184,11 +184,11 @@ pub fn forEachNodeIdInSide(
         const count = node_published_mod.NodePublished.tinyCount(&side_adj);
         switch (side) {
             .fwd => {
-                const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+                const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
                 for (0..count) |entry_idx| try callback(graph, context, slot.entries[entry_idx].destination);
             },
             .rev => {
-                const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+                const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
                 for (0..count) |entry_idx| try callback(graph, context, slot.sources[entry_idx]);
             },
         }
@@ -296,7 +296,7 @@ pub fn retireSide(
 ) !void {
     const side_view = sideAdjOfNode(adj_before, side);
     if (node_published_mod.NodePublished.isTiny(&side_view)) {
-        rcu.retireTinySlot(graph, side_view.first_block, side);
+        rcu.retireTinyBlock(graph, side_view.first_block, side);
         return;
     }
     try side_runs.retireSide(graph, side_view, side);
@@ -419,7 +419,7 @@ pub fn findSlotInAdj(
     if (node_published_mod.NodePublished.isTiny(&side_view)) {
         switch (side) {
             .fwd => {
-                const slot = page_ops.tinyFwdAtConst(graph, first_block_idx);
+                const slot = page_ops.tinyBlockAtConst(graph, first_block_idx, .fwd);
                 const count = node_published_mod.NodePublished.tinyCount(&side_view);
                 for (0..count) |entry_idx| {
                     if (slot.entries[entry_idx].destination == target) {
@@ -428,7 +428,7 @@ pub fn findSlotInAdj(
                 }
             },
             .rev => {
-                const slot = page_ops.tinyRevAtConst(graph, first_block_idx);
+                const slot = page_ops.tinyBlockAtConst(graph, first_block_idx, .rev);
                 const count = node_published_mod.NodePublished.tinyCount(&side_view);
                 for (0..count) |entry_idx| {
                     if (slot.sources[entry_idx] == target) {

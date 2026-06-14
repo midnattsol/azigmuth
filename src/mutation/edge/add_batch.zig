@@ -99,8 +99,8 @@ fn buildForwardSide(
     // Small result: keep the tiny representation.
     const tiny_cap: usize = if (graph.multigraph_enabled) @import("../../core/tiny_config.zig").TINY_FWD_CAP_MULTI else @import("../../core/tiny_config.zig").TINY_FWD_CAP_SIMPLE;
     if (total <= tiny_cap) {
-        const slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
-        const slot = page_ops.tinyFwdAt(graph, slot_idx);
+        const slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
+        const slot = page_ops.tinyBlockAt(graph, slot_idx, .fwd);
         for (entries.items, 0..) |entry, entry_idx| {
             slot.entries[entry_idx] = .{
                 .destination = entry.destination_idx,
@@ -148,8 +148,8 @@ fn buildReverseSide(
     // Fast path for the dominant fan-out shape: previously isolated
     // destination, few incoming copies — fill a tiny slot directly.
     if (published_side.block_count == 0 and added <= @import("../../core/tiny_config.zig").TINY_REV_CAP) {
-        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
-        const slot = page_ops.tinyRevAt(graph, slot_idx);
+        const slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
+        const slot = page_ops.tinyBlockAt(graph, slot_idx, .rev);
         for (0..added) |entry_idx| slot.sources[entry_idx] = source.index;
         return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(added));
     }
@@ -175,8 +175,8 @@ fn buildReverseSide(
     if (total > constants.MAX_DEGREE_PER_SIDE) return error.DegreeLimitReached;
 
     if (total <= @import("../../core/tiny_config.zig").TINY_REV_CAP) {
-        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
-        const slot = page_ops.tinyRevAt(graph, slot_idx);
+        const slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
+        const slot = page_ops.tinyBlockAt(graph, slot_idx, .rev);
         for (sources.items, 0..) |source_idx, entry_idx| slot.sources[entry_idx] = source_idx;
         return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(total));
     }

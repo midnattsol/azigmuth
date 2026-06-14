@@ -19,8 +19,8 @@ test "rcu: tiny slot churn stays bounded under retire + reclaim" {
     // Every add/remove on a tiny side copies into a fresh slot and retires the
     // old one. With reclaim running, retired slots must return to the free
     // stack and be reused instead of growing the bump counters monotonically.
-    try testing.expect(graph.graph.tiny_fwd_count < 64);
-    try testing.expect(graph.graph.tiny_rev_count < 64);
+    try testing.expect(graph.graph.tiny_block_fwd_count < 64);
+    try testing.expect(graph.graph.tiny_block_rev_count < 64);
 }
 
 test "rcu: retired tiny slot is not reused while a reader is pinned" {
@@ -40,11 +40,11 @@ test "rcu: retired tiny slot is not reused while a reader is pinned" {
     try graph.addEdge(source, destination_b, 0, 0);
     graph.reclaimRetired();
 
-    const before_count = graph.graph.tiny_fwd_count;
+    const before_count = graph.graph.tiny_block_fwd_count;
     try graph.addEdge(destination_a, destination_b, 0, 0);
     // The retired slot from the pinned epoch must not have been recycled into
     // this allocation; a fresh slot (or a safely freed one) must be used.
-    try testing.expect(graph.graph.tiny_fwd_count >= before_count);
+    try testing.expect(graph.graph.tiny_block_fwd_count >= before_count);
 
     graph.readerExit(token);
     graph.reclaimRetired();

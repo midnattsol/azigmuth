@@ -128,8 +128,8 @@ pub const MutationScratch = struct {
     /// stack on cleanup — no epoch wait is needed.
     pub fn allocTinySlot(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
         const slot_idx = switch (side) {
-            .fwd => try page_ops.allocTinyFwdSlot(graph),
-            .rev => try page_ops.allocTinyRevSlot(graph),
+            .fwd => try page_ops.allocTinyBlock(graph, .fwd),
+            .rev => try page_ops.allocTinyBlock(graph, .rev),
         };
         const list = switch (side) {
             .fwd => &self.tiny_fwd_slots,
@@ -144,10 +144,10 @@ pub const MutationScratch = struct {
 
     /// Tracked tiny-slot allocation without zero-init, for callers that
     /// fully overwrite the slot (clone-and-mutate paths).
-    pub fn allocTinySlotRaw(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+    pub fn allocTinyBlockRaw(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
         const slot_idx = switch (side) {
-            .fwd => try page_ops.allocTinyFwdSlotRaw(graph),
-            .rev => try page_ops.allocTinyRevSlotRaw(graph),
+            .fwd => try page_ops.allocTinyBlockRaw(graph, .fwd),
+            .rev => try page_ops.allocTinyBlockRaw(graph, .rev),
         };
         const list = switch (side) {
             .fwd => &self.tiny_fwd_slots,

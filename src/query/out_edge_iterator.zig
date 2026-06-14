@@ -29,14 +29,14 @@ pub const OutEdgeIterator = struct {
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_slot: u32 = 0,
+    tiny_block: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
@@ -144,7 +144,7 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_slot = cursor_init.tiny.tiny_slot,
+        .tiny_block = cursor_init.tiny.tiny_block,
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_destinations = capture.node_adj_snapshot.flags.needs_repair_fwd,
         .reader_active = true,
@@ -154,7 +154,7 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
     };
 
     if (iterator.tiny_mode) {
-        iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(graph, iterator.tiny_slot);
+        iterator.cached_tiny_fwd = page_ops.tinyBlockAtConst(graph, iterator.tiny_block, .fwd);
     }
     side_traversal.primeGroupedTraversal(&iterator, graph);
 

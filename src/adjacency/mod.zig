@@ -137,7 +137,7 @@ pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: typ
     if (side_adj.block_count == 0) return false;
     try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
     if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             if (slot.entries[entry_idx].destination == target) return true;
@@ -248,7 +248,7 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
 }
 
 pub fn findTinyForwardSlotById(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, destination_idx: u32, edge_id: u32) ?u7 {
-    const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+    const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
     const count = node_published.NodePublished.tinyCount(&side_adj);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
@@ -296,7 +296,7 @@ pub fn countForwardDestinationMatchesChecked(
     try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
 
     if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyFwdAtConst(graph, first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side_adj);
         var total_tiny: u32 = 0;
         for (0..count) |entry_idx| {

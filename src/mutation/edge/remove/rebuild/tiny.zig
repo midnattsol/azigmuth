@@ -14,7 +14,7 @@ pub fn rebuildTinyForwardRemoveAll(
     scratch: *mutation_scratch.MutationScratch,
 ) !common.ForwardRemovalResult {
     const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyFwdAtConst(graph, published_side.first_block);
+    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .fwd);
     var removed: u32 = 0;
     for (0..count) |entry_idx| {
         if (slot.entries[entry_idx].destination == destination_idx) removed += 1;
@@ -30,13 +30,13 @@ pub fn rebuildTinyForwardRemoveAll(
     const remaining = count - @as(u16, @intCast(removed));
     if (remaining == 0) return .{ .new_side = std.mem.zeroes(types.SideAdj), .removed = removed };
 
-    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
-    const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
+    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
+    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
         if (entry.destination == destination_idx) continue;
-        new_slot.entries[write_idx] = entry;
+        new_block.entries[write_idx] = entry;
         write_idx += 1;
     }
     return .{ .new_side = node_published.NodePublished.makeTiny(new_slot_idx, remaining), .removed = removed };
@@ -50,7 +50,7 @@ pub fn rebuildTinyReverseRemoveCount(
     scratch: *mutation_scratch.MutationScratch,
 ) !types.SideAdj {
     const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyRevAtConst(graph, published_side.first_block);
+    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .rev);
     var matches: u32 = 0;
     for (0..count) |entry_idx| {
         if (slot.sources[entry_idx] == source_idx) matches += 1;
@@ -59,8 +59,8 @@ pub fn rebuildTinyReverseRemoveCount(
     const remaining = count - @as(u16, @intCast(remove_count));
     if (remaining == 0) return std.mem.zeroes(types.SideAdj);
 
-    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
-    const new_slot = page_ops.tinyRevAt(graph, new_slot_idx);
+    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
+    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .rev);
     var skipped: u32 = 0;
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
@@ -69,7 +69,7 @@ pub fn rebuildTinyReverseRemoveCount(
             skipped += 1;
             continue;
         }
-        new_slot.sources[write_idx] = value;
+        new_block.sources[write_idx] = value;
         write_idx += 1;
     }
     return node_published.NodePublished.makeTiny(new_slot_idx, remaining);
@@ -83,19 +83,19 @@ pub fn rebuildTinyForwardRemoveOneById(
     scratch: *mutation_scratch.MutationScratch,
 ) !?types.SideAdj {
     const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyFwdAtConst(graph, published_side.first_block);
+    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .fwd);
     const removal_idx = adjacency.findTinyForwardSlotById(graph, published_side.*, destination_idx, edge_id) orelse return null;
     if (graph.edge_properties_enabled) {
         try scratch.markRetirePropRow(graph.allocator, slot.entries[removal_idx].prop_row);
     }
     if (count == 1) return std.mem.zeroes(types.SideAdj);
 
-    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
-    const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
+    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
+    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
         if (entry_idx == removal_idx) continue;
-        new_slot.entries[write_idx] = slot.entries[entry_idx];
+        new_block.entries[write_idx] = slot.entries[entry_idx];
         write_idx += 1;
     }
     return node_published.NodePublished.makeTiny(new_slot_idx, count - 1);

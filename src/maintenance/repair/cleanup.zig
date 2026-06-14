@@ -41,10 +41,10 @@ fn countLiveTinyForwardEntries(
 fn fillLiveTinyForwardEntries(
     graph: *const graph_core.GraphCore,
     published_side: types.SideAdj,
-    slot: *node_tiny.TinyFwdSlot,
+    slot: *node_tiny.TinyFwdBlock,
 ) !u16 {
     const FillContext = struct {
-        slot: *node_tiny.TinyFwdSlot,
+        slot: *node_tiny.TinyFwdBlock,
         write_idx: u16 = 0,
     };
 
@@ -127,9 +127,9 @@ fn rebuildTinyForwardLive(
         return .{ .staging_adj = staging_adj, .live_after = 0, .removed_count = original_count, .dropped_prop_rows = dropped_rows };
     }
 
-    const new_slot_idx = try allocs.allocTinySlotRaw(graph, .fwd);
-    const new_slot = page_ops.tinyFwdAt(graph, new_slot_idx);
-    const copied_live_count = try fillLiveTinyForwardEntries(graph, published_side, new_slot);
+    const new_slot_idx = try allocs.allocTinyBlockRaw(graph, .fwd);
+    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
+    const copied_live_count = try fillLiveTinyForwardEntries(graph, published_side, new_block);
 
     writeTinyForwardSide(&staging_adj, new_slot_idx, copied_live_count);
     debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);

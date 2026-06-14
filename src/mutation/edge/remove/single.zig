@@ -16,7 +16,7 @@ pub fn findReverseMatchForSingleRemoval(
     reverse_sorted: bool,
 ) !common.AdjSlot {
     if (node_published.NodePublished.isTiny(&remove_state.destination_pub)) {
-        const slot = page_ops.tinyRevAtConst(graph, remove_state.destination_pub.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, remove_state.destination_pub.first_block, .rev);
         const count = node_published.NodePublished.tinyCount(&remove_state.destination_pub);
         for (0..count) |entry_idx| {
             if (slot.sources[entry_idx] == source.index) {

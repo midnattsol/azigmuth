@@ -114,7 +114,7 @@ fn rebuildTinyReverseSideForRepair(
     published_adj: *const types.NodeAdj,
 ) !RepairRebuild {
     const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyRevAtConst(graph, published_side.first_block);
+    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .rev);
 
     var live_total: u16 = 0;
     for (0..count) |entry_idx| {
@@ -130,13 +130,13 @@ fn rebuildTinyReverseSideForRepair(
         return .{ .staging_adj = staging_adj, .live_total = 0 };
     }
 
-    const new_slot_idx = try page_ops.allocTinyRevSlotRaw(graph);
-    const new_slot = page_ops.tinyRevAt(graph, new_slot_idx);
+    const new_slot_idx = try page_ops.allocTinyBlockRaw(graph, .rev);
+    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .rev);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
         const source_idx = slot.sources[entry_idx];
         if (source_idx >= graph.publishedNodeCount() or node_validity.isNodeRemovedIndex(graph, source_idx)) continue;
-        new_slot.sources[write_idx] = source_idx;
+        new_block.sources[write_idx] = source_idx;
         write_idx += 1;
     }
 

@@ -136,7 +136,7 @@ pub fn validateGroupedRunsFast(
 /// (multigraph: ascending with edge ids strictly ascending within ties,
 /// and ids never zero).
 fn validateTinyFwdEntriesFast(graph: *const graph_core.GraphCore, slot_idx: u32, count: u16) !void {
-    const slot = page_ops.tinyFwdAtConst(graph, slot_idx);
+    const slot = page_ops.tinyBlockAtConst(graph, slot_idx, .fwd);
     var prev_key: ?u32 = null;
     var prev_id: u32 = 0;
     for (0..count) |entry_idx| {
@@ -161,7 +161,7 @@ fn validateTinyFwdEntriesFast(graph: *const graph_core.GraphCore, slot_idx: u32,
 
 /// Tiny reverse sources: in range and ascending (strict outside multigraph).
 fn validateTinyRevSourcesFast(graph: *const graph_core.GraphCore, slot_idx: u32, count: u16) !void {
-    const slot = page_ops.tinyRevAtConst(graph, slot_idx);
+    const slot = page_ops.tinyBlockAtConst(graph, slot_idx, .rev);
     var prev_key: ?u32 = null;
     for (0..count) |entry_idx| {
         const source_idx = slot.sources[entry_idx];

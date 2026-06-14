@@ -173,8 +173,8 @@ pub const Graph = struct {
         freeAtomicPages(node_meta_mod.NodeMeta, alloc, &self.graph.node_meta_pages, constants.NODES_PER_PAGE);
         freeAtomicPages(node_published_mod.NodePublished, alloc, &self.graph.node_published_pages, constants.NODES_PER_PAGE);
         freeAtomicPages(node_hot_layout_mod.Slot, alloc, &self.graph.node_hot_pages, constants.NODES_PER_PAGE);
-        freeAtomicPages(node_tiny_mod.TinyFwdSlot, alloc, &self.graph.tiny_fwd_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
-        freeAtomicPages(node_tiny_mod.TinyRevSlot, alloc, &self.graph.tiny_rev_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
+        freeAtomicPages(node_tiny_mod.TinyFwdBlock, alloc, &self.graph.tiny_block_fwd_pages, node_tiny_mod.TINY_BLOCKS_FWD_PER_PAGE);
+        freeAtomicPages(node_tiny_mod.TinyRevBlock, alloc, &self.graph.tiny_block_rev_pages, node_tiny_mod.TINY_BLOCKS_REV_PER_PAGE);
         freeAtomicPages(std.atomic.Value(u64), alloc, &self.graph.repair_queued_fwd_pages, node_bitmap.WORDS_PER_PAGE);
         freeAtomicPages(std.atomic.Value(u64), alloc, &self.graph.repair_queued_rev_pages, node_bitmap.WORDS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockFwd, alloc, &self.graph.edge_blocks_fwd_pages, constants.EDGE_BLOCKS_PER_PAGE);
@@ -190,8 +190,8 @@ pub const Graph = struct {
         freeAtomicPages(u8, alloc, &self.graph.edge_blocks_rev_live_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_rev_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_block_group_meta_pages, constants.EDGE_GROUPS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_fwd_meta_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_rev_meta_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_block_fwd_meta_pages, node_tiny_mod.TINY_BLOCKS_FWD_PER_PAGE);
+        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_block_rev_meta_pages, node_tiny_mod.TINY_BLOCKS_REV_PER_PAGE);
 
         self.graph.repair_fwd.deinit(alloc);
         self.graph.repair_rev.deinit(alloc);
@@ -450,8 +450,8 @@ pub const Graph = struct {
             .blocks_fwd_allocated = @atomicLoad(u32, @constCast(&core.block_fwd_count), .acquire),
             .blocks_rev_allocated = @atomicLoad(u32, @constCast(&core.block_rev_count), .acquire),
             .groups_allocated = @atomicLoad(u32, @constCast(&core.group_count), .acquire),
-            .tiny_fwd_allocated = @atomicLoad(u32, @constCast(&core.tiny_fwd_count), .acquire),
-            .tiny_rev_allocated = @atomicLoad(u32, @constCast(&core.tiny_rev_count), .acquire),
+            .tiny_fwd_allocated = @atomicLoad(u32, @constCast(&core.tiny_block_fwd_count), .acquire),
+            .tiny_rev_allocated = @atomicLoad(u32, @constCast(&core.tiny_block_rev_count), .acquire),
         };
     }
 

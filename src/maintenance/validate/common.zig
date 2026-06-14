@@ -94,11 +94,11 @@ pub fn forEachNodeIdInAdj(
         const count = node_published.NodePublished.tinyCount(&side_adj);
         switch (side) {
             .fwd => {
-                const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+                const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
                 for (0..count) |entry_idx| try callback(graph, context, slot.entries[entry_idx].destination);
             },
             .rev => {
-                const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+                const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
                 for (0..count) |entry_idx| try callback(graph, context, slot.sources[entry_idx]);
             },
         }
@@ -121,7 +121,7 @@ pub fn forEachForwardEntryInAdj(
     if (side_adj.block_count == 0) return;
 
     if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const entry = slot.entries[entry_idx];

@@ -332,7 +332,7 @@ fn forEachFwdEntry(
     const with_rows = view.core.edge_properties_enabled;
 
     if (node_published.NodePublished.isTiny(&side)) {
-        const slot = page_ops.tinyFwdAtConst(view.core, side.first_block);
+        const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side);
         for (slot.entries[0..count]) |entry| {
             if (entry.destination >= len_bound) continue;
@@ -398,7 +398,7 @@ fn walkInNeighbors(
     const check_removed = view.needsRepairRev(node_idx);
 
     if (node_published.NodePublished.isTiny(&side)) {
-        const slot = page_ops.tinyRevAtConst(view.core, side.first_block);
+        const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .rev);
         const count = node_published.NodePublished.tinyCount(&side);
         for (slot.sources[0..count]) |source| {
             try visitInCandidate(view, node_idx, rel, sink, source, len_bound, check_removed);

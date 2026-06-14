@@ -15,7 +15,7 @@ pub const TraversalState = struct {
 
 pub const TinyState = struct {
     tiny_mode: bool,
-    tiny_slot: u32,
+    tiny_block: u32,
     tiny_count: u16,
 };
 
@@ -28,7 +28,7 @@ pub const CursorInit = struct {
 pub fn tinyState(side_adj: types.SideAdj) TinyState {
     return .{
         .tiny_mode = node_published.NodePublished.isTiny(&side_adj),
-        .tiny_slot = side_adj.first_block,
+        .tiny_block = side_adj.first_block,
         .tiny_count = if (node_published.NodePublished.isTiny(&side_adj)) node_published.NodePublished.tinyCount(&side_adj) else 0,
     };
 }

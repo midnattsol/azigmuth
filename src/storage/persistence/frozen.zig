@@ -18,6 +18,7 @@
 //! for query/analytics/embedded workloads.
 
 const std = @import("std");
+const adjacency = @import("../../adjacency/mod.zig");
 const constants = @import("../../core/constants.zig");
 const types = @import("../../core/types.zig");
 const node_tiny = @import("../node/tiny.zig");
@@ -120,24 +121,26 @@ pub const FrozenGraph = struct {
     /// pure arithmetic (block_idx / EDGE_BLOCKS_PER_PAGE picks the page,
     /// % picks the slot — pages are contiguous in the section, so this
     /// flattens to a single multiply).
-    pub fn blockFwd(self: *const FrozenGraph, block_idx: u32) *const types.EdgeBlockFwd {
-        const bytes = self.sectionBytes(.blocks_fwd);
-        const ptr: *const types.EdgeBlockFwd = @ptrCast(@alignCast(bytes.ptr));
+    pub fn edgeBlockAt(self: *const FrozenGraph, block_idx: u32, comptime side: adjacency.AdjSide) *const switch (side) {
+        .fwd => types.EdgeBlockFwd,
+        .rev => types.EdgeBlockRev,
+    } {
+        const bytes = self.sectionBytes(switch (side) {
+            .fwd => .blocks_fwd,
+            .rev => .blocks_rev,
+        });
+        const ptr: *const switch (side) {
+            .fwd => types.EdgeBlockFwd,
+            .rev => types.EdgeBlockRev,
+        } = @ptrCast(@alignCast(bytes.ptr));
         return &ptr[block_idx];
     }
 
-    pub fn blockRev(self: *const FrozenGraph, block_idx: u32) *const types.EdgeBlockRev {
-        const bytes = self.sectionBytes(.blocks_rev);
-        const ptr: *const types.EdgeBlockRev = @ptrCast(@alignCast(bytes.ptr));
-        return &ptr[block_idx];
-    }
-
-    pub fn liveCountInFwdBlock(self: *const FrozenGraph, block_idx: u32) u8 {
-        return self.sectionBytes(.live_fwd)[block_idx];
-    }
-
-    pub fn liveCountInRevBlock(self: *const FrozenGraph, block_idx: u32) u8 {
-        return self.sectionBytes(.live_rev)[block_idx];
+    pub fn liveCountInBlock(self: *const FrozenGraph, block_idx: u32, side: adjacency.AdjSide) u8 {
+        return self.sectionBytes(switch (side) {
+            .fwd => .live_fwd,
+            .rev => .live_rev,
+        })[block_idx];
     }
 
     pub fn edgeBlockGroupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
@@ -146,16 +149,19 @@ pub const FrozenGraph = struct {
         return &ptr[group_idx];
     }
 
-    pub fn tinyFwdAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyFwdSlot {
-        const bytes = self.sectionBytes(.tiny_fwd);
-        const ptr: node_tiny.TinyFwdSlot = @ptrCast(@alignCast(bytes.ptr));
-        return &ptr[slot_idx];
-    }
-
-    pub fn tinyRevAt(self: *const FrozenGraph, slot_idx: u32) *const node_tiny.TinyRevSlot {
-        const bytes = self.sectionBytes(.tiny_rev);
-        const ptr: node_tiny.TinyRevSlot = @ptrCast(@alignCast(bytes.ptr));
-        return &ptr[slot_idx];
+    pub fn tinyBlockAt(self: *const FrozenGraph, block_idx: u32, comptime side: adjacency.AdjSide) *const switch (side) {
+        .fwd => node_tiny.TinyFwdBlock,
+        .rev => node_tiny.TinyRevBlock,
+    } {
+        const bytes = self.sectionBytes(switch (side) {
+            .fwd => .tiny_fwd,
+            .rev => .tiny_rev,
+        });
+        const ptr: *const switch (side) {
+            .fwd => node_tiny.TinyFwdBlock,
+            .rev => node_tiny.TinyRevBlock,
+        } = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[block_idx];
     }
 
     // ── Traversal ────────────────────────────────────────────────────
@@ -180,7 +186,7 @@ pub const FrozenGraph = struct {
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = true,
-                .tiny_slot_idx = side_adj.first_block,
+                .tiny_block_idx = side_adj.first_block,
                 .tiny_count = node_published.NodePublished.tinyCount(&side_adj),
                 .current_block_idx = 0,
                 .slot_idx = 0,
@@ -195,14 +201,14 @@ pub const FrozenGraph = struct {
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_slot_idx = 0,
+                .tiny_block_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = side_adj.first_block,
                 .slot_idx = 0,
                 .blocks_remaining = side_adj.block_count,
                 .group_idx = 0,
                 .groups_remaining = 0,
-                .live_in_block = self.liveCountInFwdBlock(side_adj.first_block),
+                .live_in_block = self.liveCountInBlock(side_adj.first_block, .fwd),
             };
         } else {
             const group = self.edgeBlockGroupAt(side_adj.first_group);
@@ -211,14 +217,14 @@ pub const FrozenGraph = struct {
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_slot_idx = 0,
+                .tiny_block_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = group.start,
                 .slot_idx = 0,
                 .blocks_remaining = group.count,
                 .group_idx = side_adj.first_group,
                 .groups_remaining = side_adj.group_count,
-                .live_in_block = self.liveCountInFwdBlock(group.start),
+                .live_in_block = self.liveCountInBlock(group.start, .fwd),
             };
         }
     }
@@ -234,7 +240,7 @@ pub const FrozenGraph = struct {
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = true,
-                .tiny_slot_idx = side_adj.first_block,
+                .tiny_block_idx = side_adj.first_block,
                 .tiny_count = node_published.NodePublished.tinyCount(&side_adj),
                 .current_block_idx = 0,
                 .slot_idx = 0,
@@ -249,14 +255,14 @@ pub const FrozenGraph = struct {
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_slot_idx = 0,
+                .tiny_block_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = side_adj.first_block,
                 .slot_idx = 0,
                 .blocks_remaining = side_adj.block_count,
                 .group_idx = 0,
                 .groups_remaining = 0,
-                .live_in_block = self.liveCountInRevBlock(side_adj.first_block),
+                .live_in_block = self.liveCountInBlock(side_adj.first_block, .rev),
             };
         } else {
             const group = self.edgeBlockGroupAt(side_adj.first_group);
@@ -265,14 +271,14 @@ pub const FrozenGraph = struct {
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_slot_idx = 0,
+                .tiny_block_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = group.start,
                 .slot_idx = 0,
                 .blocks_remaining = group.count,
                 .group_idx = side_adj.first_group,
                 .groups_remaining = side_adj.group_count,
-                .live_in_block = self.liveCountInRevBlock(group.start),
+                .live_in_block = self.liveCountInBlock(group.start, .rev),
             };
         }
     }
@@ -283,7 +289,7 @@ pub const FrozenGraph = struct {
 
         // Tiny mode
         tiny_mode: bool,
-        tiny_slot_idx: u32,
+        tiny_block_idx: u32,
         tiny_count: u16,
         tiny_idx: u16,
 
@@ -298,24 +304,56 @@ pub const FrozenGraph = struct {
         groups_remaining: u16,
 
         pub fn next(self: *NeighborIterator) ?types.NodeId {
+            var neighbor: ?types.NodeId = undefined;
             if (self.tiny_mode) {
-                if (self.tiny_count <= self.tiny_slot_idx - 1) return null;
-                if (self.direction == .fwd) {
-                    const dest = self.frozen.tinyFwdAt(self.tiny_slot_idx).entries[self.tiny_idx].destination;
-                    return .{
-                        .frozen = self.frozen,
-                        .direction = .fwd,
-                        .tiny_slot_idx = self.tiny_slot_idx + 1,
-                        .tiny_count = self.count,
-                        .tiny_idx = self.tiny_idx + 1,
-                        .current_block_idx = 0,
-                        .blocks_remaining = 0,
-                        .slot_idx = 0,
-                        .live_in_block = 0,
-                        .group_idx = 0,
-                        .groups_remaining = 0,
+                if (self.tiny_count <= self.tiny_idx) return null;
+                neighbor = switch (self.direction) {
+                    .fwd => blk: {
+                        const block = self.frozen.tinyBlockAt(self.tiny_block_idx, .fwd);
+                        const destination = block.entries[self.tiny_idx].destination;
+                        break :blk types.NodeId{ .index = destination };
+                    },
+                    .rev => blk: {
+                        const block = self.frozen.tinyBlockAt(self.tiny_block_idx, .rev);
+                        const source = block.sources[self.tiny_idx];
+                        break :blk types.NodeId{ .index = source };
+                    },
+                };
+                self.tiny_idx += 1;
+                return neighbor;
+            }
+            while (true) {
+                if (self.slot_idx < self.live_in_block) {
+                    neighbor = switch (self.direction) {
+                        .fwd => blk: {
+                            const block = self.frozen.edgeBlockAt(self.current_block_idx, .fwd);
+                            const destination = block.destinations[self.slot_idx];
+                            break :blk types.NodeId{ .index = destination };
+                        },
+                        .rev => blk: {
+                            const block = self.frozen.edgeBlockAt(self.current_block_idx, .rev);
+                            const source = block.sources[self.slot_idx];
+                            break :blk types.NodeId{ .index = source };
+                        },
                     };
-                }
+                    self.slot_idx += 1;
+                    return neighbor;
+                } else if (self.blocks_remaining > 1) {
+                    self.current_block_idx += 1;
+                    self.blocks_remaining -= 1;
+                    self.slot_idx = 0;
+                    self.live_in_block = self.frozen.liveCountInBlock(self.current_block_idx, self.direction);
+                    continue;
+                } else if (self.groups_remaining > 1) {
+                    self.group_idx += 1;
+                    self.groups_remaining -= 1;
+                    const group = self.frozen.edgeBlockGroupAt(self.group_idx);
+                    self.blocks_remaining = group.count;
+                    self.current_block_idx = group.start;
+                    self.live_in_block = self.frozen.liveCountInBlock(self.current_block_idx, self.direction);
+                    self.slot_idx = 0;
+                    continue;
+                } else return null;
             }
         }
     };

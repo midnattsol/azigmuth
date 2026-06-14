@@ -33,14 +33,14 @@ pub const NeighborIterator = struct {
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_slot: u32 = 0,
+    tiny_block: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     /// Cached from loadNextNonEmptyMask so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
-    cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
+    cached_tiny_rev: ?*const node_tiny.TinyRevBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
@@ -188,7 +188,7 @@ fn initNeighborIteratorWithCapture(graph: *const graph_core.GraphCore, capture: 
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_slot = cursor_init.tiny.tiny_slot,
+        .tiny_block = cursor_init.tiny.tiny_block,
         .tiny_count = cursor_init.tiny.tiny_count,
         .degree_snapshot = switch (direction) {
             .fwd => capture.degree_fwd,
@@ -207,8 +207,8 @@ fn initNeighborIteratorWithCapture(graph: *const graph_core.GraphCore, capture: 
 
     if (iterator.tiny_mode) {
         switch (direction) {
-            .fwd => iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(graph, iterator.tiny_slot),
-            .rev => iterator.cached_tiny_rev = page_ops.tinyRevAtConst(graph, iterator.tiny_slot),
+            .fwd => iterator.cached_tiny_fwd = page_ops.tinyBlockAtConst(graph, iterator.tiny_block, .fwd),
+            .rev => iterator.cached_tiny_rev = page_ops.tinyBlockAtConst(graph, iterator.tiny_block, .rev),
         }
     }
     side_traversal.primeGroupedTraversal(&iterator, graph);

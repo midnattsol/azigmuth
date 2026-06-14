@@ -129,13 +129,13 @@ pub fn adjacencyContains(
         const count = node_published.NodePublished.tinyCount(&side_view);
         switch (side) {
             .fwd => {
-                const slot = page_ops.tinyFwdAtConst(graph, side_view.first_block);
+                const slot = page_ops.tinyBlockAtConst(graph, side_view.first_block, .fwd);
                 for (0..count) |entry_idx| {
                     if (slot.entries[entry_idx].destination == target) return true;
                 }
             },
             .rev => {
-                const slot = page_ops.tinyRevAtConst(graph, side_view.first_block);
+                const slot = page_ops.tinyBlockAtConst(graph, side_view.first_block, .rev);
                 for (0..count) |entry_idx| {
                     if (slot.sources[entry_idx] == target) return true;
                 }

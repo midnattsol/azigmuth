@@ -219,10 +219,10 @@ fn addEdgeImpl(
     // Tiny sides COW into a fresh slot on every mutation; once the new side is
     // published the superseded slot must enter the retired stack or it leaks.
     if (node_published_mod.NodePublished.isTiny(&source_pub)) {
-        rcu.retireTinySlot(graph, source_pub.first_block, .fwd);
+        rcu.retireTinyBlock(graph, source_pub.first_block, .fwd);
     }
     if (node_published_mod.NodePublished.isTiny(&destination_pub)) {
-        rcu.retireTinySlot(graph, destination_pub.first_block, .rev);
+        rcu.retireTinyBlock(graph, destination_pub.first_block, .rev);
     }
     rcu.bumpEpoch(graph);
     writer_guard.end();

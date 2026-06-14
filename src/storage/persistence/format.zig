@@ -109,9 +109,9 @@ pub const SectionId = enum(u16) {
     prop_rows_fwd = 6,
     /// `EdgeBlockGroup` pages.
     groups = 7,
-    /// `TinyFwdSlot` pages.
+    /// `TinyFwdBlock` pages.
     tiny_fwd = 8,
-    /// `TinyRevSlot` pages.
+    /// `TinyRevBlock` pages.
     tiny_rev = 9,
     /// Free forward block indices (u32 each; drain order is irrelevant).
     free_blocks_fwd = 10,
@@ -191,8 +191,8 @@ pub const FileHeader = extern struct {
     block_fwd_count: u32,
     block_rev_count: u32,
     group_count: u32,
-    tiny_fwd_count: u32,
-    tiny_rev_count: u32,
+    tiny_block_fwd_count: u32,
+    tiny_block_rev_count: u32,
     prop_row_count: u32,
 
     header_checksum: u64,
@@ -213,8 +213,8 @@ pub const FileHeader = extern struct {
             .block_fwd_count = core.loadBlockFwdCount(),
             .block_rev_count = core.loadBlockRevCount(),
             .group_count = core.loadGroupCount(),
-            .tiny_fwd_count = core.loadTinyFwdCount(),
-            .tiny_rev_count = core.loadTinyRevCount(),
+            .tiny_block_fwd_count = core.loadTinyFwdCount(),
+            .tiny_block_rev_count = core.loadTinyRevCount(),
             .prop_row_count = core.loadPropRowCount(),
             .header_checksum = 0,
         };
@@ -306,11 +306,11 @@ pub fn groupPages(group_count: u32) u64 {
 }
 
 pub fn tinyFwdPages(tiny_count: u32) u64 {
-    return pagesFor(tiny_count, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
+    return pagesFor(tiny_count, node_tiny.TINY_BLOCKS_FWD_PER_PAGE);
 }
 
 pub fn tinyRevPages(tiny_count: u32) u64 {
-    return pagesFor(tiny_count, node_tiny.TINY_REV_SLOTS_PER_PAGE);
+    return pagesFor(tiny_count, node_tiny.TINY_BLOCKS_REV_PER_PAGE);
 }
 
 /// Expected payload byte length of a fixed-shape section given the header,
@@ -332,8 +332,8 @@ pub fn expectedSectionBytes(header: FileHeader, id: SectionId) ?u64 {
         else
             0,
         .groups => groupPages(header.group_count) * constants.EDGE_GROUPS_PER_PAGE * @sizeOf(types.EdgeBlockGroup),
-        .tiny_fwd => tinyFwdPages(header.tiny_fwd_count) * node_tiny.TINY_FWD_SLOTS_PER_PAGE * @sizeOf(node_tiny.TinyFwdSlot),
-        .tiny_rev => tinyRevPages(header.tiny_rev_count) * node_tiny.TINY_REV_SLOTS_PER_PAGE * @sizeOf(node_tiny.TinyRevSlot),
+        .tiny_fwd => tinyFwdPages(header.tiny_block_fwd_count) * node_tiny.TINY_BLOCKS_FWD_PER_PAGE * @sizeOf(node_tiny.TinyFwdBlock),
+        .tiny_rev => tinyRevPages(header.tiny_block_rev_count) * node_tiny.TINY_BLOCKS_REV_PER_PAGE * @sizeOf(node_tiny.TinyRevBlock),
         .free_blocks_fwd, .free_blocks_rev, .free_tiny_fwd, .free_tiny_rev, .free_prop_rows => null,
         .free_group_spans => null,
     };

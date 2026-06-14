@@ -32,7 +32,7 @@ fn initNeighborCursor(
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_slot = cursor_init.tiny.tiny_slot,
+        .tiny_block = cursor_init.tiny.tiny_block,
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_candidates = check_removed_candidates,
         .group_count_bound = cursor_init.group_count_bound,
@@ -40,8 +40,8 @@ fn initNeighborCursor(
     };
     if (cursor.tiny_mode) {
         switch (direction) {
-            .fwd => cursor.cached_tiny_fwd = page_ops.tinyFwdAtConst(view.core, cursor.tiny_slot),
-            .rev => cursor.cached_tiny_rev = page_ops.tinyRevAtConst(view.core, cursor.tiny_slot),
+            .fwd => cursor.cached_tiny_fwd = page_ops.tinyBlockAtConst(view.core, cursor.tiny_block, .fwd),
+            .rev => cursor.cached_tiny_rev = page_ops.tinyBlockAtConst(view.core, cursor.tiny_block, .rev),
         }
     }
     side_traversal.primeGroupedTraversal(&cursor, view.core);
@@ -61,13 +61,13 @@ fn initOutEdgeCursor(
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
         .current_group_idx = cursor_init.traversal.current_group_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_slot = cursor_init.tiny.tiny_slot,
+        .tiny_block = cursor_init.tiny.tiny_block,
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_destinations = check_removed_destinations,
         .group_count_bound = cursor_init.group_count_bound,
     };
     if (iterator.tiny_mode) {
-        iterator.cached_tiny_fwd = page_ops.tinyFwdAtConst(view.core, iterator.tiny_slot);
+        iterator.cached_tiny_fwd = page_ops.tinyBlockAtConst(view.core, iterator.tiny_block, .fwd);
     }
     side_traversal.primeGroupedTraversal(&iterator, view.core);
     return iterator;
@@ -85,13 +85,13 @@ pub const SnapshotNeighborIterator = struct {
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_slot: u32 = 0,
+    tiny_block: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
-    cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
+    cached_tiny_rev: ?*const node_tiny.TinyRevBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
@@ -211,13 +211,13 @@ pub const SnapshotOutEdgeIterator = struct {
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_slot: u32 = 0,
+    tiny_block: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_live_raw: usize = 0,
@@ -313,7 +313,7 @@ pub fn forEachNeighborInView(
     const check_removed = view.needsRepairFwd(node_idx);
 
     if (node_published.NodePublished.isTiny(&side)) {
-        const slot = page_ops.tinyFwdAtConst(view.core, side.first_block);
+        const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side);
         for (0..count) |entry_idx| {
             const candidate = slot.entries[entry_idx].destination;
@@ -366,7 +366,7 @@ pub const FrameNeighborCursor = struct {
         const check_removed = view.needsRepairFwd(node_idx);
 
         if (side.block_count != 0 and node_published.NodePublished.isTiny(&side)) {
-            const slot = page_ops.tinyFwdAtConst(view.core, side.first_block);
+            const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .fwd);
             return .{
                 .block_cursor = side_ops.BlockCursor.init(.{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 }),
                 .tiny_entries = &slot.entries,

@@ -24,7 +24,7 @@ test "tiny: fwdCap depends on multigraph mode" {
 }
 
 test "tiny: removeFwd shifts the tail down and clears the freed entry" {
-    var slot = tiny.TinyFwdSlot{};
+    var slot = tiny.TinyFwdBlock{};
     var count: u16 = 0;
     count = try tiny.insertFwd(&slot, count, 10, 1, no_flags, 1, 0, false);
     count = try tiny.insertFwd(&slot, count, 20, 2, no_flags, 2, 0, false);
@@ -42,7 +42,7 @@ test "tiny: removeFwd shifts the tail down and clears the freed entry" {
 }
 
 test "tiny: removeFwd in multigraph mode matches on edge id" {
-    var slot = tiny.TinyFwdSlot{};
+    var slot = tiny.TinyFwdBlock{};
     var count: u16 = 0;
     count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 7, 0, true);
     count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 9, 0, true);
@@ -55,7 +55,7 @@ test "tiny: removeFwd in multigraph mode matches on edge id" {
 }
 
 test "tiny: removeRev shifts sources down" {
-    var slot = tiny.TinyRevSlot{};
+    var slot = tiny.TinyRevBlock{};
     var count: u16 = 0;
     count = tiny.insertRev(&slot, count, 5);
     count = tiny.insertRev(&slot, count, 15);

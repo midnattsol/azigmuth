@@ -44,8 +44,8 @@ fn countVisibleEntriesInTinySnapshot(
     var total: u64 = 0;
     for (0..count) |entry_idx| {
         const candidate_idx = switch (side) {
-            .fwd => page_ops.tinyFwdAtConst(graph, side_adj.first_block).entries[entry_idx].destination,
-            .rev => page_ops.tinyRevAtConst(graph, side_adj.first_block).sources[entry_idx],
+            .fwd => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd).entries[entry_idx].destination,
+            .rev => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev).sources[entry_idx],
         };
         if (candidate_idx < view.nodeCount() and view.isLiveIndex(candidate_idx)) total += 1;
     }
@@ -98,8 +98,8 @@ fn hasTombstoneSnapshot(
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const candidate_idx = switch (side) {
-                .fwd => page_ops.tinyFwdAtConst(graph, side_adj.first_block).entries[entry_idx].destination,
-                .rev => page_ops.tinyRevAtConst(graph, side_adj.first_block).sources[entry_idx],
+                .fwd => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd).entries[entry_idx].destination,
+                .rev => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev).sources[entry_idx],
             };
             if (candidate_idx < view.nodeCount() and !view.isLiveIndex(candidate_idx)) return true;
         }
@@ -188,7 +188,7 @@ fn validateForwardEdgeIdsSnapshot(
     if (common.blockCount(adjacency, .fwd) == 0) return;
     const side_adj = common.sideAdjOf(adjacency, .fwd);
     if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             if (slot.entries[entry_idx].edge_id == 0) return error.CorruptGraph;
@@ -226,7 +226,7 @@ fn validateForwardConsistencySnapshot(
     if (common.blockCount(adjacency, .fwd) == 0) return;
     const side_adj = common.sideAdjOf(adjacency, .fwd);
     if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const destination_idx = slot.entries[entry_idx].destination;
@@ -291,7 +291,7 @@ fn validateReverseConsistencySnapshot(
     if (common.blockCount(adjacency, .rev) == 0) return;
     const side_adj = common.sideAdjOf(adjacency, .rev);
     if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyRevAtConst(graph, side_adj.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const source_idx = slot.sources[entry_idx];

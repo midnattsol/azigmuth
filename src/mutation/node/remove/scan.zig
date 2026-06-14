@@ -21,7 +21,7 @@ fn appendForwardDestination(
     slot: u7,
 ) !void {
     const destination_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
-        page_ops.tinyFwdAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot].destination
+        page_ops.tinyBlockAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG, .fwd).entries[slot].destination
     else
         page_ops.edgeBlockAtConst(graph, block_idx, .fwd).destinations[slot];
     if (destination_idx >= collection.node_count) return error.CorruptGraph;
@@ -47,7 +47,7 @@ fn appendReverseSource(
     slot: u7,
 ) !void {
     const source_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
-        page_ops.tinyRevAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG).sources[slot]
+        page_ops.tinyBlockAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG, .rev).sources[slot]
     else
         page_ops.edgeBlockAtConst(graph, block_idx, .rev).sources[slot];
     if (source_idx >= collection.node_count) return error.CorruptGraph;
@@ -67,7 +67,7 @@ fn collectForwardDestinations(
     const side_view = common.sideAdjOfNode(published_adj, .fwd);
 
     if (node_published.NodePublished.isTiny(&side_view)) {
-        const slot = page_ops.tinyFwdAtConst(graph, side_view.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_view.first_block, .fwd);
         const count = node_published.NodePublished.tinyCount(&side_view);
         for (0..count) |entry_idx| {
             const destination_idx = slot.entries[entry_idx].destination;
@@ -102,7 +102,7 @@ fn collectReverseSources(
     const side_view = common.sideAdjOfNode(published_adj, .rev);
 
     if (node_published.NodePublished.isTiny(&side_view)) {
-        const slot = page_ops.tinyRevAtConst(graph, side_view.first_block);
+        const slot = page_ops.tinyBlockAtConst(graph, side_view.first_block, .rev);
         const count = node_published.NodePublished.tinyCount(&side_view);
         for (0..count) |entry_idx| {
             const source_idx = slot.sources[entry_idx];

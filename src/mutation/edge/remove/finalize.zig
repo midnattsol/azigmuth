@@ -121,13 +121,13 @@ pub fn retireBulkRemovedSides(
     try scratch.retireMarked(graph);
 
     if (node_published.NodePublished.isTiny(&source_pub)) {
-        rcu.retireTinySlot(graph, source_pub.first_block, .fwd);
+        rcu.retireTinyBlock(graph, source_pub.first_block, .fwd);
     } else {
         old_source_groups.retire(graph);
     }
 
     if (node_published.NodePublished.isTiny(&destination_pub)) {
-        rcu.retireTinySlot(graph, destination_pub.first_block, .rev);
+        rcu.retireTinyBlock(graph, destination_pub.first_block, .rev);
     } else {
         old_destination_groups.retire(graph);
     }

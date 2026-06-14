@@ -40,18 +40,14 @@ pub const nodeHotAtConst = nodes.nodeHotAtConst;
 pub const nodeMetaPageAtConst = nodes.nodeMetaPageAtConst;
 pub const nodePublishedPageAtConst = nodes.nodePublishedPageAtConst;
 
-// ── tiny slots ───────────────────────────────────────────────────────
+// ── tiny blocks ──────────────────────────────────────────────────────
 pub const freeTinySlot = tiny.freeTinySlot;
-pub const retireTinySlot = tiny.retireTinySlot;
-pub const reclaimRetiredTinySlots = tiny.reclaimRetiredTinySlots;
-pub const tinyFwdAt = tiny.tinyFwdAt;
-pub const tinyFwdAtConst = tiny.tinyFwdAtConst;
-pub const tinyRevAt = tiny.tinyRevAt;
-pub const tinyRevAtConst = tiny.tinyRevAtConst;
-pub const allocTinyFwdSlot = tiny.allocTinyFwdSlot;
-pub const allocTinyFwdSlotRaw = tiny.allocTinyFwdSlotRaw;
-pub const allocTinyRevSlot = tiny.allocTinyRevSlot;
-pub const allocTinyRevSlotRaw = tiny.allocTinyRevSlotRaw;
+pub const retireTinyBlock = tiny.retireTinyBlock;
+pub const reclaimRetiredTinyBlocks = tiny.reclaimRetiredTinyBlocks;
+pub const tinyBlockAt = tiny.tinyBlockAt;
+pub const tinyBlockAtConst = tiny.tinyBlockAtConst;
+pub const allocTinyBlock = tiny.allocTinyBlock;
+pub const allocTinyBlockRaw = tiny.allocTinyBlockRaw;
 
 // ── property rows ────────────────────────────────────────────────────
 pub const freePropRow = prop_rows.freePropRow;

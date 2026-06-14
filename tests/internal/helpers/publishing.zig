@@ -66,7 +66,7 @@ pub fn reverseLiveCount(graph: *const graph_mod.Graph, adjacency: types.NodeAdj)
 pub fn readForwardEntry(graph: *const graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize) !ForwardEntry {
     const slot_ref = try nthSlotRef(graph, forwardSideOf(adjacency), .fwd, ordinal);
     if ((slot_ref.block_idx & side_ops.TINY_SLOT_TAG) != 0) {
-        const entry = page_ops.tinyFwdAtConst(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot_ref.slot];
+        const entry = page_ops.tinyBlockAtConst(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG, .fwd).entries[slot_ref.slot];
         return .{ .destination = entry.destination, .relation = entry.relation, .flags = entry.flags, .edge_id = entry.edge_id };
     }
 
@@ -81,7 +81,7 @@ pub fn readForwardEntry(graph: *const graph_mod.Graph, adjacency: types.NodeAdj,
 pub fn writeForwardDestination(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize, destination: u32) !void {
     const slot_ref = try nthSlotRef(graph, forwardSideOf(adjacency), .fwd, ordinal);
     if ((slot_ref.block_idx & side_ops.TINY_SLOT_TAG) != 0) {
-        page_ops.tinyFwdAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot_ref.slot].destination = destination;
+        page_ops.tinyBlockAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG, .fwd).entries[slot_ref.slot].destination = destination;
         return;
     }
     page_ops.edgeBlockAt(&graph.graph, slot_ref.block_idx, .fwd).destinations[slot_ref.slot] = destination;
@@ -90,7 +90,7 @@ pub fn writeForwardDestination(graph: *graph_mod.Graph, adjacency: types.NodeAdj
 pub fn writeForwardEdgeId(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize, edge_id: u32) !void {
     const slot_ref = try nthSlotRef(graph, forwardSideOf(adjacency), .fwd, ordinal);
     if ((slot_ref.block_idx & side_ops.TINY_SLOT_TAG) != 0) {
-        page_ops.tinyFwdAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG).entries[slot_ref.slot].edge_id = edge_id;
+        page_ops.tinyBlockAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG, .fwd).entries[slot_ref.slot].edge_id = edge_id;
         return;
     }
     page_ops.edgeBlockFwdIdsAt(&graph.graph, slot_ref.block_idx).ids[slot_ref.slot] = edge_id;
@@ -99,7 +99,7 @@ pub fn writeForwardEdgeId(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ord
 pub fn writeReverseSource(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize, source_idx: u32) !void {
     const slot_ref = try nthSlotRef(graph, reverseSideOf(adjacency), .rev, ordinal);
     if ((slot_ref.block_idx & side_ops.TINY_SLOT_TAG) != 0) {
-        page_ops.tinyRevAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG).sources[slot_ref.slot] = source_idx;
+        page_ops.tinyBlockAt(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG, .rev).sources[slot_ref.slot] = source_idx;
         return;
     }
     page_ops.edgeBlockAt(&graph.graph, slot_ref.block_idx, .rev).sources[slot_ref.slot] = source_idx;
@@ -108,7 +108,7 @@ pub fn writeReverseSource(graph: *graph_mod.Graph, adjacency: types.NodeAdj, ord
 pub fn readReverseSource(graph: *const graph_mod.Graph, adjacency: types.NodeAdj, ordinal: usize) !u32 {
     const slot_ref = try nthSlotRef(graph, reverseSideOf(adjacency), .rev, ordinal);
     if ((slot_ref.block_idx & side_ops.TINY_SLOT_TAG) != 0) {
-        return page_ops.tinyRevAtConst(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG).sources[slot_ref.slot];
+        return page_ops.tinyBlockAtConst(&graph.graph, slot_ref.block_idx & ~side_ops.TINY_SLOT_TAG, .rev).sources[slot_ref.slot];
     }
     return page_ops.edgeBlockAtConst(&graph.graph, slot_ref.block_idx, .rev).sources[slot_ref.slot];
 }
@@ -117,7 +117,7 @@ pub fn appendForwardEntry(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, ad
     const side_adj = forwardSideOf(adjacency);
     if (node_published.NodePublished.isTiny(&side_adj)) {
         const count = node_published.NodePublished.tinyCount(&side_adj);
-        page_ops.tinyFwdAt(&graph.graph, side_adj.first_block).entries[count] = .{
+        page_ops.tinyBlockAt(&graph.graph, side_adj.first_block, .fwd).entries[count] = .{
             .destination = entry.destination,
             .relation = entry.relation,
             .flags = entry.flags,
@@ -146,7 +146,7 @@ pub fn appendReverseSource(graph: *graph_mod.Graph, node_id: graph_mod.NodeId, a
     const side_adj = reverseSideOf(adjacency);
     if (node_published.NodePublished.isTiny(&side_adj)) {
         const count = node_published.NodePublished.tinyCount(&side_adj);
-        page_ops.tinyRevAt(&graph.graph, side_adj.first_block).sources[count] = source_idx;
+        page_ops.tinyBlockAt(&graph.graph, side_adj.first_block, .rev).sources[count] = source_idx;
         var updated_adj = adjacency;
         updated_adj.block_count_rev = side_adj.block_count + 1;
         const node = try graph.nodeAt(node_id);
@@ -182,7 +182,7 @@ pub fn ensureForwardBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
     const side_adj = forwardSideOf(adjacency);
     const block_idx = try graph.allocBlockFwd();
     const block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
-    const slot = page_ops.tinyFwdAtConst(&graph.graph, side_adj.first_block);
+    const slot = page_ops.tinyBlockAtConst(&graph.graph, side_adj.first_block, .fwd);
     const count = node_published.NodePublished.tinyCount(&side_adj);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
@@ -215,7 +215,7 @@ pub fn ensureReverseBlockLayout(graph: *graph_mod.Graph, node_id: graph_mod.Node
     const block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
     const count = node_published.NodePublished.tinyCount(&side_adj);
     for (0..count) |entry_idx| {
-        block.sources[entry_idx] = page_ops.tinyRevAtConst(&graph.graph, side_adj.first_block).sources[entry_idx];
+        block.sources[entry_idx] = page_ops.tinyBlockAtConst(&graph.graph, side_adj.first_block, .rev).sources[entry_idx];
     }
     page_ops.setBlockLiveCount(&graph.graph, block_idx, .rev, @intCast(count));
 

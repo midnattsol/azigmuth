@@ -87,7 +87,7 @@ fn edgeIdAppearsLater(
     if (common.groupCount(adjacency, .fwd) == 0) {
         const side_adj = common.sideAdjOf(adjacency, .fwd);
         if (node_published.NodePublished.isTiny(&side_adj)) {
-            const slot = page_ops.tinyFwdAtConst(graph, side_adj.first_block);
+            const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
             const count = node_published.NodePublished.tinyCount(&side_adj);
             for (current_slot + 1..count) |slot_idx| {
                 if (slot.entries[slot_idx].edge_id == edge_id) return true;
