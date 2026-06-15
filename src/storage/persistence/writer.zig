@@ -134,9 +134,8 @@ fn emitNodeRecords(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) 
 /// next_local_edge_id (NodeHot), and the flag bits (removed,
 /// needs_repair_*, sorted bits). Pure — unit-test it on its own.
 pub fn makeNodeRecord(core: *const graph_core.GraphCore, node_idx: u32) format.NodeRecord {
-    _ = core;
-    _ = node_idx;
-    @panic("TODO: makeNodeRecord");
+    const node_id = types.NodeId{ .index = node_idx };
+    var node_published = page_ops.nodePublishedAtConst(core, node_id);
 }
 
 /// Emits the raw `EdgeBlockFwd`/`EdgeBlockRev` pages, page-for-page, up to
@@ -256,16 +255,15 @@ fn emitFreePropRows(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink)
 /// the struct bytes, then compute format.headerChecksum over the block
 /// (with the checksum field as zero) and patch it in.
 pub fn serializeHeaderBlock(header: format.FileHeader, out: *[format.HEADER_BYTES]u8) void {
-    _ = header;
-    _ = out;
-    @panic("TODO: serializeHeaderBlock");
+    @memset(out, 0);
+    @memcpy(out[0..@sizeOf(format.FileHeader)], std.mem.asBytes(&header));
+    const header_ptr: *format.FileHeader = @ptrCast(@alignCast(out));
+    header_ptr.header_checksum = format.headerChecksum(out);
 }
 
 /// Renders the fixed section table (MAX_SECTIONS descriptors, in id order).
 pub fn serializeSectionTable(table: *const [format.MAX_SECTIONS]format.SectionDescriptor, out: *[format.SECTION_TABLE_BYTES]u8) void {
-    _ = table;
-    _ = out;
-    @panic("TODO: serializeSectionTable");
+    @memcpy(out, std.mem.asBytes(table));
 }
 
 comptime {
