@@ -4,6 +4,7 @@ const azigmuth = @import("azigmuth");
 const testing = std.testing;
 
 const StartFlag = std.atomic.Value(bool);
+const WaitBudget: usize = 1_000_000;
 
 const AddChildrenCtx = struct {
     graph: *azigmuth.Graph,
@@ -38,6 +39,7 @@ const RemoveNodeOnceCtx = struct {
     graph: *azigmuth.Graph,
     node: azigmuth.NodeId,
     start: *StartFlag,
+    stop: *StartFlag,
     traversal_active: *StartFlag,
     attempted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     attempted_during_traversal: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -45,10 +47,27 @@ const RemoveNodeOnceCtx = struct {
 
 fn removeNodeOnce(ctx: *RemoveNodeOnceCtx) void {
     while (!ctx.start.load(.acquire)) std.atomic.spinLoopHint();
-    while (!ctx.traversal_active.load(.acquire)) std.atomic.spinLoopHint();
+    while (!ctx.stop.load(.acquire) and !ctx.traversal_active.load(.acquire)) std.atomic.spinLoopHint();
+    if (ctx.stop.load(.acquire)) return;
     _ = ctx.graph.removeNode(ctx.node) catch {};
     ctx.attempted_during_traversal.store(ctx.traversal_active.load(.acquire), .release);
     ctx.attempted.store(true, .release);
+}
+
+fn waitForCreatedDuringTraversal(ctx: *const AddChildrenCtx) bool {
+    var wait: usize = 0;
+    while (ctx.created_during_traversal.load(.acquire) == 0 and wait < WaitBudget) : (wait += 1) {
+        std.atomic.spinLoopHint();
+    }
+    return ctx.created_during_traversal.load(.acquire) > 0;
+}
+
+fn waitForRemovalAttempt(ctx: *const RemoveNodeOnceCtx) bool {
+    var wait: usize = 0;
+    while (!ctx.attempted.load(.acquire) and wait < WaitBudget) : (wait += 1) {
+        std.atomic.spinLoopHint();
+    }
+    return ctx.attempted.load(.acquire);
 }
 
 fn buildWideRootGraph(graph: *azigmuth.Graph, child_count: usize) !struct {
@@ -84,7 +103,12 @@ test "algorithms concurrent: bfs tolerates addNode/addEdge while traversing" {
     traversal_active.store(true, .release);
     // Wait for the writer's first in-window mutation before traversing, so
     // the overlap assertion below cannot fail on scheduling delays.
-    while (ctx.created_during_traversal.load(.acquire) == 0) std.atomic.spinLoopHint();
+    const overlapped = waitForCreatedDuringTraversal(&ctx);
+    if (!overlapped) {
+        traversal_active.store(false, .release);
+        stop.store(true, .release);
+        try testing.expect(overlapped);
+    }
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.bfs(setup.root, .{ .allocator = testing.allocator });
@@ -112,7 +136,12 @@ test "algorithms concurrent: dfs tolerates addNode/addEdge while traversing" {
     traversal_active.store(true, .release);
     // Wait for the writer's first in-window mutation before traversing, so
     // the overlap assertion below cannot fail on scheduling delays.
-    while (ctx.created_during_traversal.load(.acquire) == 0) std.atomic.spinLoopHint();
+    const overlapped = waitForCreatedDuringTraversal(&ctx);
+    if (!overlapped) {
+        traversal_active.store(false, .release);
+        stop.store(true, .release);
+        try testing.expect(overlapped);
+    }
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.dfs(setup.root, .{ .allocator = testing.allocator });
@@ -140,7 +169,12 @@ test "algorithms concurrent: cycle tolerates addNode/addEdge while traversing" {
     traversal_active.store(true, .release);
     // Wait for the writer's first in-window mutation before traversing, so
     // the overlap assertion below cannot fail on scheduling delays.
-    while (ctx.created_during_traversal.load(.acquire) == 0) std.atomic.spinLoopHint();
+    const overlapped = waitForCreatedDuringTraversal(&ctx);
+    if (!overlapped) {
+        traversal_active.store(false, .release);
+        stop.store(true, .release);
+        try testing.expect(overlapped);
+    }
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const has_cycle = try snapshot.hasCycle(.{ .allocator = testing.allocator });
@@ -157,8 +191,9 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
 
     const setup = try buildWideRootGraph(graph, 5000);
     var start = StartFlag.init(false);
+    var stop = StartFlag.init(false);
     var traversal_active = StartFlag.init(false);
-    var ctx = RemoveNodeOnceCtx{ .graph = graph, .node = setup.last_child, .start = &start, .traversal_active = &traversal_active };
+    var ctx = RemoveNodeOnceCtx{ .graph = graph, .node = setup.last_child, .start = &start, .stop = &stop, .traversal_active = &traversal_active };
     const thread = try std.Thread.spawn(.{}, removeNodeOnce, .{&ctx});
     defer thread.join();
 
@@ -167,7 +202,12 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
     // Wait for the removal to land inside the window before traversing, so
     // the overlap assertion below cannot fail on scheduling delays. The
     // traversal runs on the sealed snapshot either way.
-    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
+    const overlapped = waitForRemovalAttempt(&ctx);
+    if (!overlapped) {
+        stop.store(true, .release);
+        traversal_active.store(false, .release);
+        try testing.expect(overlapped);
+    }
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.bfs(setup.root, .{ .allocator = testing.allocator });
@@ -184,8 +224,9 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
 
     const setup = try buildWideRootGraph(graph, 5000);
     var start = StartFlag.init(false);
+    var stop = StartFlag.init(false);
     var traversal_active = StartFlag.init(false);
-    var ctx = RemoveNodeOnceCtx{ .graph = graph, .node = setup.first_child, .start = &start, .traversal_active = &traversal_active };
+    var ctx = RemoveNodeOnceCtx{ .graph = graph, .node = setup.first_child, .start = &start, .stop = &stop, .traversal_active = &traversal_active };
     const thread = try std.Thread.spawn(.{}, removeNodeOnce, .{&ctx});
     defer thread.join();
 
@@ -194,7 +235,12 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
     // Wait for the removal to land inside the window before traversing, so
     // the overlap assertion below cannot fail on scheduling delays. The
     // traversal runs on the sealed snapshot either way.
-    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
+    const overlapped = waitForRemovalAttempt(&ctx);
+    if (!overlapped) {
+        stop.store(true, .release);
+        traversal_active.store(false, .release);
+        try testing.expect(overlapped);
+    }
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const order = try snapshot.dfs(setup.root, .{ .allocator = testing.allocator });
@@ -211,8 +257,9 @@ test "algorithms concurrent: cycle tolerates node removed during traversal" {
 
     const setup = try buildWideRootGraph(graph, 5000);
     var start = StartFlag.init(false);
+    var stop = StartFlag.init(false);
     var traversal_active = StartFlag.init(false);
-    var ctx = RemoveNodeOnceCtx{ .graph = graph, .node = setup.first_child, .start = &start, .traversal_active = &traversal_active };
+    var ctx = RemoveNodeOnceCtx{ .graph = graph, .node = setup.first_child, .start = &start, .stop = &stop, .traversal_active = &traversal_active };
     const thread = try std.Thread.spawn(.{}, removeNodeOnce, .{&ctx});
     defer thread.join();
 
@@ -221,7 +268,12 @@ test "algorithms concurrent: cycle tolerates node removed during traversal" {
     // Wait for the removal to land inside the window before traversing, so
     // the overlap assertion below cannot fail on scheduling delays. The
     // traversal runs on the sealed snapshot either way.
-    while (!ctx.attempted.load(.acquire)) std.atomic.spinLoopHint();
+    const overlapped = waitForRemovalAttempt(&ctx);
+    if (!overlapped) {
+        stop.store(true, .release);
+        traversal_active.store(false, .release);
+        try testing.expect(overlapped);
+    }
     var snapshot = try graph.snapshot(.{ .allocator = testing.allocator });
     defer snapshot.deinit();
     const has_cycle = try snapshot.hasCycle(.{ .allocator = testing.allocator });

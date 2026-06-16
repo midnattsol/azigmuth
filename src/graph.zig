@@ -48,6 +48,7 @@ pub const ReadSnapshot = graph_snapshot_api.ReadSnapshot;
 pub const SnapshotNeighborIterator = graph_snapshot_api.SnapshotNeighborIterator;
 pub const SnapshotOutEdgeIterator = graph_snapshot_api.SnapshotOutEdgeIterator;
 pub const CsrView = @import("query/snapshot/csr.zig").CsrView;
+pub const Wayfind = @import("query/wayfind.zig");
 
 fn freeAtomicPages(comptime T: type, allocator: std.mem.Allocator, directory: anytype, entries_per_page: usize) void {
     const Directory = @TypeOf(directory.*);

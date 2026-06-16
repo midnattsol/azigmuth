@@ -87,6 +87,10 @@ pub const ReadSnapshot = opaque {
         return self.innerConst().hasCycle(ctx);
     }
 
+    pub fn wayfind(self: *const ReadSnapshot, plan: internal.Wayfind.Plan, ctx: internal.Context, params: internal.Wayfind.Params) internal.Wayfind.ExecError!internal.Wayfind.Result {
+        return self.innerConst().wayfind(plan, ctx, params);
+    }
+
     /// Copies the snapshot's logical forward adjacency into caller-owned flat
     /// CSR arrays (`out_offsets` + `out_targets`). The result is detached from
     /// the graph: it remains valid after this snapshot — and the graph itself —

@@ -9,6 +9,7 @@ const snapshot_csr = @import("../query/snapshot/csr.zig");
 const snapshot_iterators = @import("../query/snapshot/iterators.zig");
 const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
+const wayfind_mod = @import("../query/wayfind.zig");
 
 pub const CsrView = snapshot_csr.CsrView;
 
@@ -86,6 +87,12 @@ pub const ReadSnapshot = struct {
 
     pub fn hasCycle(self: *const ReadSnapshot, ctx: context_mod.Context) types.GraphError!bool {
         return cycle_mod.hasCycleCaptured(&self.view, ctx);
+    }
+
+    /// Executes a Wayfind plan against this captured view. The query sees
+    /// exactly this snapshot; later graph mutations are invisible.
+    pub fn wayfind(self: *const ReadSnapshot, plan: wayfind_mod.Plan, ctx: context_mod.Context, params: wayfind_mod.Params) wayfind_mod.ExecError!wayfind_mod.Result {
+        return wayfind_mod.run(plan, &self.view, ctx, params);
     }
 
     /// Copies the snapshot's logical forward adjacency into caller-owned flat

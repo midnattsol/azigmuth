@@ -90,8 +90,8 @@ are covered by the header checksum.
 | 48 | 4 | `block_fwd_count` | u32 | forward edge-block frontier |
 | 52 | 4 | `block_rev_count` | u32 | reverse edge-block frontier |
 | 56 | 4 | `group_count` | u32 | group-descriptor frontier |
-| 60 | 4 | `tiny_fwd_count` | u32 | tiny forward slot frontier |
-| 64 | 4 | `tiny_rev_count` | u32 | tiny reverse slot frontier |
+| 60 | 4 | `tiny_block_fwd_count` | u32 | tiny forward slot frontier |
+| 64 | 4 | `tiny_block_rev_count` | u32 | tiny reverse slot frontier |
 | 68 | 4 | `prop_row_count` | u32 | property-row frontier (row 0 reserved = "none") |
 | 72 | 8 | `header_checksum` | u64 | §8.1 |
 | 80 | 432 | — | reserved | MUST be zero |
@@ -155,8 +155,8 @@ Page-count derivation used throughout: `pages(n, per) = ceil(n / per)`.
 | 0 | `node_records` | NodeRecord | 48 | always |
 | 1 | `blocks_fwd` | EdgeBlockFwd page | BPP × 8·EPB | always |
 | 2 | `blocks_rev` | EdgeBlockRev page | BPP × 4·EPB | always |
-| 3 | `live_fwd` | u8 per block slot | BPP × 1 | always |
-| 4 | `live_rev` | u8 per block slot | BPP × 1 | always |
+| 3 | `alive_fwd` | u8 per block slot | BPP × 1 | always |
+| 4 | `alive_rev` | u8 per block slot | BPP × 1 | always |
 | 5 | `edge_ids_fwd` | EdgeBlockFwdIds page | BPP × 4·EPB | iff `multigraph` |
 | 6 | `prop_rows_fwd` | EdgeBlockFwdProps page | BPP × 4·EPB | iff `edge_properties` |
 | 7 | `groups` | EdgeBlockGroup page | GPP × 8 | always |
@@ -244,7 +244,7 @@ are unspecified. A block whose side has the sorted flag set holds its live
 destinations in ascending order, and consecutive blocks of that side are
 ordered across block boundaries.
 
-### 7.3 live_fwd / live_rev (ids 3–4)
+### 7.3 alive_fwd / alive_rev (ids 3–4)
 
 One u8 per block slot, page-for-page parallel to ids 1–2: the live entry
 count of the corresponding block, in `[0, EPB]`.

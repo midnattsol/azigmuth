@@ -5,4 +5,5 @@ comptime {
     _ = @import("cycle.zig");
     _ = @import("dfs.zig");
     _ = @import("snapshot.zig");
+    _ = @import("wayfind.zig");
 }

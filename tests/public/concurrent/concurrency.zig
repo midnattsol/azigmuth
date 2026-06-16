@@ -3,14 +3,10 @@ const azigmuth = @import("azigmuth");
 const snapshot_support = @import("snapshot_support");
 
 const testing = std.testing;
-const SpinBudget: usize = 200_000_000;
-
-fn spinFor(spin_count: *usize, max: usize) bool {
-    if (spin_count.* >= max) return false;
-    spin_count.* += 1;
-    std.atomic.spinLoopHint();
-    return true;
-}
+const ReaderAttempts: usize = 256;
+const MutationAttempts: usize = 4096;
+const ValidationAttempts: usize = 4096;
+const WaitBudget: usize = 1_000_000;
 
 const ReaderCtx = struct {
     graph: *azigmuth.Graph,
@@ -19,27 +15,21 @@ const ReaderCtx = struct {
     reads: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 };
 
-fn readerLoop(ctx: *ReaderCtx) void {
-    var spin: usize = 0;
-    while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
-        var iter = snapshot_support.neighbors(ctx.graph, ctx.node, std.heap.page_allocator) catch continue;
-        defer iter.deinit();
-        const materialized = iter.materialize(std.heap.page_allocator) catch continue;
-        defer std.heap.page_allocator.free(materialized);
-        _ = ctx.reads.fetchAdd(1, .monotonic);
-    }
-}
-
 /// Bounded variant of `readerLoop` for tests that only need "both readers
 /// make progress concurrently": a fixed number of read attempts, no `stop`
 /// coordination, so the outcome does not depend on thread scheduling.
 fn readerLoopCounted(ctx: *ReaderCtx) void {
+    const allocator = std.heap.smp_allocator;
+
     var attempt: usize = 0;
-    while (attempt < 256) : (attempt += 1) {
-        var iter = snapshot_support.neighbors(ctx.graph, ctx.node, std.heap.page_allocator) catch continue;
-        defer iter.deinit();
-        const materialized = iter.materialize(std.heap.page_allocator) catch continue;
-        defer std.heap.page_allocator.free(materialized);
+    while (attempt < ReaderAttempts) : (attempt += 1) {
+        var iter = snapshot_support.neighbors(ctx.graph, ctx.node, allocator) catch continue;
+        const materialized = iter.materialize(allocator) catch {
+            iter.deinit();
+            continue;
+        };
+        allocator.free(materialized);
+        iter.deinit();
         _ = ctx.reads.fetchAdd(1, .monotonic);
     }
 }
@@ -58,8 +48,8 @@ fn removeNodeInLoop(ctx: *RemoveNodeCtx) void {
         std.atomic.spinLoopHint();
     }
 
-    var spin: usize = 0;
-    while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
+    var attempt: usize = 0;
+    while (!ctx.stop.load(.acquire) and attempt < MutationAttempts) : (attempt += 1) {
         if (ctx.graph.removeNode(ctx.target)) |_| {
             _ = ctx.successes.fetchAdd(1, .monotonic);
             return;
@@ -82,8 +72,8 @@ fn forwardMutatorInLoop(ctx: *ForwardMutatorCtx) void {
         std.atomic.spinLoopHint();
     }
 
-    var spin: usize = 0;
-    while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
+    var attempt: usize = 0;
+    while (!ctx.stop.load(.acquire) and attempt < MutationAttempts) : (attempt += 1) {
         ctx.graph.addEdge(ctx.predecessor, ctx.other_node, 0, .{}) catch continue;
         _ = ctx.graph.removeEdge(ctx.predecessor, ctx.other_node) catch {};
         _ = ctx.mutations.fetchAdd(1, .monotonic);
@@ -122,7 +112,7 @@ test "contract: removeNode tolerates unrelated predecessor forward mutation" {
     var mutator_thread = try std.Thread.spawn(.{}, forwardMutatorInLoop, .{&mut_ctx});
 
     var wait: usize = 0;
-    while ((rm_ctx.successes.load(.acquire) == 0 or mut_ctx.mutations.load(.acquire) == 0) and wait < SpinBudget) : (wait += 1) {
+    while ((rm_ctx.successes.load(.acquire) == 0 or mut_ctx.mutations.load(.acquire) == 0) and wait < WaitBudget) : (wait += 1) {
         std.atomic.spinLoopHint();
     }
     stop.store(true, .release);
@@ -208,7 +198,7 @@ test "contract: validate() tolerates concurrent multigraph addEdgeWithId/removeE
     var mut_thread = try std.Thread.spawn(.{}, forwardMutatorInLoop, .{&mut_ctx});
 
     var verify_spin: usize = 0;
-    while (verify_spin < SpinBudget) : (verify_spin += 1) {
+    while (verify_spin < WaitBudget) : (verify_spin += 1) {
         if (val_ctx.reads.load(.acquire) > 0 and mut_ctx.mutations.load(.acquire) > 0) break;
         std.atomic.spinLoopHint();
     }
@@ -223,8 +213,8 @@ test "contract: validate() tolerates concurrent multigraph addEdgeWithId/removeE
 }
 
 fn validatorInLoop(ctx: *ReaderCtx) void {
-    var spin: usize = 0;
-    while (!ctx.stop.load(.acquire) and spinFor(&spin, SpinBudget)) {
+    var attempt: usize = 0;
+    while (!ctx.stop.load(.acquire) and attempt < ValidationAttempts) : (attempt += 1) {
         ctx.graph.validate() catch continue;
         _ = ctx.reads.fetchAdd(1, .monotonic);
     }

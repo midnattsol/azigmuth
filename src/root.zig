@@ -69,6 +69,7 @@ pub const Violation = graph.Violation;
 // ── Algorithms ────────────────────────────────────────────────────────
 pub const Context = @import("algorithms/context.zig").Context;
 pub const CancelToken = @import("algorithms/context.zig").CancelToken;
+pub const Wayfind = graph.Wayfind;
 
 // ── Property columns ──────────────────────────────────────────────────
 // Caller-owned comptime-typed columnar stores indexed by the stable ids the

@@ -51,7 +51,8 @@ pub fn main() !void {
 
     try g.addEdge(a, b, 0, .{});
 
-    var snapshot = try g.snapshot(std.heap.page_allocator);
+    const ctx = az.Context.init(std.heap.page_allocator);
+    var snapshot = try g.snapshot(ctx);
     defer snapshot.deinit();
 
     var it = try snapshot.neighbors(a);
@@ -139,8 +140,9 @@ if (summary.left_repair_debt) {
 ## RepairRequired And Explicit Repair
 
 A mutation that cannot preserve the hard read bounds without a wider rewrite
-fails fast with `error.RepairRequired` and leaves the graph unchanged. The
-resolution is always the same explicit action: repair the node, then retry.
+fails fast with `error.RepairRequired` and leaves the published logical graph
+unchanged. The resolution is always the same explicit action: repair the node,
+then retry.
 
 ```zig
 const removed = g.removeEdge(a, b) catch |err| switch (err) {
@@ -308,6 +310,45 @@ const order = snapshot.bfs(start, ctx) catch |err| switch (err) {
 };
 defer allocator.free(order);
 ```
+
+## Wayfind
+
+Wayfind is a snapshot query language for topology-only set pipelines. Plans can
+be built at comptime with `az.Wayfind.Query` or parsed from text, then executed
+against a `ReadSnapshot`.
+
+```zig
+const plan = comptime az.Wayfind.Query.fromParam(0)
+    .out(az.Wayfind.ANY_RELATION, .{ .min = 1, .max = 2 })
+    .minusParam(1)
+    .ids();
+
+const seeds = [_]u32{start.index};
+const blocked = [_]u32{};
+var result = try snapshot.wayfind(plan, ctx, .{ .sets = &.{ &seeds, &blocked } });
+defer result.deinit(allocator);
+
+for (result.ids) |node_idx| {
+    _ = node_idx;
+}
+```
+
+Textual queries compile to the same IR:
+
+```zig
+var parsed = try az.Wayfind.parse(allocator,
+    "from $seeds | out(follows){1..2} | - $blocked | ids",
+    &.{.{ .name = "follows", .value = 7 }},
+);
+defer parsed.deinit(allocator);
+
+var text_result = try snapshot.wayfind(parsed.plan(), ctx, .{ .sets = &.{ &seeds, &blocked } });
+defer text_result.deinit(allocator);
+```
+
+Wayfind has set semantics: parameters are deduplicated, removed node ids in
+parameter sets are dropped as stale snapshot data, and out-of-range ids are an
+`error.InvalidNode` bind error.
 
 `Graph.validate()` remains the live fast-path structural check over the mutable
 engine state. `snapshot.validate()` is the fast logical/structural check over a
