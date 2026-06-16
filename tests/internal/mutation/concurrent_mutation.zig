@@ -11,7 +11,7 @@ test "concurrent mutation: claimed adjacency returns ConcurrentMutation" {
     const source = try graph.addNode();
     const destination = try graph.addNode();
 
-    const source_claim = &page_ops.nodeHotAt(&graph.graph, source).fwd_claim;
+    const source_claim = &page_ops.nodeHotAt(&graph.graph, source).claim_fwd;
     try testing.expectEqual(@as(u8, 0), source_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer source_claim.store(0, .release);
 

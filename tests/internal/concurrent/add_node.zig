@@ -29,14 +29,14 @@ test "addNode: 8 producers in parallel produce unique, sequential NodeIds" {
     const per_producer: usize = 100;
     const expected_total: usize = producer_count * per_producer;
 
-    var contexts: [producer_count]ProducerCtx = undefined;
+    var ctxs: [producer_count]ProducerCtx = undefined;
     var threads: [producer_count]std.Thread = undefined;
     for (0..producer_count) |producer_idx| {
-        contexts[producer_idx] = .{
+        ctxs[producer_idx] = .{
             .graph = &graph,
             .nodes_per_producer = per_producer,
         };
-        threads[producer_idx] = try std.Thread.spawn(.{}, producerLoop, .{&contexts[producer_idx]});
+        threads[producer_idx] = try std.Thread.spawn(.{}, producerLoop, .{&ctxs[producer_idx]});
     }
 
     for (threads) |thread| thread.join();
@@ -46,7 +46,7 @@ test "addNode: 8 producers in parallel produce unique, sequential NodeIds" {
     var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, expected_total + 16);
     defer seen.deinit(allocator);
 
-    for (contexts) |ctx| {
+    for (ctxs) |ctx| {
         try testing.expectEqual(per_producer, ctx.produced.items.len);
         for (ctx.produced.items) |index| {
             try testing.expect(!seen.isSet(index));
@@ -65,12 +65,12 @@ test "addNode: parallel producers with concurrent edge insertion keep forward/re
 
     const producer_count: usize = 3;
     const per_producer: usize = 50;
-    var contexts: [producer_count]ProducerCtx = undefined;
+    var ctxs: [producer_count]ProducerCtx = undefined;
     var threads: [producer_count + 1]std.Thread = undefined;
 
     for (0..producer_count) |producer_idx| {
-        contexts[producer_idx] = .{ .graph = &graph, .nodes_per_producer = per_producer };
-        threads[producer_idx] = try std.Thread.spawn(.{}, producerLoop, .{&contexts[producer_idx]});
+        ctxs[producer_idx] = .{ .graph = &graph, .nodes_per_producer = per_producer };
+        threads[producer_idx] = try std.Thread.spawn(.{}, producerLoop, .{&ctxs[producer_idx]});
     }
 
     // Edge-adder thread: periodically picks two random published node indices

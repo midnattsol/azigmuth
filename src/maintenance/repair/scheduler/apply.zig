@@ -204,8 +204,8 @@ fn publishRepairedAdjacency(
     const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
     // The rebuilt side is emitted in sorted order; the other side keeps its
     // current published sortedness.
-    const fwd_sorted = if (rebuilt_side == .fwd) true else published_ref.publishedFwdSortedFromMeta(meta);
-    const rev_sorted = if (rebuilt_side == .rev) true else published_ref.publishedRevSortedFromMeta(meta);
+    const sorted_fwd = if (rebuilt_side == .fwd) true else published_ref.publishedFwdSortedFromMeta(meta);
+    const sorted_rev = if (rebuilt_side == .rev) true else published_ref.publishedRevSortedFromMeta(meta);
     side_adj.publishBothAdj(
         graph,
         .{ .index = node_idx },
@@ -214,8 +214,8 @@ fn publishRepairedAdjacency(
         staging_adj,
         degrees.fwd,
         degrees.rev,
-        fwd_sorted,
-        rev_sorted,
+        sorted_fwd,
+        sorted_rev,
     );
 }
 

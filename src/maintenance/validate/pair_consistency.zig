@@ -79,8 +79,8 @@ fn validateReverseRun(graph: *const graph_core.GraphCore, destination_node: *u32
     try validateReverseConsistencyInContiguousBlocks(graph, destination_node.*, start, count);
 }
 
-fn validateForwardMultiplicityRun(graph: *const graph_core.GraphCore, context: *const ForwardMultiplicityContext, start: u32, count: u16) !void {
-    try validateForwardMultiplicityInContiguousBlocks(graph, context.source_node, context.adjacency, start, count);
+fn validateForwardMultiplicityRun(graph: *const graph_core.GraphCore, ctx: *const ForwardMultiplicityContext, start: u32, count: u16) !void {
+    try validateForwardMultiplicityInContiguousBlocks(graph, ctx.source_node, ctx.adjacency, start, count);
 }
 
 pub fn appendForwardConsistencyViolations(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator, violations: *std.ArrayList(types.Violation), source_node: u32, blocks: []const common.TraversedBlock) !void {
@@ -123,16 +123,16 @@ pub fn validateForwardConsistencyFast(graph: *const graph_core.GraphCore, source
     if (common.blockCount(adjacency, .fwd) == 0) return;
     if (graph.multigraph_enabled) {
         try common.forEachForwardEntryInAdj(graph, adjacency, ForwardMultiplicityContext{ .source_node = source_node, .adjacency = adjacency }, struct {
-            fn callback(inner_graph: *const graph_core.GraphCore, context: ForwardMultiplicityContext, entry: common.ForwardEntryView) !void {
-                try checkForwardPair(inner_graph, context.source_node, context.adjacency, entry.destination);
+            fn callback(inner_graph: *const graph_core.GraphCore, ctx: ForwardMultiplicityContext, entry: common.ForwardEntryView) !void {
+                try checkForwardPair(inner_graph, ctx.source_node, ctx.adjacency, entry.destination);
             }
         }.callback);
         return;
     }
     // The source adjacency is loop-invariant: compose it once, not per entry.
     try common.forEachForwardEntryInAdj(graph, adjacency, ForwardMultiplicityContext{ .source_node = source_node, .adjacency = adjacency }, struct {
-        fn callback(inner_graph: *const graph_core.GraphCore, context: ForwardMultiplicityContext, entry: common.ForwardEntryView) !void {
-            try checkForwardPair(inner_graph, context.source_node, context.adjacency, entry.destination);
+        fn callback(inner_graph: *const graph_core.GraphCore, ctx: ForwardMultiplicityContext, entry: common.ForwardEntryView) !void {
+            try checkForwardPair(inner_graph, ctx.source_node, ctx.adjacency, entry.destination);
         }
     }.callback);
 }

@@ -20,22 +20,22 @@ pub const NodeMeta = extern struct {
 
 pub fn desiredMetaForPublishFwd(meta: types.PublishedMeta, needs_repair_fwd: bool, new_degree_fwd: u32) types.PublishedMeta {
     var desired = meta.bumpedVersion();
-    desired.fwd_idx = 1 - meta.fwd_idx;
+    desired.idx_fwd = 1 - meta.idx_fwd;
     desired.needs_repair_fwd = needs_repair_fwd;
     return desired.withFwdDegree(new_degree_fwd);
 }
 
 pub fn desiredMetaForPublishRev(meta: types.PublishedMeta, needs_repair_rev: bool, new_degree_rev: u32) types.PublishedMeta {
     var desired = meta.bumpedVersion();
-    desired.rev_idx = 1 - meta.rev_idx;
+    desired.idx_rev = 1 - meta.idx_rev;
     desired.needs_repair_rev = needs_repair_rev;
     return desired.withRevDegree(new_degree_rev);
 }
 
 pub fn desiredMetaForPublishBoth(meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32) types.PublishedMeta {
     var desired = meta.bumpedVersion();
-    desired.fwd_idx = 1 - meta.fwd_idx;
-    desired.rev_idx = 1 - meta.rev_idx;
+    desired.idx_fwd = 1 - meta.idx_fwd;
+    desired.idx_rev = 1 - meta.idx_rev;
     desired.needs_repair_fwd = flags.needs_repair_fwd;
     desired.needs_repair_rev = flags.needs_repair_rev;
     desired.removed = flags.removed;

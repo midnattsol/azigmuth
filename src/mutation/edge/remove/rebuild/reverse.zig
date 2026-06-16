@@ -69,10 +69,10 @@ fn appendReverseBlockRemovingSourceCount(
 
 fn collectReverseRemovalBlock(
     graph: *const graph_core.GraphCore,
-    context: *ReverseRemovalContext,
+    ctx: *ReverseRemovalContext,
     block_idx: u32,
 ) !void {
-    context.remaining = try appendReverseBlockRemovingSourceCount(@constCast(graph), context.scratch, context.block_list, block_idx, context.source_idx, context.remaining);
+    ctx.remaining = try appendReverseBlockRemovingSourceCount(@constCast(graph), ctx.scratch, ctx.block_list, block_idx, ctx.source_idx, ctx.remaining);
 }
 
 pub fn rebuildReverseRemoveCount(
@@ -86,8 +86,8 @@ pub fn rebuildReverseRemoveCount(
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
-    var context = ReverseRemovalContext{ .source_idx = source_idx, .remaining = remove_count, .scratch = scratch, .block_list = &block_list };
-    try common.forEachBlockInSide(graph, published_side.*, .rev, &context, collectReverseRemovalBlock);
-    if (context.remaining > 0) return error.CorruptGraph;
+    var ctx = ReverseRemovalContext{ .source_idx = source_idx, .remaining = remove_count, .scratch = scratch, .block_list = &block_list };
+    try common.forEachBlockInSide(graph, published_side.*, .rev, &ctx, collectReverseRemovalBlock);
+    if (ctx.remaining > 0) return error.CorruptGraph;
     return try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .rev);
 }

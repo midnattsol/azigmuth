@@ -20,14 +20,14 @@ pub fn probeForwardDestinationMatches(
         destination_idx: u32,
         result: *remove_common.DestinationMatchProbe,
     };
-    var context = Context{ .destination_idx = destination_idx, .result = &result };
-    try side_ops.forEachForwardEntryInSide(graph, side_adj.*, &context, struct {
-        fn callback(_: *const graph_core.GraphCore, inner_context: *Context, entry: side_ops.ForwardEntryView) !void {
-            if (inner_context.result.has_multiple or entry.destination != inner_context.destination_idx) return;
-            if (inner_context.result.found == null) {
-                inner_context.result.found = .{ .block_idx = entry.block_idx, .slot = entry.slot };
+    var ctx = Context{ .destination_idx = destination_idx, .result = &result };
+    try side_ops.forEachForwardEntryInSide(graph, side_adj.*, &ctx, struct {
+        fn callback(_: *const graph_core.GraphCore, inner_ctx: *Context, entry: side_ops.ForwardEntryView) !void {
+            if (inner_ctx.result.has_multiple or entry.destination != inner_ctx.destination_idx) return;
+            if (inner_ctx.result.found == null) {
+                inner_ctx.result.found = .{ .block_idx = entry.block_idx, .slot = entry.slot };
             } else {
-                inner_context.result.has_multiple = true;
+                inner_ctx.result.has_multiple = true;
             }
         }
     }.callback);

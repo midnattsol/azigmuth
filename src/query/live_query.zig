@@ -59,7 +59,7 @@ pub fn edgePropertyRow(core: *graph_core.GraphCore, source: types.NodeId, destin
         side.first_group,
         destination.index,
         .fwd,
-        capture.fwd_sorted,
+        capture.sorted_fwd,
     ) orelse return null;
 
     if (node_published.NodePublished.isTiny(&side)) {

@@ -58,7 +58,7 @@ pub fn cloneGroupedRuns(
 pub fn forEachRun(
     graph: *const graph_core.GraphCore,
     side_adj: types.SideAdj,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const total_runs = runCount(side_adj);
@@ -67,7 +67,7 @@ pub fn forEachRun(
     var run_idx: u16 = 0;
     while (run_idx < total_runs) : (run_idx += 1) {
         const run = runAt(graph, side_adj, run_idx) orelse return error.CorruptGraph;
-        try callback(graph, context, run, run_idx + 1 == total_runs);
+        try callback(graph, ctx, run, run_idx + 1 == total_runs);
     }
 }
 

@@ -293,7 +293,7 @@ test "mutation: addEdge returns ConcurrentMutation when forward adjacency is cla
     const target_b = try graph.addNode();
 
     // Manually claim the forward adjacency of source to simulate a concurrent writer.
-    const source_fwd_claim = &page_ops.nodeHotAt(&graph.graph, source).fwd_claim;
+    const source_fwd_claim = &page_ops.nodeHotAt(&graph.graph, source).claim_fwd;
     try testing.expectEqual(@as(u8, 0), source_fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer source_fwd_claim.store(0, .release);
 
@@ -311,12 +311,12 @@ test "mutation: addEdge returns ConcurrentMutation when reverse adjacency is cla
     const source = try graph.addNode();
     const destination = try graph.addNode();
 
-    const destination_rev_claim = &page_ops.nodeHotAt(&graph.graph, destination).rev_claim;
+    const destination_rev_claim = &page_ops.nodeHotAt(&graph.graph, destination).claim_rev;
     try testing.expectEqual(@as(u8, 0), destination_rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer destination_rev_claim.store(0, .release);
 
     try testing.expectError(error.ConcurrentMutation, graph.addEdge(source, destination, 0, 0));
-    try testing.expectEqual(@as(u8, 0), page_ops.nodeHotAt(&graph.graph, source).fwd_claim.load(.acquire));
+    try testing.expectEqual(@as(u8, 0), page_ops.nodeHotAt(&graph.graph, source).claim_fwd.load(.acquire));
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
     try graph.validate();
@@ -332,8 +332,8 @@ test "mutation: self-edge addEdge claims and releases both adjacencies atomicall
 
     // Both claims must be released after the mutation.
     const node_after_add = page_ops.nodeHotAt(&graph.graph, node);
-    try testing.expectEqual(@as(u8, 0), node_after_add.fwd_claim.load(.acquire));
-    try testing.expectEqual(@as(u8, 0), node_after_add.rev_claim.load(.acquire));
+    try testing.expectEqual(@as(u8, 0), node_after_add.claim_fwd.load(.acquire));
+    try testing.expectEqual(@as(u8, 0), node_after_add.claim_rev.load(.acquire));
 
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(node));
@@ -352,8 +352,8 @@ test "mutation: self-edge removeEdge claims and releases both adjacencies atomic
     try graph.validate();
 
     const node_after_remove = page_ops.nodeHotAt(&graph.graph, node);
-    try testing.expectEqual(@as(u8, 0), node_after_remove.fwd_claim.load(.acquire));
-    try testing.expectEqual(@as(u8, 0), node_after_remove.rev_claim.load(.acquire));
+    try testing.expectEqual(@as(u8, 0), node_after_remove.claim_fwd.load(.acquire));
+    try testing.expectEqual(@as(u8, 0), node_after_remove.claim_rev.load(.acquire));
 
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(node));
@@ -396,7 +396,7 @@ test "mutation: removeEdge returns ConcurrentMutation when forward adjacency is 
     _ = try publish.ensureReverseBlockLayout(&graph, destination);
     try graph.validate();
 
-    const source_fwd_claim = &page_ops.nodeHotAt(&graph.graph, source).fwd_claim;
+    const source_fwd_claim = &page_ops.nodeHotAt(&graph.graph, source).claim_fwd;
     try testing.expectEqual(@as(u8, 0), source_fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer source_fwd_claim.store(0, .release);
 
@@ -416,12 +416,12 @@ test "mutation: removeEdge returns ConcurrentMutation when reverse adjacency is 
     _ = try publish.ensureReverseBlockLayout(&graph, destination);
     try graph.validate();
 
-    const destination_rev_claim = &page_ops.nodeHotAt(&graph.graph, destination).rev_claim;
+    const destination_rev_claim = &page_ops.nodeHotAt(&graph.graph, destination).claim_rev;
     try testing.expectEqual(@as(u8, 0), destination_rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer destination_rev_claim.store(0, .release);
 
     try testing.expectError(error.ConcurrentMutation, graph.removeEdge(source, destination));
-    try testing.expectEqual(@as(u8, 0), page_ops.nodeHotAt(&graph.graph, source).fwd_claim.load(.acquire));
+    try testing.expectEqual(@as(u8, 0), page_ops.nodeHotAt(&graph.graph, source).claim_fwd.load(.acquire));
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
     try graph.validate();
 }

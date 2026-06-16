@@ -72,8 +72,8 @@ fn buildForwardSide(
     defer entries.deinit(graph.allocator);
     var gather = Gather{ .entries = &entries, .allocator = graph.allocator };
     try side_ops.forEachForwardEntryInSide(graph, published_side, &gather, struct {
-        fn run(_: *const graph_core.GraphCore, context: *Gather, entry: side_ops.ForwardEntryView) !void {
-            try context.entries.append(context.allocator, .{
+        fn run(_: *const graph_core.GraphCore, ctx: *Gather, entry: side_ops.ForwardEntryView) !void {
+            try ctx.entries.append(ctx.allocator, .{
                 .destination_idx = entry.destination,
                 .relation = entry.relation,
                 .flags = @bitCast(entry.flags),
@@ -163,8 +163,8 @@ fn buildReverseSide(
     var gather = Gather{ .sources = &sources, .allocator = graph.allocator };
     if (published_side.block_count != 0) {
         try side_ops.forEachNodeIdInSide(graph, published_side, .rev, &gather, struct {
-            fn run(_: *const graph_core.GraphCore, context: *Gather, source_idx: u32) !void {
-                try context.sources.append(context.allocator, source_idx);
+            fn run(_: *const graph_core.GraphCore, ctx: *Gather, source_idx: u32) !void {
+                try ctx.sources.append(ctx.allocator, source_idx);
             }
         }.run);
     }

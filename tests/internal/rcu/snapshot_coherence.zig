@@ -26,7 +26,7 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
         .first_group = 0,
     };
     var meta0 = node_buffer.loadPublishedMeta();
-    meta0.fwd_idx = 0;
+    meta0.idx_fwd = 0;
     node_buffer.storePublishedMeta(meta0);
 
     const snapshot_a = graph.nodeRefAny(node).publishedAdj();
@@ -42,7 +42,7 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
         .first_group = 0,
     };
     var meta1 = meta0;
-    meta1.fwd_idx = 1;
+    meta1.idx_fwd = 1;
     node_buffer.storePublishedMeta(meta1);
 
     // ---- publish state C: flip back to slot 0, overwriting old state A
@@ -54,7 +54,7 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
         .first_group = 0,
     };
     var meta2 = meta1;
-    meta2.fwd_idx = 0;
+    meta2.idx_fwd = 0;
     node_buffer.storePublishedMeta(meta2);
 
     // ---- reader that cached meta0 before the flips now reads from
@@ -83,7 +83,7 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
         .first_group = 0,
     };
     var meta0 = node_buffer.loadPublishedMeta();
-    meta0.rev_idx = 0;
+    meta0.idx_rev = 0;
     node_buffer.storePublishedMeta(meta0);
 
     // Publish slot 1
@@ -95,7 +95,7 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
         .first_group = 0,
     };
     var meta1 = meta0;
-    meta1.rev_idx = 1;
+    meta1.idx_rev = 1;
     node_buffer.storePublishedMeta(meta1);
 
     // Overwrite slot 0
@@ -107,10 +107,10 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
         .first_group = 0,
     };
     var meta2 = meta1;
-    meta2.rev_idx = 0;
+    meta2.idx_rev = 0;
     node_buffer.storePublishedMeta(meta2);
 
-    // meta0 (rev_idx=0) now reads slot 0 → state with r2 = 3, not r0 = 1
+    // meta0 (idx_rev=0) now reads slot 0 → state with r2 = 3, not r0 = 1
     const snapshot_from_meta0 = node_buffer.publishedAdjFromMeta(meta0);
     try testing.expectEqual(@as(u32, r2), snapshot_from_meta0.first_block_rev);
     try testing.expectEqual(@as(u16, 3), snapshot_from_meta0.block_count_rev);
@@ -126,17 +126,17 @@ test "snapshot coherence: isNodeRemoved via publishedAdj().flags.removed can dis
     // Start with removed=false, slot 0 published.
     var meta0 = node_buffer.loadPublishedMeta();
     meta0.removed = false;
-    meta0.fwd_idx = 0;
+    meta0.idx_fwd = 0;
     node_buffer.storePublishedMeta(meta0);
 
     // Flip to slot 1, still removed=false.
     var meta1 = meta0;
-    meta1.fwd_idx = 1;
+    meta1.idx_fwd = 1;
     node_buffer.storePublishedMeta(meta1);
 
     // Overwrite slot 0 with removed=true, publish.
     var meta2 = meta1;
-    meta2.fwd_idx = 0;
+    meta2.idx_fwd = 0;
     meta2.removed = true;
     node_buffer.storePublishedMeta(meta2);
 
@@ -168,13 +168,13 @@ test "snapshot coherence: mixed fwd/rev slot reuse corrupts both sides simultane
     publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_a, .block_count = 1, .group_count = 0, .first_group = 0 };
     publishedOfTest(&graph, node).rev[0] = types.SideAdj{ .first_block = rev_a, .block_count = 1, .group_count = 0, .first_group = 0 };
     var meta0 = node_buffer.loadPublishedMeta();
-    meta0.fwd_idx = 0;
-    meta0.rev_idx = 0;
+    meta0.idx_fwd = 0;
+    meta0.idx_rev = 0;
     node_buffer.storePublishedMeta(meta0);
 
     // Flip both independently: fwd→1, rev still 0
     var meta1 = meta0;
-    meta1.fwd_idx = 1;
+    meta1.idx_fwd = 1;
     node_buffer.storePublishedMeta(meta1);
 
     // After just flipping fwd, slot 0 for fwd is now inactive but still holds A.
@@ -186,8 +186,8 @@ test "snapshot coherence: mixed fwd/rev slot reuse corrupts both sides simultane
     publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_b, .block_count = 2, .group_count = 0, .first_group = 0 };
     publishedOfTest(&graph, node).rev[1] = types.SideAdj{ .first_block = rev_b, .block_count = 2, .group_count = 0, .first_group = 0 };
     var meta2 = meta1;
-    meta2.fwd_idx = 0;
-    meta2.rev_idx = 1;
+    meta2.idx_fwd = 0;
+    meta2.idx_rev = 1;
     node_buffer.storePublishedMeta(meta2);
 
     // A reader with cached meta0 (fwd=0 rev=0) now reads:

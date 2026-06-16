@@ -10,15 +10,15 @@ const ReaderContext = struct {
     iterations: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
-fn readerLoop(context: *ReaderContext) void {
-    while (!context.stop.load(.acquire)) {
-        var iterator = context.graph.neighbors(context.source) catch @panic("reader failed to create iterator");
+fn readerLoop(ctx: *ReaderContext) void {
+    while (!ctx.stop.load(.acquire)) {
+        var iterator = ctx.graph.neighbors(ctx.source) catch @panic("reader failed to create iterator");
         var count: usize = 0;
         while (iterator.next() != null) {
             count += 1;
         }
         iterator.deinit();
-        _ = context.iterations.fetchAdd(1, .monotonic);
+        _ = ctx.iterations.fetchAdd(1, .monotonic);
     }
 }
 
@@ -131,12 +131,12 @@ test "rcu: reader threads can iterate while a writer publishes updates" {
     const toggled_target = try graph.addNode();
 
     var stop = std.atomic.Value(bool).init(false);
-    var first_context = ReaderContext{ .graph = &graph, .source = source, .stop = &stop };
-    var second_context = ReaderContext{ .graph = &graph, .source = source, .stop = &stop };
+    var first_ctx = ReaderContext{ .graph = &graph, .source = source, .stop = &stop };
+    var second_ctx = ReaderContext{ .graph = &graph, .source = source, .stop = &stop };
 
-    var first_thread = try std.Thread.spawn(.{}, readerLoop, .{&first_context});
-    var second_thread = try std.Thread.spawn(.{}, readerLoop, .{&second_context});
-    try waitForReaderIterations(&first_context, &second_context, 1);
+    var first_thread = try std.Thread.spawn(.{}, readerLoop, .{&first_ctx});
+    var second_thread = try std.Thread.spawn(.{}, readerLoop, .{&second_ctx});
+    try waitForReaderIterations(&first_ctx, &second_ctx, 1);
 
     for (0..30) |_| {
         try graph.addEdge(source, toggled_target, 0, 0);
@@ -150,8 +150,8 @@ test "rcu: reader threads can iterate while a writer publishes updates" {
     first_thread.join();
     second_thread.join();
 
-    try testing.expect(first_context.iterations.load(.acquire) > 0);
-    try testing.expect(second_context.iterations.load(.acquire) > 0);
+    try testing.expect(first_ctx.iterations.load(.acquire) > 0);
+    try testing.expect(second_ctx.iterations.load(.acquire) > 0);
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
     try graph.validate();
 }

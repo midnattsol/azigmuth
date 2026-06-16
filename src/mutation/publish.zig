@@ -17,8 +17,8 @@ fn applyDegreeDelta(current: u32, delta: i23) u32 {
     return @intCast(wide);
 }
 
-pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23, fwd_sorted: bool) types.PublishedMeta {
-    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
+pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, needs_repair_fwd: bool, delta: i23, sorted_fwd: bool) types.PublishedMeta {
+    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(sorted_fwd);
     var expected = expected_meta;
     while (true) {
         const new_degree: u32 = applyDegreeDelta(node_published.publishedFwdDegreeFromMeta(expected), delta);
@@ -29,8 +29,8 @@ pub fn publishStagedFwd(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
     }
 }
 
-pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: i23, rev_sorted: bool) types.PublishedMeta {
-    node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
+pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, needs_repair_rev: bool, delta: i23, sorted_rev: bool) types.PublishedMeta {
+    node_published.stagingRevSorted(expected_meta).* = @intFromBool(sorted_rev);
     var expected = expected_meta;
     while (true) {
         const new_degree: u32 = applyDegreeDelta(node_published.publishedRevDegreeFromMeta(expected), delta);
@@ -41,9 +41,9 @@ pub fn publishStagedRev(node_meta: *node_meta_mod.NodeMeta, node_published: *nod
     }
 }
 
-pub fn publishStagedBoth(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32, fwd_sorted: bool, rev_sorted: bool) types.PublishedMeta {
-    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
-    node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
+pub fn publishStagedBoth(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_degree: u32, rev_degree: u32, sorted_fwd: bool, sorted_rev: bool) types.PublishedMeta {
+    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(sorted_fwd);
+    node_published.stagingRevSorted(expected_meta).* = @intFromBool(sorted_rev);
     node_published.stagingFwdDegree(expected_meta).* = fwd_degree;
     node_published.stagingRevDegree(expected_meta).* = rev_degree;
     var expected = expected_meta;
@@ -54,9 +54,9 @@ pub fn publishStagedBoth(node_meta: *node_meta_mod.NodeMeta, node_published: *no
     }
 }
 
-pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23, fwd_sorted: bool, rev_sorted: bool) types.PublishedMeta {
-    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(fwd_sorted);
-    node_published.stagingRevSorted(expected_meta).* = @intFromBool(rev_sorted);
+pub fn publishBothDelta(node_meta: *node_meta_mod.NodeMeta, node_published: *node_published_mod.NodePublished, expected_meta: types.PublishedMeta, flags: types.NodeFlags, fwd_delta: i23, rev_delta: i23, sorted_fwd: bool, sorted_rev: bool) types.PublishedMeta {
+    node_published.stagingFwdSorted(expected_meta).* = @intFromBool(sorted_fwd);
+    node_published.stagingRevSorted(expected_meta).* = @intFromBool(sorted_rev);
     var expected = expected_meta;
     while (true) {
         const new_fwd: u32 = applyDegreeDelta(node_published.publishedFwdDegreeFromMeta(expected), fwd_delta);

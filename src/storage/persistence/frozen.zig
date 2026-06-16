@@ -64,12 +64,12 @@ pub const FrozenGraph = struct {
             0,
         );
         errdefer std.posix.munmap(bytes);
+        if (file_size < format.HEADER_BYTES + format.SECTION_TABLE_BYTES) return error.TruncatedFile;
         const header = try io_mod.parseHeader(@ptrCast(bytes[0..format.HEADER_BYTES].ptr));
         const tables = try io_mod.parseSectionTable(
             header,
             @ptrCast(bytes[format.SECTION_TABLE_OFFSET .. format.SECTION_TABLE_OFFSET + format.SECTION_TABLE_BYTES].ptr),
         );
-        file.close(io);
         try io_mod.checkSectionsAgainstFileLen(&tables, file_size);
         if (options.verify_checksums) {
             for (tables) |table| {
@@ -77,6 +77,7 @@ pub const FrozenGraph = struct {
                 try io_mod.verifySectionChecksum(table, bytes[table.file_offset .. table.file_offset + table.byte_len]);
             }
         }
+        file.close(io);
         return FrozenGraph{
             .bytes = bytes,
             .header = header,
@@ -200,6 +201,22 @@ pub const FrozenGraph = struct {
         const node_record = self.nodeRecord(node) orelse return error.InvalidNode;
 
         const side_adj: types.SideAdj = node_record.fwd;
+        if (side_adj.block_count == 0 and side_adj.group_count == 0 and !node_published.NodePublished.isTiny(&side_adj)) {
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .fwd,
+                .tiny_idx = 0,
+                .tiny_mode = false,
+                .tiny_block_idx = 0,
+                .tiny_count = 0,
+                .current_block_idx = 0,
+                .slot_idx = 0,
+                .blocks_remaining = 0,
+                .group_idx = 0,
+                .groups_remaining = 0,
+                .alive_in_block = 0,
+            };
+        }
         if (node_published.NodePublished.isTiny(&side_adj)) {
             return NeighborIterator{
                 .frozen = self,
@@ -253,6 +270,22 @@ pub const FrozenGraph = struct {
         const node_record = self.nodeRecord(node) orelse return error.InvalidNode;
 
         const side_adj: types.SideAdj = node_record.rev;
+        if (side_adj.block_count == 0 and side_adj.group_count == 0 and !node_published.NodePublished.isTiny(&side_adj)) {
+            return NeighborIterator{
+                .frozen = self,
+                .direction = .rev,
+                .tiny_idx = 0,
+                .tiny_mode = false,
+                .tiny_block_idx = 0,
+                .tiny_count = 0,
+                .current_block_idx = 0,
+                .slot_idx = 0,
+                .blocks_remaining = 0,
+                .group_idx = 0,
+                .groups_remaining = 0,
+                .alive_in_block = 0,
+            };
+        }
         if (node_published.NodePublished.isTiny(&side_adj)) {
             return NeighborIterator{
                 .frozen = self,

@@ -304,7 +304,7 @@ pub fn outEdges(view: *const snapshot_view.CapturedGraphView, node: types.NodeId
 pub fn forEachNeighborInView(
     view: *const snapshot_view.CapturedGraphView,
     node_idx: u32,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const side = view.fwdSide(node_idx);
@@ -319,7 +319,7 @@ pub fn forEachNeighborInView(
             const candidate = slot.entries[entry_idx].destination;
             if (candidate >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(candidate)) continue;
-            try callback(context, candidate);
+            try callback(ctx, candidate);
         }
         return;
     }
@@ -343,7 +343,7 @@ pub fn forEachNeighborInView(
         for (blocks[slot_in_page].destinations[0..alive]) |candidate| {
             if (candidate >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(candidate)) continue;
-            try callback(context, candidate);
+            try callback(ctx, candidate);
         }
     }
 }

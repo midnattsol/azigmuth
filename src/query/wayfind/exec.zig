@@ -322,7 +322,7 @@ const FwdEntry = struct {
 fn forEachFwdEntry(
     view: *const snapshot_view.CapturedGraphView,
     node_idx: u32,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const side = snapshot_capture.sideAdjOfSnapshot(view.fwdSide(node_idx));
@@ -337,7 +337,7 @@ fn forEachFwdEntry(
         for (slot.entries[0..count]) |entry| {
             if (entry.destination >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(entry.destination)) continue;
-            try callback(context, FwdEntry{
+            try callback(ctx, FwdEntry{
                 .destination = entry.destination,
                 .relation = entry.relation,
                 .prop_row = entry.prop_row,
@@ -357,7 +357,7 @@ fn forEachFwdEntry(
             const destination = block.destinations[slot];
             if (destination >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(destination)) continue;
-            try callback(context, FwdEntry{
+            try callback(ctx, FwdEntry{
                 .destination = destination,
                 .relation = block.relations[slot],
                 .prop_row = if (rows) |row_block| row_block.rows[slot] else 0,

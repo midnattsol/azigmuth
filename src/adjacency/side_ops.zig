@@ -62,7 +62,7 @@ pub fn forEachBlockInSide(
     graph: *const graph_core.GraphCore,
     side_adj: types.SideAdj,
     comptime side: adjacency.AdjSide,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     if (side_adj.block_count == 0) return;
@@ -71,7 +71,7 @@ pub fn forEachBlockInSide(
 
     var cursor = BlockCursor.init(side_adj);
     while (cursor.next(graph)) |block_idx| {
-        try callback(graph, context, block_idx);
+        try callback(graph, ctx, block_idx);
     }
 }
 
@@ -79,7 +79,7 @@ pub fn forEachSlotInSide(
     graph: *const graph_core.GraphCore,
     side_adj: types.SideAdj,
     comptime side: adjacency.AdjSide,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     if (side_adj.block_count == 0) return;
@@ -89,7 +89,7 @@ pub fn forEachSlotInSide(
     if (node_published_mod.NodePublished.isTiny(&side_adj)) {
         const count = node_published_mod.NodePublished.tinyCount(&side_adj);
         for (0..count) |slot| {
-            try callback(graph, context, TINY_SLOT_TAG | side_adj.first_block, @as(u7, @intCast(slot)));
+            try callback(graph, ctx, TINY_SLOT_TAG | side_adj.first_block, @as(u7, @intCast(slot)));
         }
         return;
     }
@@ -100,7 +100,7 @@ pub fn forEachSlotInSide(
         // as an out-of-bounds crash inside shared traversal helpers.
         const alive_count = @min(page_ops.blockAliveCount(graph, block_idx, side), constants.EDGES_PER_BLOCK);
         for (0..alive_count) |slot| {
-            try callback(graph, context, block_idx, @as(u7, @intCast(slot)));
+            try callback(graph, ctx, block_idx, @as(u7, @intCast(slot)));
         }
     }
 }
@@ -173,7 +173,7 @@ pub fn forEachNodeIdInSide(
     graph: *const graph_core.GraphCore,
     side_adj: types.SideAdj,
     comptime side: adjacency.AdjSide,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     if (side_adj.block_count == 0) return;
@@ -185,11 +185,11 @@ pub fn forEachNodeIdInSide(
         switch (side) {
             .fwd => {
                 const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-                for (0..count) |entry_idx| try callback(graph, context, slot.entries[entry_idx].destination);
+                for (0..count) |entry_idx| try callback(graph, ctx, slot.entries[entry_idx].destination);
             },
             .rev => {
                 const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
-                for (0..count) |entry_idx| try callback(graph, context, slot.sources[entry_idx]);
+                for (0..count) |entry_idx| try callback(graph, ctx, slot.sources[entry_idx]);
             },
         }
         return;
@@ -208,7 +208,7 @@ pub fn forEachNodeIdInSide(
                 .fwd => block.destinations[slot],
                 .rev => block.sources[slot],
             };
-            try callback(graph, context, node_id);
+            try callback(graph, ctx, node_id);
         }
     }
 }
@@ -216,17 +216,17 @@ pub fn forEachNodeIdInSide(
 pub fn forEachForwardEntryInSide(
     graph: *const graph_core.GraphCore,
     side_adj: types.SideAdj,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
-    try forEachSlotInSide(graph, side_adj, .fwd, context, struct {
+    try forEachSlotInSide(graph, side_adj, .fwd, ctx, struct {
         fn run(
             inner_graph: *const graph_core.GraphCore,
-            inner_context: @TypeOf(context),
+            inner_ctx: @TypeOf(ctx),
             block_idx: u32,
             slot: u7,
         ) !void {
-            try callback(inner_graph, inner_context, readForwardEntryAtSlot(inner_graph, block_idx, slot));
+            try callback(inner_graph, inner_ctx, readForwardEntryAtSlot(inner_graph, block_idx, slot));
         }
     }.run);
 }
@@ -310,8 +310,8 @@ pub fn publishBothAdj(
     adj: types.NodeAdj,
     fwd_degree: u32,
     rev_degree: u32,
-    fwd_sorted: bool,
-    rev_sorted: bool,
+    sorted_fwd: bool,
+    sorted_rev: bool,
 ) void {
     const meta = node_meta.loadPublishedMeta();
     node_access.writeStagingFwd(graph, node_id, meta, .{
@@ -326,7 +326,7 @@ pub fn publishBothAdj(
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     });
-    _ = publish_mod.publishStagedBoth(node_meta, node_published, meta, adj.flags, fwd_degree, rev_degree, fwd_sorted, rev_sorted);
+    _ = publish_mod.publishStagedBoth(node_meta, node_published, meta, adj.flags, fwd_degree, rev_degree, sorted_fwd, sorted_rev);
 }
 
 pub fn publishRevAdj(
@@ -336,7 +336,7 @@ pub fn publishRevAdj(
     node_published: *node_published_mod.NodePublished,
     adj: types.NodeAdj,
     new_rev_degree: u32,
-    rev_sorted: bool,
+    sorted_rev: bool,
 ) void {
     const meta = node_meta.loadPublishedMeta();
     const rev_delta: i23 = @intCast(@as(i64, @intCast(new_rev_degree)) - @as(i64, @intCast(node_access.publishedRevDegreeFromMetaAtConst(graph, node_id, meta))));
@@ -346,7 +346,7 @@ pub fn publishRevAdj(
         .group_count = adj.group_count_rev,
         .first_group = adj.first_group_rev,
     });
-    _ = publish_mod.publishStagedRev(node_meta, node_published, meta, adj.flags.needs_repair_rev, rev_delta, rev_sorted);
+    _ = publish_mod.publishStagedRev(node_meta, node_published, meta, adj.flags.needs_repair_rev, rev_delta, sorted_rev);
 }
 
 pub fn retireGroupChain(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {

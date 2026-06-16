@@ -4,11 +4,11 @@ const page_ops = graph_mod.page_ops_mod;
 const testing = std.testing;
 
 fn hotFwd(graph: *graph_mod.Graph, node: graph_mod.NodeId) !*std.atomic.Value(u8) {
-    return &page_ops.nodeHotAt(&graph.graph, node).fwd_claim;
+    return &page_ops.nodeHotAt(&graph.graph, node).claim_fwd;
 }
 
 fn hotRev(graph: *graph_mod.Graph, node: graph_mod.NodeId) !*std.atomic.Value(u8) {
-    return &page_ops.nodeHotAt(&graph.graph, node).rev_claim;
+    return &page_ops.nodeHotAt(&graph.graph, node).claim_rev;
 }
 
 test "concurrent: sanity — two disjoint edge pairs succeed sequentially" {
@@ -140,13 +140,13 @@ test "concurrent: removeNode claims both sides of same node" {
     try graph.addEdge(node, other, 0, 0);
     try graph.addEdge(other, node, 0, 0);
 
-    const fwd_claim = try hotFwd(&graph, node);
-    const rev_claim = try hotRev(&graph, node);
-    try testing.expectEqual(@as(u8, 0), fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
-    try testing.expectEqual(@as(u8, 0), rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
+    const claim_fwd = try hotFwd(&graph, node);
+    const claim_rev = try hotRev(&graph, node);
+    try testing.expectEqual(@as(u8, 0), claim_fwd.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
+    try testing.expectEqual(@as(u8, 0), claim_rev.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer {
-        fwd_claim.store(0, .release);
-        rev_claim.store(0, .release);
+        claim_fwd.store(0, .release);
+        claim_rev.store(0, .release);
     }
 
     try testing.expectError(error.ConcurrentMutation, graph.removeNode(node));
@@ -162,13 +162,13 @@ test "concurrent: repairNode claims both sides of same node" {
         try graph.addEdge(node, t, 0, 0);
     }
 
-    const fwd_claim = try hotFwd(&graph, node);
-    const rev_claim = try hotRev(&graph, node);
-    try testing.expectEqual(@as(u8, 0), fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
-    try testing.expectEqual(@as(u8, 0), rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
+    const claim_fwd = try hotFwd(&graph, node);
+    const claim_rev = try hotRev(&graph, node);
+    try testing.expectEqual(@as(u8, 0), claim_fwd.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
+    try testing.expectEqual(@as(u8, 0), claim_rev.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
     defer {
-        fwd_claim.store(0, .release);
-        rev_claim.store(0, .release);
+        claim_fwd.store(0, .release);
+        claim_rev.store(0, .release);
     }
 
     try testing.expectError(error.ConcurrentMutation, graph.repairNode(node));
@@ -239,17 +239,17 @@ test "concurrent: forward claim and reverse claim independent" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    const fwd_claim = try hotFwd(&graph, node);
-    const rev_claim = try hotRev(&graph, node);
+    const claim_fwd = try hotFwd(&graph, node);
+    const claim_rev = try hotRev(&graph, node);
 
-    const fwd_result = fwd_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire);
+    const fwd_result = claim_fwd.cmpxchgStrong(0, 1, .acq_rel, .acquire);
     try testing.expect(fwd_result == null);
-    defer fwd_claim.store(0, .release);
+    defer claim_fwd.store(0, .release);
 
-    const rev_result = rev_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire);
+    const rev_result = claim_rev.cmpxchgStrong(0, 1, .acq_rel, .acquire);
     try testing.expect(rev_result == null);
-    defer rev_claim.store(0, .release);
+    defer claim_rev.store(0, .release);
 
-    try testing.expectEqual(@as(u8, 1), fwd_claim.load(.acquire));
-    try testing.expectEqual(@as(u8, 1), rev_claim.load(.acquire));
+    try testing.expectEqual(@as(u8, 1), claim_fwd.load(.acquire));
+    try testing.expectEqual(@as(u8, 1), claim_rev.load(.acquire));
 }

@@ -122,11 +122,18 @@ pub fn emitSection(core: *const graph_core.GraphCore, id: format.SectionId, sink
 /// batches. The record is the published view normalized out of the RCU
 /// double-buffers — see makeNodeRecord.
 fn emitNodeRecords(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
-    _ = core;
-    _ = sink;
-    // TODO: batch records into a small stack buffer (e.g. one
-    // node-page worth) and sink.emit(std.mem.sliceAsBytes(batch)) per batch.
-    @panic("TODO: emitNodeRecords");
+    const node_count = core.publishedNodeCount();
+    var batch: [64]format.NodeRecord = undefined;
+    var batch_idx: usize = 0;
+    for (0..node_count) |node_idx| {
+        batch[batch_idx] = makeNodeRecord(core, @intCast(node_idx));
+        batch_idx += 1;
+        if (batch_idx == 64) {
+            try sink.emit(std.mem.sliceAsBytes(batch[0..batch_idx]));
+            batch_idx = 0;
+        }
+    }
+    if (batch_idx > 0) try sink.emit(std.mem.sliceAsBytes(batch[0..batch_idx]));
 }
 
 /// Normalizes one node's published state into its canonical NodeRecord:
@@ -135,7 +142,35 @@ fn emitNodeRecords(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) 
 /// needs_repair_*, sorted bits). Pure — unit-test it on its own.
 pub fn makeNodeRecord(core: *const graph_core.GraphCore, node_idx: u32) format.NodeRecord {
     const node_id = types.NodeId{ .index = node_idx };
-    var node_published = page_ops.nodePublishedAtConst(core, node_id);
+    const meta = page_ops.nodeMetaAtConst(core, node_id).loadPublishedMeta();
+    const published = page_ops.nodePublishedAtConst(core, node_id);
+
+    const fwd = published.fwd[meta.idx_fwd];
+    const rev = published.rev[meta.idx_rev];
+
+    const fwd_degree: u32 = if (meta.degree_fwd_overflow) published.degrees_fwd[meta.idx_fwd] else meta.degree_fwd;
+    const rev_degree: u32 = if (meta.degree_rev_overflow) published.degrees_rev[meta.idx_rev] else meta.degree_rev;
+
+    const hot = page_ops.nodeHotAtConst(core, node_id);
+    const next_local_edge_id = hot.loadNextLocalEdgeId();
+
+    const sorted_fwd = published.sorted_fwd[meta.idx_fwd] != 0;
+    const sorted_rev = published.sorted_rev[meta.idx_rev] != 0;
+
+    return format.NodeRecord{
+        .fwd = fwd,
+        .rev = rev,
+        .degree_fwd = fwd_degree,
+        .degree_rev = rev_degree,
+        .flags = .{
+            .removed = meta.removed,
+            .sorted_fwd = sorted_fwd,
+            .sorted_rev = sorted_rev,
+            .needs_repair_fwd = meta.needs_repair_fwd,
+            .needs_repair_rev = meta.needs_repair_rev,
+        },
+        .next_local_edge_id = next_local_edge_id,
+    };
 }
 
 /// Emits the raw `EdgeBlockFwd`/`EdgeBlockRev` pages, page-for-page, up to
@@ -143,52 +178,105 @@ pub fn makeNodeRecord(core: *const graph_core.GraphCore, node_idx: u32) format.N
 /// (format.blockPages). Whole pages are emitted, including slots past the
 /// allocation frontier inside the last page.
 fn emitBlockPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
-    _ = core;
-    _ = sink;
-    _ = side;
-    // TODO: page_ops.edgeBlockPageRaw gives the page base as usize
-    // (0 when absent — cannot happen below the frontier); slice it as
-    // EDGE_BLOCKS_PER_PAGE blocks and emit its bytes.
-    @panic("TODO: emitBlockPages");
+    const block_count = switch (side) {
+        .fwd => core.loadBlockFwdCount(),
+        .rev => core.loadBlockRevCount(),
+    };
+    const page_count = format.blockPages(block_count);
+    const block_byte_len = switch (side) {
+        .fwd => @sizeOf(types.EdgeBlockFwd),
+        .rev => @sizeOf(types.EdgeBlockRev),
+    };
+    const page_byte_len = constants.EDGE_BLOCKS_PER_PAGE * block_byte_len;
+    for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
+        const page_idx: u32 = @intCast(page_idx_usize);
+        const raw_ptr: usize = page_ops.edgeBlockPageRaw(core, page_idx, side);
+        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+    }
 }
 
 /// Emits the u8 alive-count sidecar pages for `side`, same page walk as
 /// emitBlockPages (page_ops.blockAlivePageRaw).
 fn emitLivePages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
-    _ = core;
-    _ = sink;
-    _ = side;
-    @panic("TODO: emitLivePages");
+    const block_count = switch (side) {
+        .fwd => core.loadBlockFwdCount(),
+        .rev => core.loadBlockRevCount(),
+    };
+    const page_count = format.blockPages(block_count);
+    const page_byte_len = constants.EDGE_BLOCKS_PER_PAGE;
+    for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
+        const page_idx: u32 = @intCast(page_idx_usize);
+        const raw_ptr: usize = page_ops.blockAlivePageRaw(core, page_idx, side);
+        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+    }
 }
 
 /// Emits `EdgeBlockFwdIds` pages (multigraph mode; otherwise emits nothing
 /// — the planned byte_len is 0).
 fn emitEdgeIdPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
-    _ = core;
-    _ = sink;
-    @panic("TODO: emitEdgeIdPages");
+    const block_count = core.loadBlockFwdCount();
+    if (block_count == 0) return;
+    const page_count = format.blockPages(block_count);
+    const page_byte_len = constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockFwdIds);
+    for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
+        const page_idx: u32 = @intCast(page_idx_usize);
+        const raw_ptr: usize = page_ops.edgeBlockFwdIdsPageRaw(core, page_idx);
+        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+    }
 }
 
 /// Emits `EdgeBlockFwdProps` pages (edge_properties mode; otherwise nothing).
 fn emitPropRowPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
-    _ = core;
-    _ = sink;
-    @panic("TODO: emitPropRowPages");
+    const block_count = core.loadBlockFwdCount();
+    if (block_count == 0) return;
+    const page_count = format.blockPages(block_count);
+    const page_byte_len = constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockFwdProps);
+    for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
+        const page_idx: u32 = @intCast(page_idx_usize);
+        const raw_ptr: usize = page_ops.edgeBlockFwdPropsPageRaw(core, page_idx);
+        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+    }
 }
 
 /// Emits `EdgeBlockGroup` pages up to groupPages(loadGroupCount()).
 fn emitGroupPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
-    _ = core;
-    _ = sink;
-    @panic("TODO: emitGroupPages");
+    const group_count = core.loadGroupCount();
+    const page_count = format.groupPages(group_count);
+    const page_byte_len = constants.EDGE_GROUPS_PER_PAGE * @sizeOf(types.EdgeBlockGroup);
+    for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
+        const page_idx: u32 = @intCast(page_idx_usize);
+        const raw_ptr: usize = core.edge_block_group_pages.load(page_idx);
+        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+    }
 }
 
 /// Emits Tiny{Fwd,Rev}Slot pages up to tiny*Pages(loadTiny*Count()).
 fn emitTinyPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
-    _ = core;
-    _ = sink;
-    _ = side;
-    @panic("TODO: emitTinyPages");
+    const tiny_count = switch (side) {
+        .fwd => core.loadTinyFwdCount(),
+        .rev => core.loadTinyRevCount(),
+    };
+    const per_page: u32 = switch (side) {
+        .fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
+        .rev => node_tiny.TINY_BLOCKS_REV_PER_PAGE,
+    };
+    const block_size: usize = switch (side) {
+        .fwd => @sizeOf(node_tiny.TinyFwdBlock),
+        .rev => @sizeOf(node_tiny.TinyRevBlock),
+    };
+    const page_count: u64 = switch (side) {
+        .fwd => format.tinyFwdPages(tiny_count),
+        .rev => format.tinyRevPages(tiny_count),
+    };
+    const page_byte_len = per_page * block_size;
+    for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
+        const page_idx: u32 = @intCast(page_idx_usize);
+        const raw_ptr: usize = switch (side) {
+            .fwd => core.tiny_block_fwd_pages.load(page_idx),
+            .rev => core.tiny_block_rev_pages.load(page_idx),
+        };
+        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+    }
 }
 
 // ── Free-list emitters ───────────────────────────────────────────────────
@@ -213,9 +301,42 @@ pub const FreeStackId = enum {
 /// Counts the entries of one free stack (planSections needs it before any
 /// payload is emitted).
 pub fn countFreeStack(core: *const graph_core.GraphCore, which: FreeStackId) u32 {
-    _ = core;
-    _ = which;
-    @panic("TODO: countFreeStack");
+    const head_value: u64 = switch (which) {
+        .blocks_fwd => core.free_blocks_fwd_head.load(.acquire),
+        .blocks_rev => core.free_blocks_rev_head.load(.acquire),
+        .tiny_fwd => core.free_tiny_block_fwd_head.load(.acquire),
+        .tiny_rev => core.free_tiny_block_rev_head.load(.acquire),
+        .prop_rows => core.free_prop_rows_head.load(.acquire),
+    };
+    const first_idx: u32 = @truncate(head_value);
+    if (first_idx == constants.END_OF_CHAIN) return 0;
+
+    const per_page: u32 = switch (which) {
+        .blocks_fwd, .blocks_rev => constants.EDGE_BLOCKS_PER_PAGE,
+        .tiny_fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
+        .tiny_rev => node_tiny.TINY_BLOCKS_REV_PER_PAGE,
+        .prop_rows => constants.PROP_ROWS_PER_PAGE,
+    };
+
+    var count: u32 = 1;
+    var current_idx: u32 = first_idx;
+    while (true) {
+        const page_idx = current_idx / per_page;
+        const slot_idx = current_idx % per_page;
+        const raw: usize = switch (which) {
+            .blocks_fwd => core.edge_blocks_fwd_meta_pages.load(page_idx),
+            .blocks_rev => core.edge_blocks_rev_meta_pages.load(page_idx),
+            .tiny_fwd => core.tiny_block_fwd_meta_pages.load(page_idx),
+            .tiny_rev => core.tiny_block_rev_meta_pages.load(page_idx),
+            .prop_rows => core.prop_row_meta_pages.load(page_idx),
+        };
+        const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+        const next = meta_page[slot_idx].next.load(.acquire);
+        if (next == constants.END_OF_CHAIN) break;
+        count += 1;
+        current_idx = next;
+    }
+    return count;
 }
 
 /// Emits the free block indices of `side` as raw u32s (drain order is

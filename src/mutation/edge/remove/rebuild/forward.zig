@@ -69,10 +69,10 @@ fn appendForwardBlockWithoutDestination(
 
 fn collectForwardRemovalBlock(
     graph: *const graph_core.GraphCore,
-    context: *ForwardRemovalContext,
+    ctx: *ForwardRemovalContext,
     block_idx: u32,
 ) !void {
-    context.removed += try appendForwardBlockWithoutDestination(@constCast(graph), context.scratch, context.block_list, block_idx, context.destination_idx);
+    ctx.removed += try appendForwardBlockWithoutDestination(@constCast(graph), ctx.scratch, ctx.block_list, block_idx, ctx.destination_idx);
 }
 
 fn appendSharedForwardBlock(
@@ -138,9 +138,9 @@ pub fn rebuildForwardRemoveAll(
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
-    var context = ForwardRemovalContext{ .destination_idx = destination_idx, .scratch = scratch, .block_list = &block_list };
-    try common.forEachBlockInSide(graph, published_side.*, .fwd, &context, collectForwardRemovalBlock);
-    return .{ .new_side = try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .fwd), .removed = context.removed };
+    var ctx = ForwardRemovalContext{ .destination_idx = destination_idx, .scratch = scratch, .block_list = &block_list };
+    try common.forEachBlockInSide(graph, published_side.*, .fwd, &ctx, collectForwardRemovalBlock);
+    return .{ .new_side = try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, .fwd), .removed = ctx.removed };
 }
 
 pub fn rebuildForwardRemoveOneById(
@@ -162,8 +162,8 @@ pub fn rebuildForwardRemoveOneById(
         scratch: *common.MutationScratch,
         block_list: *std.ArrayList(u32),
     };
-    var context = RemoveByIdContext{ .destination_idx = destination_idx, .edge_id = edge_id, .removed_target_edge = &removed_target_edge, .scratch = scratch, .block_list = &block_list };
-    try common.forEachBlockInSide(graph, published_side.*, .fwd, &context, struct {
+    var rem_ctx = RemoveByIdContext{ .destination_idx = destination_idx, .edge_id = edge_id, .removed_target_edge = &removed_target_edge, .scratch = scratch, .block_list = &block_list };
+    try common.forEachBlockInSide(graph, published_side.*, .fwd, &rem_ctx, struct {
         fn callback(inner_graph: *const graph_core.GraphCore, ctx: *RemoveByIdContext, block_idx: u32) !void {
             if (!ctx.removed_target_edge.*) {
                 ctx.removed_target_edge.* = try appendForwardBlockRemovingOneById(@constCast(inner_graph), ctx.scratch, ctx.block_list, block_idx, ctx.destination_idx, ctx.edge_id);

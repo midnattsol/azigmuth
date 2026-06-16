@@ -17,8 +17,8 @@ pub const LiveReadSnapshot = struct {
     node_adj_snapshot: types.NodeAdj,
     degree_fwd: u32,
     degree_rev: u32,
-    fwd_sorted: bool,
-    rev_sorted: bool,
+    sorted_fwd: bool,
+    sorted_rev: bool,
 };
 
 /// Undoes `captureNodeSnapshot`'s reader acquisition on error paths.
@@ -86,8 +86,8 @@ fn captureNodeSnapshotImpl(graph: *const graph_core.GraphCore, node: types.NodeI
         const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
         const degree_fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta);
         const degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta);
-        const fwd_sorted = published_ref.publishedFwdSortedFromMeta(meta);
-        const rev_sorted = published_ref.publishedRevSortedFromMeta(meta);
+        const sorted_fwd = published_ref.publishedFwdSortedFromMeta(meta);
+        const sorted_rev = published_ref.publishedRevSortedFromMeta(meta);
 
         const after = node_access.loadPublishedMetaAtConst(graph, node);
         if (@as(u64, @bitCast(meta)) == @as(u64, @bitCast(after))) {
@@ -99,8 +99,8 @@ fn captureNodeSnapshotImpl(graph: *const graph_core.GraphCore, node: types.NodeI
                 .node_adj_snapshot = node_adj_snapshot,
                 .degree_fwd = degree_fwd,
                 .degree_rev = degree_rev,
-                .fwd_sorted = fwd_sorted,
-                .rev_sorted = rev_sorted,
+                .sorted_fwd = sorted_fwd,
+                .sorted_rev = sorted_rev,
             };
         }
         meta = after;

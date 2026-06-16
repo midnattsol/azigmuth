@@ -21,7 +21,7 @@ pub fn forEachRunInAdj(
     graph: *const graph_core.GraphCore,
     adjacency: types.NodeAdj,
     comptime side: common.Side,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const block_count = common.blockCount(adjacency, side);
@@ -29,7 +29,7 @@ pub fn forEachRunInAdj(
 
     const group_count = common.groupCount(adjacency, side);
     if (group_count == 0) {
-        try callback(graph, context, common.firstBlock(adjacency, side), block_count);
+        try callback(graph, ctx, common.firstBlock(adjacency, side), block_count);
         return;
     }
 
@@ -39,7 +39,7 @@ pub fn forEachRunInAdj(
     for (first_group_idx..end_group) |group_idx_usize| {
         const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        try callback(graph, context, group.start, group.count);
+        try callback(graph, ctx, group.start, group.count);
     }
 }
 

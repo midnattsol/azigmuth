@@ -131,8 +131,8 @@ pub const NodeFlags = packed struct(u32) {
 };
 
 pub const PublishedMeta = packed struct(u64) {
-    fwd_idx: u1 = 0,
-    rev_idx: u1 = 0,
+    idx_fwd: u1 = 0,
+    idx_rev: u1 = 0,
     needs_repair_fwd: bool = false,
     needs_repair_rev: bool = false,
     removed: bool = false,

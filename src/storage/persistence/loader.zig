@@ -89,7 +89,13 @@ pub fn load(
         try restoreFreeList(&mut_graph.graph, .free_prop_rows, frozen_graph.sectionBytes(.free_prop_rows), header);
     }
 
-    // Restore global counters.
+    // Restore global counters from header.
+    mut_graph.graph.block_fwd_count = header.block_fwd_count;
+    mut_graph.graph.block_rev_count = header.block_rev_count;
+    mut_graph.graph.group_count = header.group_count;
+    mut_graph.graph.tiny_block_fwd_count = header.tiny_block_fwd_count;
+    mut_graph.graph.tiny_block_rev_count = header.tiny_block_rev_count;
+
     mut_graph.graph.edge_count.store(header.edge_count, .release);
     mut_graph.graph.prop_row_count = header.prop_row_count;
     // node_count is set atomically by the node-record loop above via ensureNodeMetaPage;
@@ -129,10 +135,6 @@ pub fn restoreEdgeBlocks(
             side,
         ));
         @memcpy(page_destination, source_copy);
-    }
-    switch (side) {
-        .fwd => core.block_fwd_count = @intCast(total_blocks),
-        .rev => core.block_rev_count = @intCast(total_blocks),
     }
 }
 
@@ -206,7 +208,6 @@ pub fn restoreEdgeBlockGroups(core: *graph_core.GraphCore, payload: []const u8) 
         const page_destination: [*]u8 = @ptrFromInt(core.edge_block_group_pages.load(@intCast(page_idx)));
         @memcpy(page_destination, source_copy);
     }
-    core.group_count = @intCast(total_groups);
 }
 
 pub fn restoreTinyBlocks(core: *graph_core.GraphCore, payload: []const u8, comptime side: adjacency.AdjSide) LoadError!void {
@@ -234,14 +235,10 @@ pub fn restoreTinyBlocks(core: *graph_core.GraphCore, payload: []const u8, compt
         const page_destination: [*]u8 = @ptrFromInt(destination_raw);
         @memcpy(page_destination, source_copy);
     }
-    switch (side) {
-        .fwd => core.tiny_block_fwd_count = @intCast(total_blocks),
-        .rev => core.tiny_block_rev_count = @intCast(total_blocks),
-    }
 }
 
 /// Replays one NodeRecord into the live node pools: NodeMeta (degrees,
-/// flags, fwd/rev_idx = 0, version 0), NodePublished (slot 0 = the
+/// flags, fwd/idx_rev = 0, version 0), NodePublished (slot 0 = the
 /// persisted SideAdj, sorted bits), NodeHot (next_local_edge_id, claims
 /// released). Every block/group/tiny index inside the record is
 /// bounds-checked against the header counters (CorruptIndex).
@@ -256,8 +253,8 @@ pub fn restoreNodeRecord(core: *graph_core.GraphCore, node_idx: u32, record: for
 
     // 2. Write NodeMeta: fresh PublishedMeta with indexes at slot 0.
     var published_meta: types.PublishedMeta = .{
-        .fwd_idx = 0,
-        .rev_idx = 0,
+        .idx_fwd = 0,
+        .idx_rev = 0,
         .needs_repair_fwd = record.flags.needs_repair_fwd,
         .needs_repair_rev = record.flags.needs_repair_rev,
         .removed = record.flags.removed,
@@ -272,10 +269,10 @@ pub fn restoreNodeRecord(core: *graph_core.GraphCore, node_idx: u32, record: for
     published.rev[0] = record.rev;
     published.fwd[1] = std.mem.zeroes(types.SideAdj);
     published.rev[1] = std.mem.zeroes(types.SideAdj);
-    published.fwd_sorted[0] = @intFromBool(record.flags.fwd_sorted);
-    published.rev_sorted[0] = @intFromBool(record.flags.rev_sorted);
-    if (published_meta.degree_fwd_overflow) published.fwd_degrees[0] = record.degree_fwd;
-    if (published_meta.degree_rev_overflow) published.rev_degrees[0] = record.degree_rev;
+    published.sorted_fwd[0] = @intFromBool(record.flags.sorted_fwd);
+    published.sorted_rev[0] = @intFromBool(record.flags.sorted_rev);
+    if (published_meta.degree_fwd_overflow) published.degrees_fwd[0] = record.degree_fwd;
+    if (published_meta.degree_rev_overflow) published.degrees_rev[0] = record.degree_rev;
 
     // Write NodeHot: next_local_edge_id; claims start released.
     page_ops.nodeHotAt(core, node).storeNextLocalEdgeId(record.next_local_edge_id);

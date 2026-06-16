@@ -247,7 +247,7 @@ test "concurrent: removeNode on adjacent endpoints does not double-decrement edg
 test "concurrent: removeNode predecessor degree update does not require forward claim" {
     // removeNode must publish
     // predecessor degree updates via CAS on published_meta WITHOUT claiming
-    // fwd_claim.  The CAS helper (publishMetaFwdUpdated) provides this.
+    // claim_fwd.  The CAS helper (publishMetaFwdUpdated) provides this.
     // This test verifies that removeNode tolerates an unrelated forward writer
     // on the predecessor (e.g. celebrity deletion under concurrent mutation).
     var graph = try graph_mod.Graph.init(testing.allocator);
@@ -257,10 +257,10 @@ test "concurrent: removeNode predecessor degree update does not require forward 
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, target, 0, 0);
 
-    const predecessor_claim = &graph_mod.page_ops_mod.nodeHotAt(&graph.graph, predecessor).fwd_claim;
+    const predecessor_claim = &graph_mod.page_ops_mod.nodeHotAt(&graph.graph, predecessor).claim_fwd;
     try testing.expectEqual(@as(u8, 0), predecessor_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
 
-    // removeNode must succeed even though predecessor's fwd_claim is held
+    // removeNode must succeed even though predecessor's claim_fwd is held
     // by an unrelated writer.
     _ = try graph.removeNode(target);
     try testing.expect(!graph.hasNode(target));

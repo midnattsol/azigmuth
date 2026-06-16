@@ -1,4 +1,4 @@
-//! Shared byte-level plumbing for the persistence stack (SKELETON).
+//! Shared byte-level plumbing for the persistence stack.
 //!
 //! Everything here is consumed by more than one sibling:
 //!  - the payload sinks: the writer's hash pass and write pass stream the
@@ -17,11 +17,11 @@ const format = @import("format.zig");
 /// Minimal byte sink: the hash pass and the file pass both consume payloads
 /// through this interface, guaranteeing they observe identical bytes.
 pub const PayloadSink = struct {
-    context: *anyopaque,
-    emitFn: *const fn (context: *anyopaque, bytes: []const u8) anyerror!void,
+    ctx: *anyopaque,
+    emitFn: *const fn (ctx: *anyopaque, bytes: []const u8) anyerror!void,
 
     pub fn emit(self: PayloadSink, bytes: []const u8) anyerror!void {
-        return self.emitFn(self.context, bytes);
+        return self.emitFn(self.ctx, bytes);
     }
 };
 
@@ -30,29 +30,64 @@ pub const HashingSink = struct {
     hasher: std.hash.XxHash64,
 
     pub fn init() HashingSink {
-        // TODO: seed with the same seed sectionChecksum uses (the
-        // MAGIC); expose a digest() that returns hasher.final().
-        @panic("TODO: HashingSink.init");
+        return .{ .hasher = std.hash.XxHash64.init(format.MAGIC) };
     }
 
     pub fn sink(self: *HashingSink) PayloadSink {
-        _ = self;
-        @panic("TODO: HashingSink.sink");
+        const HashEmit = struct {
+            fn emit(ctx: *anyopaque, bytes: []const u8) anyerror!void {
+                const hash_sink: *HashingSink = @ptrCast(@alignCast(ctx));
+                hash_sink.hasher.update(bytes);
+            }
+        };
+        return .{ .ctx = self, .emitFn = HashEmit.emit };
+    }
+
+    pub fn digest(self: *HashingSink) u64 {
+        return self.hasher.final();
     }
 };
 
-/// Buffered file sink. Tracks bytes written so the writer can assert that
-/// each section landed exactly at its planned offset with its planned
-/// length.
+/// Buffered file sink.
 pub const FileSink = struct {
-    // TODO: hold the std.Io.File.Writer (file.writer(io, buffer))
-    // plus a running byte counter; provide sink(), padTo(offset) — emit
-    // zeros up to an absolute offset — and flush().
+    file: std.fs.File,
+    io: std.Io,
+    writer: std.Io.File.Writer,
     bytes_written: u64 = 0,
 
+    pub fn init(file: std.fs.File, io: std.Io) FileSink {
+        return .{
+            .file = file,
+            .io = io,
+            .writer = file.writer(io),
+        };
+    }
+
     pub fn sink(self: *FileSink) PayloadSink {
-        _ = self;
-        @panic("TODO: FileSink.sink");
+        const FileEmit = struct {
+            fn emit(ctx: *anyopaque, bytes: []const u8) anyerror!void {
+                const file_sink: *FileSink = @ptrCast(@alignCast(ctx));
+                try file_sink.writer.writeAll(bytes);
+                file_sink.bytes_written += bytes.len;
+            }
+        };
+        return .{ .ctx = self, .emitFn = FileEmit.emit };
+    }
+
+    pub fn padTo(self: *FileSink, target: u64) !void {
+        if (target <= self.bytes_written) return;
+        const zero_buf: [64]u8 = [_]u8{0} ** 64;
+        var remaining = target - self.bytes_written;
+        while (remaining > 0) {
+            const chunk = @min(remaining, zero_buf.len);
+            try self.writer.writeAll(zero_buf[0..chunk]);
+            remaining -= chunk;
+        }
+        self.bytes_written = target;
+    }
+
+    pub fn flush(self: *FileSink) !void {
+        try self.writer.flush();
     }
 };
 
@@ -62,9 +97,12 @@ pub const FileSink = struct {
 // until proven otherwise — NOTHING from the payload is dereferenced, sized,
 // or trusted before these pass, in this order.
 
-// TODO: narrow (format.HeaderError || format.SectionTableError ||
-// error{TruncatedFile, CorruptSection} || read errors).
-pub const ValidateError = anyerror;
+pub const ValidateError = format.HeaderError || format.SectionTableError || error{
+    TruncatedFile,
+    CorruptSection,
+    InvalidPayload,
+    Overflow,
+};
 
 /// Reinterprets the raw header block, then
 /// `format.validateHeader` (magic, version, params vs the running comptime

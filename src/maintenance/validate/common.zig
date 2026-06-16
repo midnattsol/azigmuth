@@ -35,7 +35,7 @@ pub fn forEachRunInAdj(
     graph: *const graph_core.GraphCore,
     adjacency: types.NodeAdj,
     comptime side: Side,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const side_adj = sideAdjOf(adjacency, side);
@@ -50,7 +50,7 @@ pub fn forEachRunInAdj(
     var run_idx: u16 = 0;
     while (run_idx < total_runs) : (run_idx += 1) {
         const run_desc = side_runs.runAt(graph, side_adj, run_idx) orelse return error.CorruptGraph;
-        try callback(graph, context, run_desc.start, run_desc.count, run_idx + 1 == total_runs);
+        try callback(graph, ctx, run_desc.start, run_desc.count, run_idx + 1 == total_runs);
     }
 }
 
@@ -58,13 +58,13 @@ pub fn forEachAliveSlotInAdj(
     graph: *const graph_core.GraphCore,
     adjacency: types.NodeAdj,
     comptime side: Side,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
-    try forEachRunInAdj(graph, adjacency, side, context, struct {
+    try forEachRunInAdj(graph, adjacency, side, ctx, struct {
         fn run(
             inner_graph: *const graph_core.GraphCore,
-            inner_context: @TypeOf(context),
+            inner_ctx: @TypeOf(ctx),
             start: u32,
             count: u32,
             _: bool,
@@ -73,7 +73,7 @@ pub fn forEachAliveSlotInAdj(
                 const block_idx: u32 = @intCast(block_idx_usize);
                 const alive_count = @min(blockAlive(inner_graph, block_idx, side), constants.EDGES_PER_BLOCK);
                 for (0..alive_count) |slot| {
-                    try callback(inner_graph, inner_context, block_idx, slot);
+                    try callback(inner_graph, inner_ctx, block_idx, slot);
                 }
             }
         }
@@ -84,7 +84,7 @@ pub fn forEachNodeIdInAdj(
     graph: *const graph_core.GraphCore,
     adjacency: types.NodeAdj,
     comptime side: Side,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const side_adj = sideAdjOf(adjacency, side);
@@ -95,11 +95,11 @@ pub fn forEachNodeIdInAdj(
         switch (side) {
             .fwd => {
                 const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-                for (0..count) |entry_idx| try callback(graph, context, slot.entries[entry_idx].destination);
+                for (0..count) |entry_idx| try callback(graph, ctx, slot.entries[entry_idx].destination);
             },
             .rev => {
                 const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
-                for (0..count) |entry_idx| try callback(graph, context, slot.sources[entry_idx]);
+                for (0..count) |entry_idx| try callback(graph, ctx, slot.sources[entry_idx]);
             },
         }
         return;
@@ -108,13 +108,13 @@ pub fn forEachNodeIdInAdj(
     try side_ops.forEachNodeIdInSide(graph, side_adj, switch (side) {
         .fwd => .fwd,
         .rev => .rev,
-    }, context, callback);
+    }, ctx, callback);
 }
 
 pub fn forEachForwardEntryInAdj(
     graph: *const graph_core.GraphCore,
     adjacency: types.NodeAdj,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     const side_adj = sideAdjOf(adjacency, .fwd);
@@ -125,7 +125,7 @@ pub fn forEachForwardEntryInAdj(
         const count = node_published.NodePublished.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const entry = slot.entries[entry_idx];
-            try callback(graph, context, ForwardEntryView{
+            try callback(graph, ctx, ForwardEntryView{
                 .block_idx = side_adj.first_block,
                 .slot = @intCast(entry_idx),
                 .destination = entry.destination,
@@ -138,7 +138,7 @@ pub fn forEachForwardEntryInAdj(
         return;
     }
 
-    try side_ops.forEachForwardEntryInSide(graph, side_adj, context, callback);
+    try side_ops.forEachForwardEntryInSide(graph, side_adj, ctx, callback);
 }
 
 fn scanForwardTombstone(

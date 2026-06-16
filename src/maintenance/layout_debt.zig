@@ -18,7 +18,7 @@ pub fn forEachGroupInSide(
     graph: *const graph_core.GraphCore,
     side_view: types.SideAdj,
     comptime side: adjacency.AdjSide,
-    context: anytype,
+    ctx: anytype,
     comptime callback: anytype,
 ) !void {
     if (side_view.group_count == 0) return;
@@ -29,7 +29,7 @@ pub fn forEachGroupInSide(
         const group_idx: u32 = @intCast(group_idx_usize);
         const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
         const run_idx: u16 = @intCast(group_idx - side_view.first_group);
-        try callback(graph, context, group_idx, group.*, run_idx + 1 == side_view.group_count);
+        try callback(graph, ctx, group_idx, group.*, run_idx + 1 == side_view.group_count);
     }
 }
 

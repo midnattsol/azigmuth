@@ -57,17 +57,17 @@ test "concurrent: many writers to a single destination serialize via reverse-cla
     var stop = std.atomic.Value(bool).init(false);
     var start_gate = std.atomic.Value(u32).init(spokes.len);
 
-    var contexts: [spokes.len]SpokeWriterCtx = undefined;
+    var ctxs: [spokes.len]SpokeWriterCtx = undefined;
     var threads: [spokes.len]std.Thread = undefined;
     for (spokes, 0..) |spoke, thread_idx| {
-        contexts[thread_idx] = .{
+        ctxs[thread_idx] = .{
             .graph = &graph,
             .source = spoke,
             .destination = hub,
             .stop = &stop,
             .start_gate = &start_gate,
         };
-        threads[thread_idx] = try std.Thread.spawn(.{}, spokeWriterLoop, .{&contexts[thread_idx]});
+        threads[thread_idx] = try std.Thread.spawn(.{}, spokeWriterLoop, .{&ctxs[thread_idx]});
     }
 
     // Let the storm run briefly, then signal stop and join. The start-gate
@@ -81,7 +81,7 @@ test "concurrent: many writers to a single destination serialize via reverse-cla
 
     var total_successes: u64 = 0;
     var total_concurrent_failures: u64 = 0;
-    for (contexts) |ctx| {
+    for (ctxs) |ctx| {
         total_successes += ctx.successes.load(.acquire);
         total_concurrent_failures += ctx.concurrent_failures.load(.acquire);
     }

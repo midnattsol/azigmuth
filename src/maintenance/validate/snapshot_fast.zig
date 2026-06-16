@@ -69,21 +69,21 @@ fn sumVisibleAdjacencySnapshot(
         total: u64 = 0,
     };
 
-    var context = SumContext{ .view = view };
-    common.forEachRunInAdj(graph, adjacency, side, &context, struct {
+    var ctx = SumContext{ .view = view };
+    common.forEachRunInAdj(graph, adjacency, side, &ctx, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
-            inner_context: *SumContext,
+            inner_ctx: *SumContext,
             start: u32,
             count: u32,
             _: bool,
         ) !void {
             for (start..start + count) |block_idx_usize| {
-                inner_context.total += countVisibleEntriesInBlockSnapshot(inner_graph, inner_context.view, @intCast(block_idx_usize), side);
+                inner_ctx.total += countVisibleEntriesInBlockSnapshot(inner_graph, inner_ctx.view, @intCast(block_idx_usize), side);
             }
         }
-    }.callback) catch return context.total;
-    return context.total;
+    }.callback) catch return ctx.total;
+    return ctx.total;
 }
 
 fn hasTombstoneSnapshot(
@@ -110,11 +110,11 @@ fn hasTombstoneSnapshot(
         view: *const snapshot_view.CapturedGraphView,
     };
 
-    var context = TombstoneContext{ .view = view };
-    common.forEachRunInAdj(graph, adjacency, side, &context, struct {
+    var ctx = TombstoneContext{ .view = view };
+    common.forEachRunInAdj(graph, adjacency, side, &ctx, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
-            inner_context: *TombstoneContext,
+            inner_ctx: *TombstoneContext,
             start: u32,
             count: u32,
             _: bool,
@@ -134,7 +134,7 @@ fn hasTombstoneSnapshot(
                         .fwd => block.destinations[slot],
                         .rev => block.sources[slot],
                     };
-                    if (candidate_idx < inner_context.view.nodeCount() and !inner_context.view.isLiveIndex(candidate_idx)) return error.TombstoneFound;
+                    if (candidate_idx < inner_ctx.view.nodeCount() and !inner_ctx.view.isLiveIndex(candidate_idx)) return error.TombstoneFound;
                 }
             }
         }
@@ -250,11 +250,11 @@ fn validateForwardConsistencySnapshot(
         adjacency: types.NodeAdj,
     };
 
-    var context = ForwardContext{ .view = view, .source_idx = source_idx, .adjacency = adjacency };
-    try common.forEachRunInAdj(graph, adjacency, .fwd, &context, struct {
+    var ctx = ForwardContext{ .view = view, .source_idx = source_idx, .adjacency = adjacency };
+    try common.forEachRunInAdj(graph, adjacency, .fwd, &ctx, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
-            inner_context: *ForwardContext,
+            inner_ctx: *ForwardContext,
             start: u32,
             count: u32,
             _: bool,
@@ -264,15 +264,15 @@ fn validateForwardConsistencySnapshot(
                 const alive = @min(page_ops.blockAliveCount(inner_graph, @intCast(block_idx_usize), .fwd), constants.EDGES_PER_BLOCK);
                 for (0..alive) |slot| {
                     const destination_idx = block.destinations[slot];
-                    if (destination_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
+                    if (destination_idx >= inner_ctx.view.nodeCount()) return error.CorruptGraph;
 
-                    const destination_adjacency = inner_context.view.adjacency(destination_idx);
+                    const destination_adjacency = inner_ctx.view.adjacency(destination_idx);
                     if (destination_adjacency.flags.removed) continue;
                     if (inner_graph.multigraph_enabled) {
-                        const forward_count = countTargetMatchesSnapshot(inner_graph, inner_context.adjacency, destination_idx, .fwd);
-                        const reverse_count = countTargetMatchesSnapshot(inner_graph, destination_adjacency, inner_context.source_idx, .rev);
+                        const forward_count = countTargetMatchesSnapshot(inner_graph, inner_ctx.adjacency, destination_idx, .fwd);
+                        const reverse_count = countTargetMatchesSnapshot(inner_graph, destination_adjacency, inner_ctx.source_idx, .rev);
                         if (forward_count != reverse_count) return error.CorruptGraph;
-                    } else if (!adjacencyContainsSnapshot(inner_graph, destination_adjacency, inner_context.source_idx, .rev)) {
+                    } else if (!adjacencyContainsSnapshot(inner_graph, destination_adjacency, inner_ctx.source_idx, .rev)) {
                         return error.CorruptGraph;
                     }
                 }
@@ -308,11 +308,11 @@ fn validateReverseConsistencySnapshot(
         destination_idx: u32,
     };
 
-    var context = ReverseContext{ .view = view, .destination_idx = destination_idx };
-    try common.forEachRunInAdj(graph, adjacency, .rev, &context, struct {
+    var ctx = ReverseContext{ .view = view, .destination_idx = destination_idx };
+    try common.forEachRunInAdj(graph, adjacency, .rev, &ctx, struct {
         fn callback(
             inner_graph: *const graph_core.GraphCore,
-            inner_context: *ReverseContext,
+            inner_ctx: *ReverseContext,
             start: u32,
             count: u32,
             _: bool,
@@ -322,11 +322,11 @@ fn validateReverseConsistencySnapshot(
                 const alive = @min(page_ops.blockAliveCount(inner_graph, @intCast(block_idx_usize), .rev), constants.EDGES_PER_BLOCK);
                 for (0..alive) |slot| {
                     const source_idx = block.sources[slot];
-                    if (source_idx >= inner_context.view.nodeCount()) return error.CorruptGraph;
+                    if (source_idx >= inner_ctx.view.nodeCount()) return error.CorruptGraph;
 
-                    const source_adjacency = inner_context.view.adjacency(source_idx);
+                    const source_adjacency = inner_ctx.view.adjacency(source_idx);
                     if (source_adjacency.flags.removed) continue;
-                    if (!adjacencyContainsSnapshot(inner_graph, source_adjacency, inner_context.destination_idx, .fwd)) {
+                    if (!adjacencyContainsSnapshot(inner_graph, source_adjacency, inner_ctx.destination_idx, .fwd)) {
                         return error.CorruptGraph;
                     }
                 }

@@ -35,39 +35,39 @@ const BuilderEdge = struct {
 };
 
 const FreezePlan = struct {
-    fwd_degrees: []u32,
-    rev_degrees: []u32,
+    degrees_fwd: []u32,
+    degrees_rev: []u32,
     fwd_block_counts: []u16,
     rev_block_counts: []u16,
     total_fwd_blocks: u32 = 0,
     total_rev_blocks: u32 = 0,
 
     fn init(allocator: std.mem.Allocator, node_count: usize) !FreezePlan {
-        const fwd_degrees = try allocator.alloc(u32, node_count);
-        errdefer allocator.free(fwd_degrees);
-        const rev_degrees = try allocator.alloc(u32, node_count);
-        errdefer allocator.free(rev_degrees);
+        const degrees_fwd = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(degrees_fwd);
+        const degrees_rev = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(degrees_rev);
         const fwd_block_counts = try allocator.alloc(u16, node_count);
         errdefer allocator.free(fwd_block_counts);
         const rev_block_counts = try allocator.alloc(u16, node_count);
         errdefer allocator.free(rev_block_counts);
 
-        @memset(fwd_degrees, 0);
-        @memset(rev_degrees, 0);
+        @memset(degrees_fwd, 0);
+        @memset(degrees_rev, 0);
         @memset(fwd_block_counts, 0);
         @memset(rev_block_counts, 0);
 
         return .{
-            .fwd_degrees = fwd_degrees,
-            .rev_degrees = rev_degrees,
+            .degrees_fwd = degrees_fwd,
+            .degrees_rev = degrees_rev,
             .fwd_block_counts = fwd_block_counts,
             .rev_block_counts = rev_block_counts,
         };
     }
 
     fn deinit(self: *FreezePlan, allocator: std.mem.Allocator) void {
-        allocator.free(self.fwd_degrees);
-        allocator.free(self.rev_degrees);
+        allocator.free(self.degrees_fwd);
+        allocator.free(self.degrees_rev);
         allocator.free(self.fwd_block_counts);
         allocator.free(self.rev_block_counts);
     }
@@ -165,13 +165,13 @@ pub const GraphBuilder = struct {
         errdefer plan.deinit(allocator);
 
         for (self.edges.items) |edge| {
-            plan.fwd_degrees[edge.source] += 1;
-            plan.rev_degrees[edge.destination] += 1;
+            plan.degrees_fwd[edge.source] += 1;
+            plan.degrees_rev[edge.destination] += 1;
         }
 
         for (0..node_count) |node_idx| {
-            const fwd_block_count = try blockCountForEdgeCount(plan.fwd_degrees[node_idx]);
-            const rev_block_count = try blockCountForEdgeCount(plan.rev_degrees[node_idx]);
+            const fwd_block_count = try blockCountForEdgeCount(plan.degrees_fwd[node_idx]);
+            const rev_block_count = try blockCountForEdgeCount(plan.degrees_rev[node_idx]);
             plan.fwd_block_counts[node_idx] = fwd_block_count;
             plan.rev_block_counts[node_idx] = rev_block_count;
             plan.total_fwd_blocks += fwd_block_count;
@@ -314,7 +314,7 @@ pub const GraphBuilder = struct {
         }
 
         for (0..node_count) |node_idx| {
-            const degree = plan.rev_degrees[node_idx];
+            const degree = plan.degrees_rev[node_idx];
             const block_count = plan.rev_block_counts[node_idx];
             if (block_count == 0) continue;
 
@@ -341,8 +341,8 @@ pub const GraphBuilder = struct {
 
     fn publishExactDegrees(self: *GraphBuilder, plan: *const FreezePlan) void {
         for (0..self.graph.nodeCount()) |node_idx| {
-            const meta = (types.PublishedMeta{}).withFwdDegree(@intCast(plan.fwd_degrees[node_idx])).withRevDegree(@intCast(plan.rev_degrees[node_idx]));
-            node_access.setPublishedDegrees(&self.graph.graph, .{ .index = @intCast(node_idx) }, meta, @intCast(plan.fwd_degrees[node_idx]), @intCast(plan.rev_degrees[node_idx]));
+            const meta = (types.PublishedMeta{}).withFwdDegree(@intCast(plan.degrees_fwd[node_idx])).withRevDegree(@intCast(plan.degrees_rev[node_idx]));
+            node_access.setPublishedDegrees(&self.graph.graph, .{ .index = @intCast(node_idx) }, meta, @intCast(plan.degrees_fwd[node_idx]), @intCast(plan.degrees_rev[node_idx]));
             page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storePublishedMeta(meta);
         }
     }

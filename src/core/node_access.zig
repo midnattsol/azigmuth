@@ -116,27 +116,27 @@ pub fn resetPublishedSides(graph: *graph_core.GraphCore, node: types.NodeId) voi
     published.fwd[1] = .{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 };
     published.rev[0] = .{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 };
     published.rev[1] = .{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 };
-    published.fwd_degrees = [_]u32{0} ** 2;
-    published.rev_degrees = [_]u32{0} ** 2;
-    published.fwd_sorted = [_]u8{ 1, 1 };
-    published.rev_sorted = [_]u8{ 1, 1 };
+    published.degrees_fwd = [_]u32{0} ** 2;
+    published.degrees_rev = [_]u32{0} ** 2;
+    published.sorted_fwd = [_]u8{ 1, 1 };
+    published.sorted_rev = [_]u8{ 1, 1 };
 }
 
 pub fn setInitialPublishedFwdSide(graph: *graph_core.GraphCore, node: types.NodeId, side_adj: types.SideAdj) void {
     _ = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
     // Builder freeze emits globally sorted sides into the initial slot.
     page_ops.nodePublishedAt(graph, node).fwd[0] = side_adj;
-    page_ops.nodePublishedAt(graph, node).fwd_sorted[0] = 1;
+    page_ops.nodePublishedAt(graph, node).sorted_fwd[0] = 1;
 }
 
 pub fn setInitialPublishedRevSide(graph: *graph_core.GraphCore, node: types.NodeId, side_adj: types.SideAdj) void {
     _ = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
     page_ops.nodePublishedAt(graph, node).rev[0] = side_adj;
-    page_ops.nodePublishedAt(graph, node).rev_sorted[0] = 1;
+    page_ops.nodePublishedAt(graph, node).sorted_rev[0] = 1;
 }
 
 pub fn setPublishedDegrees(graph: *graph_core.GraphCore, node: types.NodeId, meta: types.PublishedMeta, fwd_degree: u32, rev_degree: u32) void {
     const published = page_ops.ensureNodePublishedAt(graph, node) catch @panic("failed to ensure published page");
-    published.fwd_degrees[meta.fwd_idx] = fwd_degree;
-    published.rev_degrees[meta.rev_idx] = rev_degree;
+    published.degrees_fwd[meta.idx_fwd] = fwd_degree;
+    published.degrees_rev[meta.idx_rev] = rev_degree;
 }

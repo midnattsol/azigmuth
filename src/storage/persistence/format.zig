@@ -41,7 +41,7 @@
 //! pool); retired state is not representable in the file. Sides are written
 //! normalized: per node, the published `SideAdj`, degree, and sorted bit of
 //! each direction — staging slots and the RCU `version` counter are not
-//! persisted (a loaded graph starts with `fwd_idx = rev_idx = 0`,
+//! persisted (a loaded graph starts with `idx_fwd = idx_rev = 0`,
 //! version 0).
 //!
 //! ## Load contract
@@ -270,8 +270,8 @@ pub const NodeRecord = extern struct {
         removed: bool = false,
         needs_repair_fwd: bool = false,
         needs_repair_rev: bool = false,
-        fwd_sorted: bool = false,
-        rev_sorted: bool = false,
+        sorted_fwd: bool = false,
+        sorted_rev: bool = false,
         _reserved: u11 = 0,
     };
 };

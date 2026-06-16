@@ -92,7 +92,7 @@ pub fn claimEndpoints(
 }
 
 /// Publishes staging data for a newly added edge on both endpoints.
-/// `fwd_sorted` / `rev_sorted` describe whether the NEW side layouts remain
+/// `sorted_fwd` / `sorted_rev` describe whether the NEW side layouts remain
 /// globally sorted (see addEdgeImpl's appendKeepsGloballySorted).
 pub fn publishAdded(
     endpoints: *const EndpointState,
@@ -100,20 +100,20 @@ pub fn publishAdded(
     destination: types.NodeId,
     source_publish_adj: types.NodeAdj,
     destination_publish_adj: types.NodeAdj,
-    fwd_sorted: bool,
-    rev_sorted: bool,
+    sorted_fwd: bool,
+    sorted_rev: bool,
 ) void {
     if (source.index == destination.index) {
         std.debug.assert(@as(u64, @bitCast(endpoints.source_meta)) == @as(u64, @bitCast(endpoints.destination_meta)));
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishBothDelta(endpoints.source_node_meta, endpoints.source_published, endpoints.source_meta, merged_flags, 1, 1, fwd_sorted, rev_sorted);
+        _ = common.publishBothDelta(endpoints.source_node_meta, endpoints.source_published, endpoints.source_meta, merged_flags, 1, 1, sorted_fwd, sorted_rev);
         return;
     }
 
-    _ = common.publishStagedRev(endpoints.destination_node_meta, endpoints.destination_published, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, 1, rev_sorted);
-    _ = common.publishStagedFwd(endpoints.source_node_meta, endpoints.source_published, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, 1, fwd_sorted);
+    _ = common.publishStagedRev(endpoints.destination_node_meta, endpoints.destination_published, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, 1, sorted_rev);
+    _ = common.publishStagedFwd(endpoints.source_node_meta, endpoints.source_published, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, 1, sorted_fwd);
 }
 
 /// Retires superseded blocks, runs, and group chains after addEdge publication.

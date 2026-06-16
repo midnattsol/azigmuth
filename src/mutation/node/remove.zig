@@ -45,7 +45,7 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // guarantees logical consistency after it returns.
     //
     // Forward-degree decrements use the meta-only CAS helper
-    // (`publishMetaFwdDeltaUpdated`) which does NOT require `fwd_claim` on the
+    // (`publishMetaFwdDeltaUpdated`) which does NOT require `claim_fwd` on the
     // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
     // on its own.
     const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
