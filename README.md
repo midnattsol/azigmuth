@@ -315,7 +315,8 @@ defer allocator.free(order);
 
 Wayfind is a snapshot query language for topology-only set pipelines. Plans can
 be built at comptime with `az.Wayfind.Query` or parsed from text, then executed
-against a `ReadSnapshot`.
+against a `ReadSnapshot`. Lower-level executors stay internal; the public
+execution surface is `ReadSnapshot.wayfind`.
 
 ```zig
 const plan = comptime az.Wayfind.Query.fromParam(0)

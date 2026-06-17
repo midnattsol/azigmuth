@@ -10,6 +10,7 @@ const snapshot_iterators = @import("../query/snapshot/iterators.zig");
 const snapshot_view = @import("../query/snapshot/view.zig");
 const types = @import("../core/types.zig");
 const wayfind_mod = @import("../query/wayfind.zig");
+const wayfind_exec = @import("../query/wayfind/exec.zig");
 
 pub const CsrView = snapshot_csr.CsrView;
 
@@ -92,7 +93,7 @@ pub const ReadSnapshot = struct {
     /// Executes a Wayfind plan against this captured view. The query sees
     /// exactly this snapshot; later graph mutations are invisible.
     pub fn wayfind(self: *const ReadSnapshot, plan: wayfind_mod.Plan, ctx: context_mod.Context, params: wayfind_mod.Params) wayfind_mod.ExecError!wayfind_mod.Result {
-        return wayfind_mod.run(plan, &self.view, ctx, params);
+        return wayfind_exec.run(plan, &self.view, ctx, params);
     }
 
     /// Copies the snapshot's logical forward adjacency into caller-owned flat

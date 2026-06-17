@@ -40,6 +40,10 @@ pub const node_access_mod = @import("core/node_access.zig");
 pub const radix_directory_mod = @import("storage/radix_directory.zig");
 pub const persistence_mod = @import("storage/persistence.zig");
 pub const wayfind_mod = @import("query/wayfind.zig");
+pub const wayfind_ir_mod = @import("query/wayfind/ir.zig");
+pub const wayfind_builder_mod = @import("query/wayfind/builder.zig");
+pub const wayfind_exec_mod = @import("query/wayfind/exec.zig");
+pub const wayfind_parser_mod = @import("query/wayfind/parser.zig");
 pub const adjacency_runs_mod = @import("adjacency/runs.zig");
 pub const algorithms_context_mod = @import("algorithms/context.zig");
 

@@ -32,9 +32,10 @@ exponential by default; Wayfind keeps the pipeline shape with sets.
 
 - **NodeSet** — the value that flows: a duplicate-free set of node ids
   (u32), always relative to the query's snapshot.
-- **Snapshot anchoring** — a query executes against exactly one
-  `CapturedGraphView` (or, in the future, a frozen mmap graph). Later
-  mutations are invisible to a running query.
+- **Snapshot anchoring** — public queries execute against exactly one
+  `ReadSnapshot` via `ReadSnapshot.wayfind(plan, ctx, params)`. Internally the
+  executor runs over the snapshot's captured view (or, in the future, a frozen
+  mmap graph). Later mutations are invisible to a running query.
 - **Liveness** — sets contain live nodes. Ids of removed nodes inside
   parameter sets are **silently dropped at bind time** (rationale: id sets
   computed against an older snapshot must remain usable after deletions;
@@ -163,7 +164,7 @@ so plans compare, hash and dedupe structurally.
 ### Validation (the trust boundary)
 
 Every plan that did not come from the comptime builder must pass
-`ir.validate` before execution. Checks, in order: enum ranges decoded
+`validate` before execution. Checks, in order: enum ranges decoded
 defensively (hostile bytes), stack discipline (sources +1, set ops −1,
 transforms 0; never below 1 operand for arity-1 ops or 2 for arity-2),
 exactly one terminal and only as the last step (stack ends empty), every
@@ -180,17 +181,19 @@ not compile; the plan is rodata. Mapping (1:1 with §3):
 | `from node:17` | `Query.fromNode(17)` |
 | `from *` | `Query.allNodes()` |
 | `out(7){1..3}` | `.out(7, .{ .min = 1, .max = 3 })` |
-| `out*` | `.outClosure(ir.ANY_RELATION)` |
+| `out*` | `.outClosure(ANY_RELATION)` |
 | `& $1` / `+ $1` / `- $1` | `.intersectParam(1)` / `.unionParam(1)` / `.minusParam(1)` |
 | `degree(in) >= 2` | `.filterDegree(.in, .ge, 2)` |
 | `ids` … `csr` | `.ids()` … `.csr()` |
 
-**Runtime plans** (future parser, C ABI): same `Plan` type, `ir.validate`
-mandatory.
+**Runtime plans** (parser, C ABI): same `Plan` type, `validate` mandatory.
 
 ## 7. Execution contract
 
-`exec.run(plan, view, ctx, params) → Result`. Implementations MUST honor:
+Public execution is `ReadSnapshot.wayfind(plan, ctx, params) → Result`. The
+internal executor currently receives the snapshot's captured view directly, but
+that lower-level entry point is not part of the public API. Implementations MUST
+honor:
 
 - **Cost**: every step is one pass over its operands; `expand{m..n}` is at
   most n level-synchronous frontier sweeps with a visited bitmap; no step

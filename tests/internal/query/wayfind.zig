@@ -6,8 +6,8 @@ const testing = std.testing;
 const graph_mod = @import("graph_mod");
 
 const wayfind = graph_mod.wayfind_mod;
-const ir = wayfind.ir;
-const exec = wayfind.exec;
+const ir = graph_mod.wayfind_ir_mod;
+const exec = graph_mod.wayfind_exec_mod;
 const Query = wayfind.Query;
 const Context = graph_mod.algorithms_context_mod.Context;
 
@@ -17,9 +17,9 @@ const ctx: Context = .{ .allocator = testing.allocator };
 test "wayfind: modules compile" {
     testing.refAllDecls(wayfind);
     testing.refAllDecls(ir);
-    testing.refAllDecls(wayfind.builder);
+    testing.refAllDecls(graph_mod.wayfind_builder_mod);
     testing.refAllDecls(exec);
-    testing.refAllDecls(wayfind.parser);
+    testing.refAllDecls(graph_mod.wayfind_parser_mod);
 }
 
 // ── builder → IR ─────────────────────────────────────────────────────────
@@ -171,8 +171,7 @@ test "parser: textual pipeline produces the same plan as the builder" {
 }
 
 test "parser: parameter slots are dense, by first appearance, reused by name" {
-    var parsed = try wayfind.parse(testing.allocator,
-        "from $a | & $b | + $a | ids", &.{});
+    var parsed = try wayfind.parse(testing.allocator, "from $a | & $b | + $a | ids", &.{});
     defer parsed.deinit(testing.allocator);
 
     try testing.expectEqual(@as(u16, 2), parsed.plan().param_count);
@@ -184,8 +183,7 @@ test "parser: parameter slots are dense, by first appearance, reused by name" {
 }
 
 test "parser: sources, ranges, closure, degree and numeric relations" {
-    var parsed = try wayfind.parse(testing.allocator,
-        "from node:17 | out(9)* | in{0..2} | both(5){2..*} | degree(in) >= 2 | count", &.{});
+    var parsed = try wayfind.parse(testing.allocator, "from node:17 | out(9)* | in{0..2} | both(5){2..*} | degree(in) >= 2 | count", &.{});
     defer parsed.deinit(testing.allocator);
 
     const expected = [_]ir.Step{
@@ -565,9 +563,7 @@ test "parser: a parsed query executes identically to its builder twin" {
     var snapshot = try fixture.graph.snapshot(ctx);
     defer snapshot.deinit();
 
-    var parsed = try wayfind.parse(testing.allocator,
-        "from $seeds | out(rel1){1..2} | - $blocked | ids",
-        &.{.{ .name = "rel1", .value = 1 }});
+    var parsed = try wayfind.parse(testing.allocator, "from $seeds | out(rel1){1..2} | - $blocked | ids", &.{.{ .name = "rel1", .value = 1 }});
     defer parsed.deinit(testing.allocator);
 
     const seeds = [_]u32{fixture.nodes[0].index};

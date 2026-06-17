@@ -1,18 +1,20 @@
-//! Wayfind — the azigmuth query language.
-//! One import point for the language stack; the pieces live in `wayfind/`:
+//! Wayfind — the public facade for the azigmuth query language.
+//! The implementation lives in `wayfind/`, but only the stable surface below is
+//! exported from `az.Wayfind`:
 //!
-//!   - `ir`      — the plan: fixed-size steps (the frozen wire format),
-//!     stack-machine semantics, `validate` as the trust boundary for
-//!     non-comptime plans.
-//!   - `builder` — comptime fluent surface; typestate replaces validation.
-//!   - `exec`    — the executor over a `CapturedGraphView`.
-//!   - `parser`  — textual front-end; parses one pipeline string into a
-//!     validated runtime plan (1:1 with the IR, no rewriting).
+//!   - `Query` — comptime fluent builder; typestate replaces validation.
+//!   - `Plan` / `Step` — fixed-size IR and frozen wire layout.
+//!   - `parse` / `Parsed` — textual frontend; parses one pipeline string into a
+//!     validated runtime plan.
+//!   - `Params` / `Result` — query inputs and owned outputs.
+//!
+//! Execution is through `ReadSnapshot.wayfind`; the low-level executor over the
+//! internal captured snapshot view is intentionally not part of this facade.
 
-pub const ir = @import("wayfind/ir.zig");
-pub const builder = @import("wayfind/builder.zig");
-pub const exec = @import("wayfind/exec.zig");
-pub const parser = @import("wayfind/parser.zig");
+const ir = @import("wayfind/ir.zig");
+const builder = @import("wayfind/builder.zig");
+const exec = @import("wayfind/exec.zig");
+const parser = @import("wayfind/parser.zig");
 
 /// Wayfind language/IR version. Step layout, op numbers
 /// and grammar are frozen within a major version; extensions only append.
@@ -32,7 +34,6 @@ pub const PlanError = ir.PlanError;
 pub const Params = exec.Params;
 pub const Result = exec.Result;
 pub const ExecError = exec.ExecError;
-pub const run = exec.run;
 pub const validate = ir.validate;
 pub const parse = parser.parse;
 pub const Parsed = parser.Parsed;
