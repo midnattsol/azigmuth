@@ -200,7 +200,7 @@ pub fn reverseHasTombstone(graph: *const graph_core.GraphCore, adjacency: types.
 }
 
 pub const Side = enum { fwd, rev };
-pub const StackKindFast = enum { free, retired };
+pub const StackKindFast = page_ops.StackKind;
 
 /// Fast-path ownership tracking is exact within a fixed low-index window so
 /// the allocation-free validator keeps a bounded stack frame even under

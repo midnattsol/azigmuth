@@ -9,9 +9,10 @@ const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const common = @import("common.zig");
+const index_stack = @import("index_stack.zig");
 
-const EMPTY_INDEX = common.EMPTY_INDEX;
-const StackKind = common.StackKind;
+const EMPTY_INDEX = index_stack.EMPTY_INDEX;
+const StackKind = index_stack.StackKind;
 
 fn propRowMetaAt(graph: *graph_core.GraphCore, row: u32) *types.BlockMeta {
     return common.metaEntryAt(&graph.prop_row_meta_pages, row, constants.PROP_ROWS_PER_PAGE);
@@ -28,34 +29,36 @@ fn propRowStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind) *std
     };
 }
 
+fn propRowStack(graph: *graph_core.GraphCore, comptime kind: StackKind) index_stack.LockFreeIndexStack {
+    return index_stack.LockFreeIndexStack.init(propRowStackHead(graph, kind));
+}
+
 fn popPropRowStack(graph: *graph_core.GraphCore, comptime kind: StackKind) ?u32 {
-    const head = propRowStackHead(graph, kind);
-    while (true) {
-        const old_head = head.load(.acquire);
-        const row = common.headIndex(old_head);
-        if (row == EMPTY_INDEX) return null;
-        const meta = propRowMetaAt(graph, row);
-        const next = meta.next.load(.acquire);
-        const new_head = common.packHead(next, common.headTag(old_head) +% 1);
-        if (head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return row;
-    }
+    const MetaContext = struct {
+        graph: *graph_core.GraphCore,
+
+        pub fn metaAt(self: @This(), row: u32) *types.BlockMeta {
+            return propRowMetaAt(self.graph, row);
+        }
+    };
+    return propRowStack(graph, kind).pop(MetaContext{ .graph = graph });
 }
 
 /// Returns one property row to the free stack (never-published rows only).
 pub fn freePropRow(graph: *graph_core.GraphCore, row: u32) void {
-    common.pushHeadIndex(propRowStackHead(graph, .free), propRowMetaAt(graph, row), row);
+    propRowStack(graph, .free).push(propRowMetaAt(graph, row), row);
 }
 
 /// Moves one property row to the retired stack with its retirement epoch.
 pub fn retirePropRow(graph: *graph_core.GraphCore, row: u32, epoch: u64) void {
     const meta = propRowMetaAt(graph, row);
     meta.epoch.store(epoch, .release);
-    common.pushHeadIndex(propRowStackHead(graph, .retired), meta, row);
+    propRowStack(graph, .retired).push(meta, row);
 }
 
 /// Reclaims retired property rows whose epoch is now safe for reuse.
 pub fn reclaimRetiredPropRows(graph: *graph_core.GraphCore, safe_epoch: u64) void {
-    var row = common.detachHeadIndex(propRowStackHead(graph, .retired));
+    var row = propRowStack(graph, .retired).detach();
     while (row != EMPTY_INDEX) {
         const meta = propRowMetaAt(graph, row);
         const next = meta.next.load(.acquire);
@@ -63,7 +66,7 @@ pub fn reclaimRetiredPropRows(graph: *graph_core.GraphCore, safe_epoch: u64) voi
         if (retired_epoch < safe_epoch) {
             freePropRow(graph, row);
         } else {
-            common.pushHeadIndex(propRowStackHead(graph, .retired), meta, row);
+            propRowStack(graph, .retired).push(meta, row);
         }
         row = next;
     }

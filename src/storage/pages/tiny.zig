@@ -8,9 +8,10 @@ const adjacency = @import("../../adjacency/mod.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const node_tiny = @import("../node/tiny.zig");
 const common = @import("common.zig");
+const index_stack = @import("index_stack.zig");
 
-const EMPTY_INDEX = common.EMPTY_INDEX;
-const StackKind = common.StackKind;
+const EMPTY_INDEX = index_stack.EMPTY_INDEX;
+const StackKind = index_stack.StackKind;
 
 fn ensureTinyFwdPage(graph: *graph_core.GraphCore, page_idx: u32) ![]node_tiny.TinyFwdBlock {
     _ = try common.ensureMetaPageSized(graph, &graph.tiny_block_fwd_meta_pages, page_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE);
@@ -42,23 +43,23 @@ fn tinyStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind, comptim
     };
 }
 
+fn tinyStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) index_stack.LockFreeIndexStack {
+    return index_stack.LockFreeIndexStack.init(tinyStackHead(graph, kind, side));
+}
+
 fn pushTinyStack(graph: *graph_core.GraphCore, slot_idx: u32, comptime kind: StackKind, comptime side: adjacency.AdjSide) void {
-    common.pushHeadIndex(tinyStackHead(graph, kind, side), tinyMetaAt(graph, slot_idx, side), slot_idx);
+    tinyStack(graph, kind, side).push(tinyMetaAt(graph, slot_idx, side), slot_idx);
 }
 
 fn popTinyStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) ?u32 {
-    const head = tinyStackHead(graph, kind, side);
+    const MetaContext = struct {
+        graph: *graph_core.GraphCore,
 
-    while (true) {
-        const old_head = head.load(.acquire);
-        const slot_idx = common.headIndex(old_head);
-        if (slot_idx == EMPTY_INDEX) return null;
-
-        const meta = tinyMetaAt(graph, slot_idx, side);
-        const next = meta.next.load(.acquire);
-        const new_head = common.packHead(next, common.headTag(old_head) +% 1);
-        if (head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return slot_idx;
-    }
+        pub fn metaAt(self: @This(), slot_idx: u32) *types.BlockMeta {
+            return tinyMetaAt(self.graph, slot_idx, side);
+        }
+    };
+    return tinyStack(graph, kind, side).pop(MetaContext{ .graph = graph });
 }
 
 /// Returns one tiny slot to the per-side free stack.
@@ -85,7 +86,7 @@ fn requeueOrFreeRetiredTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, saf
 
 /// Reclaims retired tiny slots whose epoch is now safe for reuse.
 pub fn reclaimRetiredTinyBlocks(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
-    var slot_idx = common.detachHeadIndex(tinyStackHead(graph, .retired, side));
+    var slot_idx = tinyStack(graph, .retired, side).detach();
     while (slot_idx != EMPTY_INDEX) {
         const meta = tinyMetaAt(graph, slot_idx, side);
         const next = meta.next.load(.acquire);

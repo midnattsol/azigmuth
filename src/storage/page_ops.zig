@@ -2,7 +2,8 @@
 //! One import point for every storage pool; the implementations live in
 //! `pages/`, split by responsibility:
 //!
-//!   - `common`    — page arithmetic, lazy page publication, tagged-stack helpers
+//!   - `common`    — page arithmetic and lazy page publication
+//!   - `index_stack` — intrusive tagged-head stacks for recycled indices
 //!   - `nodes`     — NodeMeta / NodePublished / NodeHot pages
 //!   - `tiny`      — tiny slots and their free/retired stacks
 //!   - `prop_rows` — property-row lifecycle (edge_properties mode)
@@ -14,6 +15,7 @@
 //! `page_ops.<fn>` regardless of which pool owns it.
 
 const common = @import("pages/common.zig");
+const index_stack = @import("pages/index_stack.zig");
 const nodes = @import("pages/nodes.zig");
 const tiny = @import("pages/tiny.zig");
 const prop_rows = @import("pages/prop_rows.zig");
@@ -24,6 +26,14 @@ const groups = @import("pages/groups.zig");
 pub const pageOf = common.pageOf;
 pub const slotOf = common.slotOf;
 pub const makeIndex = common.makeIndex;
+
+// ── index stacks ─────────────────────────────────────────────────────
+pub const EMPTY_INDEX = index_stack.EMPTY_INDEX;
+pub const StackKind = index_stack.StackKind;
+pub const LockFreeIndexStack = index_stack.LockFreeIndexStack;
+pub const stackHeadIndex = index_stack.headIndex;
+pub const stackMetaNext = index_stack.metaNext;
+pub const walkDetachedIndexStack = index_stack.walkDetached;
 
 // ── nodes ────────────────────────────────────────────────────────────
 pub const nodeMetaAt = nodes.nodeMetaAt;

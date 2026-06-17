@@ -9,9 +9,10 @@ const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const common = @import("common.zig");
+const index_stack = @import("index_stack.zig");
 
-const EMPTY_INDEX = common.EMPTY_INDEX;
-const StackKind = common.StackKind;
+const EMPTY_INDEX = index_stack.EMPTY_INDEX;
+const StackKind = index_stack.StackKind;
 
 fn groupMetaAt(graph: *graph_core.GraphCore, group_idx: u32) *types.BlockMeta {
     return common.metaEntryAt(&graph.edge_block_group_meta_pages, group_idx, constants.EDGE_GROUPS_PER_PAGE);
@@ -59,25 +60,27 @@ fn groupSpanStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind, sp
     };
 }
 
+fn groupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, span_count: u16) index_stack.LockFreeIndexStack {
+    return index_stack.LockFreeIndexStack.init(groupSpanStackHead(graph, kind, span_count));
+}
+
 fn pushGroupSpanStack(graph: *graph_core.GraphCore, first_group_idx: u32, span_count: u16, comptime kind: StackKind) void {
-    common.pushHeadIndex(groupSpanStackHead(graph, kind, span_count), groupMetaAt(graph, first_group_idx), first_group_idx);
+    groupSpanStack(graph, kind, span_count).push(groupMetaAt(graph, first_group_idx), first_group_idx);
 }
 
 fn popGroupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, span_count: u16) ?u32 {
-    const head = groupSpanStackHead(graph, kind, span_count);
-    while (true) {
-        const old_head = head.load(.acquire);
-        const group_idx = common.headIndex(old_head);
-        if (group_idx == EMPTY_INDEX) return null;
-        const meta = groupMetaAt(graph, group_idx);
-        const next = meta.next.load(.acquire);
-        const new_head = common.packHead(next, common.headTag(old_head) +% 1);
-        if (head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return group_idx;
-    }
+    const MetaContext = struct {
+        graph: *graph_core.GraphCore,
+
+        pub fn metaAt(self: @This(), group_idx: u32) *types.BlockMeta {
+            return groupMetaAt(self.graph, group_idx);
+        }
+    };
+    return groupSpanStack(graph, kind, span_count).pop(MetaContext{ .graph = graph });
 }
 
 fn detachGroupSpanStack(graph: *graph_core.GraphCore, comptime kind: StackKind, span_count: u16) u32 {
-    return common.detachHeadIndex(groupSpanStackHead(graph, kind, span_count));
+    return groupSpanStack(graph, kind, span_count).detach();
 }
 
 // ── Allocation ───────────────────────────────────────────────────────

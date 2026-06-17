@@ -1,14 +1,13 @@
-//! Shared page machinery for the storage pools: index↔page arithmetic,
-//! lazy page publication (CAS into the radix directories), and the
-//! tagged-head helpers every lock-free free/retired stack family builds on.
+//! Shared page machinery for the storage pools: index↔page arithmetic and
+//! lazy page publication (CAS into the radix directories).
 
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
+const index_stack = @import("index_stack.zig");
 
-pub const EMPTY_INDEX: u32 = constants.END_OF_CHAIN;
-pub const StackKind = enum { free, retired };
+const EMPTY_INDEX: u32 = index_stack.EMPTY_INDEX;
 
 pub inline fn pageOf(index: u32, comptime entries_per_page: u32) u32 {
     return index / entries_per_page;
@@ -138,33 +137,4 @@ pub fn metaEntryAt(
     const page_idx = pageOf(index, entries_per_page);
     const page = loadPageMut(types.BlockMeta, directory, page_idx, entries_per_page);
     return &page[slotOf(index, entries_per_page)];
-}
-
-// ── Tagged stack heads (low 32 bits index, high 32 bits ABA tag) ─────
-
-pub fn packHead(index: u32, tag: u32) u64 {
-    return (@as(u64, tag) << 32) | @as(u64, index);
-}
-
-pub fn headIndex(head: u64) u32 {
-    return @truncate(head);
-}
-
-pub fn headTag(head: u64) u32 {
-    return @truncate(head >> 32);
-}
-
-pub fn pushHeadIndex(head: *std.atomic.Value(u64), meta: *types.BlockMeta, index: u32) void {
-    while (true) {
-        const old_head = head.load(.acquire);
-        meta.next.store(headIndex(old_head), .release);
-        const new_head = packHead(index, headTag(old_head) +% 1);
-        if (head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return;
-    }
-}
-
-pub fn detachHeadIndex(head: *std.atomic.Value(u64)) u32 {
-    const observed = head.load(.acquire);
-    const detached = head.swap(packHead(EMPTY_INDEX, headTag(observed) +% 1), .acq_rel);
-    return headIndex(detached);
 }

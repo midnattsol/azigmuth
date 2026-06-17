@@ -9,11 +9,12 @@ const types = @import("../../core/types.zig");
 const adjacency = @import("../../adjacency/mod.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const common = @import("common.zig");
+const index_stack = @import("index_stack.zig");
 
-const EMPTY_INDEX = common.EMPTY_INDEX;
-const StackKind = common.StackKind;
+const EMPTY_INDEX = index_stack.EMPTY_INDEX;
+const StackKind = index_stack.StackKind;
 
-fn metaAt(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) *types.BlockMeta {
+fn blockMetaAt(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) *types.BlockMeta {
     return common.metaEntryAt(
         if (side == .fwd) &graph.edge_blocks_fwd_meta_pages else &graph.edge_blocks_rev_meta_pages,
         block_idx,
@@ -34,27 +35,27 @@ fn stackHead(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime si
     };
 }
 
+fn stack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) index_stack.LockFreeIndexStack {
+    return index_stack.LockFreeIndexStack.init(stackHead(graph, kind, side));
+}
+
 fn pushStack(graph: *graph_core.GraphCore, block_idx: u32, comptime kind: StackKind, comptime side: adjacency.AdjSide) void {
-    common.pushHeadIndex(stackHead(graph, kind, side), metaAt(graph, block_idx, side), block_idx);
+    stack(graph, kind, side).push(blockMetaAt(graph, block_idx, side), block_idx);
 }
 
 fn popStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) ?u32 {
-    const head = stackHead(graph, kind, side);
+    const MetaContext = struct {
+        graph: *graph_core.GraphCore,
 
-    while (true) {
-        const old_head = head.load(.acquire);
-        const block_idx = common.headIndex(old_head);
-        if (block_idx == EMPTY_INDEX) return null;
-
-        const meta = metaAt(graph, block_idx, side);
-        const next = meta.next.load(.acquire);
-        const new_head = common.packHead(next, common.headTag(old_head) +% 1);
-        if (head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return block_idx;
-    }
+        pub fn metaAt(self: @This(), block_idx: u32) *types.BlockMeta {
+            return blockMetaAt(self.graph, block_idx, side);
+        }
+    };
+    return stack(graph, kind, side).pop(MetaContext{ .graph = graph });
 }
 
 fn detachStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) u32 {
-    return common.detachHeadIndex(stackHead(graph, kind, side));
+    return stack(graph, kind, side).detach();
 }
 
 // ── Page access ──────────────────────────────────────────────────────
@@ -303,13 +304,13 @@ pub fn freeBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: ad
 
 /// Moves one block to the retired stack with its retirement epoch recorded.
 pub fn retireBlock(graph: *graph_core.GraphCore, block_idx: u32, epoch: u64, comptime side: adjacency.AdjSide) void {
-    const meta = metaAt(graph, block_idx, side);
+    const meta = blockMetaAt(graph, block_idx, side);
     meta.epoch.store(epoch, .release);
     pushStack(graph, block_idx, .retired, side);
 }
 
 fn requeueOrFreeRetiredBlock(graph: *graph_core.GraphCore, block_idx: u32, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
-    const meta = metaAt(graph, block_idx, side);
+    const meta = blockMetaAt(graph, block_idx, side);
     const retired_epoch = meta.epoch.load(.acquire);
     if (retired_epoch < safe_epoch) {
         freeBlock(graph, block_idx, side);
@@ -322,7 +323,7 @@ fn requeueOrFreeRetiredBlock(graph: *graph_core.GraphCore, block_idx: u32, safe_
 pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
     var block_idx = detachStack(graph, .retired, side);
     while (block_idx != EMPTY_INDEX) {
-        const meta = metaAt(graph, block_idx, side);
+        const meta = blockMetaAt(graph, block_idx, side);
         const next = meta.next.load(.acquire);
         requeueOrFreeRetiredBlock(graph, block_idx, safe_epoch, side);
         block_idx = next;
@@ -352,14 +353,14 @@ fn rollbackFreeFrontier(graph: *graph_core.GraphCore, comptime side: adjacency.A
     defer free_blocks.deinit(graph.allocator);
 
     while (head != EMPTY_INDEX) {
-        const next = metaAt(graph, head, side).next.load(.acquire);
+        const next = blockMetaAt(graph, head, side).next.load(.acquire);
         free_blocks.append(graph.allocator, head) catch {
             // Out of memory: push everything collected (and the rest of the
             // chain) straight back and bail.
             pushStack(graph, head, .free, side);
             var rest = next;
             while (rest != EMPTY_INDEX) {
-                const rest_next = metaAt(graph, rest, side).next.load(.acquire);
+                const rest_next = blockMetaAt(graph, rest, side).next.load(.acquire);
                 pushStack(graph, rest, .free, side);
                 rest = rest_next;
             }

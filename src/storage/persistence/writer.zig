@@ -79,16 +79,59 @@ pub const SectionPlan = struct {
 /// fills them). Needs to walk the free stacks to count their entries —
 /// see `countFreeStack`.
 pub fn planSections(core: *const graph_core.GraphCore, header: format.FileHeader) SaveError!SectionPlan {
-    _ = core;
-    _ = header;
-    // TODO:
-    //   - fixed-shape sections: byte_len = format.expectedSectionBytes;
-    //     entry_count = the page count (page sections) or node_count.
-    //   - free-list sections: entry_count = countFreeStack(...), byte_len =
-    //     entry_count * @sizeOf(u32) (or FreeGroupSpan for spans).
-    //   - offsets: fold format.alignForward starting at
-    //     format.PAYLOAD_BASE_OFFSET, skipping byte_len == 0 sections.
-    @panic("TODO: planSections");
+    var table: [format.MAX_SECTIONS]format.SectionDescriptor = undefined;
+
+    // Compute entry counts and byte lengths for all 16 sections in SectionId order.
+    var id_int: u16 = 0;
+    while (id_int < format.MAX_SECTIONS) : (id_int += 1) {
+        const id: format.SectionId = @enumFromInt(id_int);
+
+        const entry_count: u32 = switch (id) {
+            .node_records => @intCast(header.node_count),
+            .blocks_fwd => @intCast(format.blockPages(header.block_fwd_count)),
+            .blocks_rev => @intCast(format.blockPages(header.block_rev_count)),
+            .alive_fwd => @intCast(format.blockPages(header.block_fwd_count)),
+            .alive_rev => @intCast(format.blockPages(header.block_rev_count)),
+            .edge_ids_fwd => if (header.flags.multigraph) @intCast(format.blockPages(header.block_fwd_count)) else 0,
+            .prop_rows_fwd => if (header.flags.edge_properties) @intCast(format.blockPages(header.block_fwd_count)) else 0,
+            .groups => @intCast(format.groupPages(header.group_count)),
+            .tiny_fwd => @intCast(format.tinyFwdPages(header.tiny_block_fwd_count)),
+            .tiny_rev => @intCast(format.tinyRevPages(header.tiny_block_rev_count)),
+            .free_blocks_fwd => countFreeStack(core, .blocks_fwd),
+            .free_blocks_rev => countFreeStack(core, .blocks_rev),
+            .free_group_spans => countFreeGroupSpans(core),
+            .free_tiny_fwd => countFreeStack(core, .tiny_fwd),
+            .free_tiny_rev => countFreeStack(core, .tiny_rev),
+            .free_prop_rows => countFreeStack(core, .prop_rows),
+        };
+
+        const byte_len: u64 = if (format.expectedSectionBytes(header, id)) |expected| expected else blk: {
+            const element_size: u64 = if (id == .free_group_spans) @sizeOf(format.FreeGroupSpan) else @sizeOf(u32);
+            break :blk @as(u64, entry_count) * element_size;
+        };
+
+        table[id_int] = .{
+            .id = id_int,
+            ._reserved = 0,
+            .entry_count = entry_count,
+            .file_offset = 0,
+            .byte_len = byte_len,
+            .checksum = 0,
+        };
+    }
+
+    // Compute aligned offsets and total file length.
+    var offset: u64 = format.PAYLOAD_BASE_OFFSET;
+    var file_len: u64 = format.PAYLOAD_BASE_OFFSET;
+    for (&table) |*descriptor| {
+        if (descriptor.byte_len == 0) continue;
+        offset = format.alignForward(offset, format.SECTION_ALIGN);
+        descriptor.file_offset = offset;
+        offset += descriptor.byte_len;
+        file_len = descriptor.file_offset + descriptor.byte_len;
+    }
+
+    return .{ .table = table, .file_len = file_len };
 }
 
 // ── Payload streaming (shared by the hash pass and the write pass) ───────
@@ -107,12 +150,12 @@ pub fn emitSection(core: *const graph_core.GraphCore, id: format.SectionId, sink
         .groups => emitGroupPages(core, sink),
         .tiny_fwd => emitTinyPages(core, sink, .fwd),
         .tiny_rev => emitTinyPages(core, sink, .rev),
-        .free_blocks_fwd => emitFreeBlockList(core, sink, .fwd),
-        .free_blocks_rev => emitFreeBlockList(core, sink, .rev),
-        .free_group_spans => emitFreeGroupSpans(core, sink),
-        .free_tiny_fwd => emitFreeTinyList(core, sink, .fwd),
-        .free_tiny_rev => emitFreeTinyList(core, sink, .rev),
-        .free_prop_rows => emitFreePropRows(core, sink),
+        .free_blocks_fwd => emitFreeBlockList(core, sink, core.allocator, .fwd),
+        .free_blocks_rev => emitFreeBlockList(core, sink, core.allocator, .rev),
+        .free_group_spans => emitFreeGroupSpans(core, sink, core.allocator),
+        .free_tiny_fwd => emitFreeTinyList(core, sink, core.allocator, .fwd),
+        .free_tiny_rev => emitFreeTinyList(core, sink, core.allocator, .rev),
+        .free_prop_rows => emitFreePropRows(core, sink, core.allocator),
     };
 }
 
@@ -308,9 +351,6 @@ pub fn countFreeStack(core: *const graph_core.GraphCore, which: FreeStackId) u32
         .tiny_rev => core.free_tiny_block_rev_head.load(.acquire),
         .prop_rows => core.free_prop_rows_head.load(.acquire),
     };
-    const first_idx: u32 = @truncate(head_value);
-    if (first_idx == constants.END_OF_CHAIN) return 0;
-
     const per_page: u32 = switch (which) {
         .blocks_fwd, .blocks_rev => constants.EDGE_BLOCKS_PER_PAGE,
         .tiny_fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
@@ -318,56 +358,241 @@ pub fn countFreeStack(core: *const graph_core.GraphCore, which: FreeStackId) u32
         .prop_rows => constants.PROP_ROWS_PER_PAGE,
     };
 
-    var count: u32 = 1;
-    var current_idx: u32 = first_idx;
-    while (true) {
-        const page_idx = current_idx / per_page;
-        const slot_idx = current_idx % per_page;
-        const raw: usize = switch (which) {
-            .blocks_fwd => core.edge_blocks_fwd_meta_pages.load(page_idx),
-            .blocks_rev => core.edge_blocks_rev_meta_pages.load(page_idx),
-            .tiny_fwd => core.tiny_block_fwd_meta_pages.load(page_idx),
-            .tiny_rev => core.tiny_block_rev_meta_pages.load(page_idx),
-            .prop_rows => core.prop_row_meta_pages.load(page_idx),
-        };
-        const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
-        const next = meta_page[slot_idx].next.load(.acquire);
-        if (next == constants.END_OF_CHAIN) break;
-        count += 1;
-        current_idx = next;
+    const LinkContext = struct {
+        core: *const graph_core.GraphCore,
+        which: FreeStackId,
+        per_page: u32,
+
+        pub fn nextIndex(self: @This(), current: u32) !u32 {
+            const page_idx = page_ops.pageOf(current, self.per_page);
+            const slot_idx = page_ops.slotOf(current, self.per_page);
+            const raw: usize = switch (self.which) {
+                .blocks_fwd => self.core.edge_blocks_fwd_meta_pages.load(page_idx),
+                .blocks_rev => self.core.edge_blocks_rev_meta_pages.load(page_idx),
+                .tiny_fwd => self.core.tiny_block_fwd_meta_pages.load(page_idx),
+                .tiny_rev => self.core.tiny_block_rev_meta_pages.load(page_idx),
+                .prop_rows => self.core.prop_row_meta_pages.load(page_idx),
+            };
+            const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+            return page_ops.stackMetaNext(&meta_page[slot_idx]);
+        }
+    };
+    const CountingVisitor = struct {
+        count: u32 = 0,
+
+        pub fn visit(self: *@This(), _: u32) !void {
+            self.count += 1;
+        }
+    };
+
+    const first_index = page_ops.stackHeadIndex(head_value);
+    var counting_visitor = CountingVisitor{};
+    const link_ctx = LinkContext{ .core = core, .which = which, .per_page = per_page };
+    page_ops.walkDetachedIndexStack(first_index, link_ctx, &counting_visitor) catch unreachable;
+    return counting_visitor.count;
+}
+
+/// Counts the total number of free group-span entries across all span-length
+/// stacks. Mirrors the counting pattern in `countFreeStack` but iterates over
+/// the per-span-length free lists in `free_group_spans_head`.
+fn countFreeGroupSpans(core: *const graph_core.GraphCore) u32 {
+    const LinkContext = struct {
+        core: *const graph_core.GraphCore,
+
+        pub fn nextIndex(self: @This(), current: u32) !u32 {
+            const page_idx = page_ops.pageOf(current, constants.EDGE_GROUPS_PER_PAGE);
+            const slot_idx = page_ops.slotOf(current, constants.EDGE_GROUPS_PER_PAGE);
+            const raw: usize = self.core.edge_block_group_meta_pages.load(page_idx);
+            const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+            return page_ops.stackMetaNext(&meta_page[slot_idx]);
+        }
+    };
+    const CountingVisitor = struct {
+        count: u32 = 0,
+
+        pub fn visit(self: *@This(), _: u32) !void {
+            self.count += 1;
+        }
+    };
+
+    var total: u32 = 0;
+    var span_count: u16 = 1;
+    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
+        const span_idx: usize = @intCast(span_count - 1);
+        const head: u64 = core.free_group_spans_head[span_idx].load(.acquire);
+        const first_index = page_ops.stackHeadIndex(head);
+        if (first_index == page_ops.EMPTY_INDEX) continue;
+
+        var visitor = CountingVisitor{};
+        page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &visitor) catch unreachable;
+        total += visitor.count;
     }
-    return count;
+    return total;
 }
 
 /// Emits the free block indices of `side` as raw u32s (drain order is
 /// irrelevant — the loader just pushes them back).
-fn emitFreeBlockList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
-    _ = core;
-    _ = sink;
-    _ = side;
-    @panic("TODO: emitFreeBlockList");
+fn emitFreeBlockList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide) anyerror!void {
+    const head: u64 = switch (side) {
+        .fwd => core.free_blocks_fwd_head.load(.acquire),
+        .rev => core.free_blocks_rev_head.load(.acquire),
+    };
+    const first_index = page_ops.stackHeadIndex(head);
+    if (first_index == page_ops.EMPTY_INDEX) return;
+
+    const LinkContext = struct {
+        core: *const graph_core.GraphCore,
+
+        pub fn nextIndex(self: @This(), current: u32) !u32 {
+            const page_idx = page_ops.pageOf(current, constants.EDGE_BLOCKS_PER_PAGE);
+            const slot_idx = page_ops.slotOf(current, constants.EDGE_BLOCKS_PER_PAGE);
+            const raw: usize = switch (side) {
+                .fwd => self.core.edge_blocks_fwd_meta_pages.load(page_idx),
+                .rev => self.core.edge_blocks_rev_meta_pages.load(page_idx),
+            };
+            const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+            return page_ops.stackMetaNext(&meta_page[slot_idx]);
+        }
+    };
+
+    var free_list = std.ArrayList(u32).init(allocator);
+    defer free_list.deinit();
+
+    const EmittingVisitor = struct {
+        list: *std.ArrayList(u32),
+
+        pub fn visit(self: *@This(), index: u32) !void {
+            try self.list.append(index);
+        }
+    };
+
+    var emitting_visitor = EmittingVisitor{ .list = &free_list };
+    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
+    try sink.emit(std.mem.sliceAsBytes(free_list.items));
 }
 
 /// Emits `FreeGroupSpan` entries. There is one stack per span length
 /// (free_group_spans_head[span_len - 1]); the span length must round-trip,
 /// hence the explicit record.
-fn emitFreeGroupSpans(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
-    _ = core;
-    _ = sink;
-    @panic("TODO: emitFreeGroupSpans");
+fn emitFreeGroupSpans(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator) anyerror!void {
+    const LinkContext = struct {
+        core: *const graph_core.GraphCore,
+
+        pub fn nextIndex(self: @This(), current: u32) !u32 {
+            const page_idx = page_ops.pageOf(current, constants.EDGE_GROUPS_PER_PAGE);
+            const slot_idx = page_ops.slotOf(current, constants.EDGE_GROUPS_PER_PAGE);
+            const raw: usize = self.core.edge_block_group_meta_pages.load(page_idx);
+            const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+            return page_ops.stackMetaNext(&meta_page[slot_idx]);
+        }
+    };
+
+    var free_spans = std.ArrayList(format.FreeGroupSpan).init(allocator);
+    defer free_spans.deinit();
+
+    var span_count: u16 = 1;
+    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
+        const span_idx: usize = @intCast(span_count - 1);
+        const head: u64 = core.free_group_spans_head[span_idx].load(.acquire);
+        const first_index = page_ops.stackHeadIndex(head);
+        if (first_index == page_ops.EMPTY_INDEX) continue;
+
+        const EmittingVisitor = struct {
+            list: *std.ArrayList(format.FreeGroupSpan),
+            span_count: u16,
+
+            pub fn visit(self: *@This(), first_group_idx: u32) !void {
+                try self.list.append(.{
+                    .first_group = first_group_idx,
+                    .span_count = self.span_count,
+                });
+            }
+        };
+
+        var emitting_visitor = EmittingVisitor{ .list = &free_spans, .span_count = span_count };
+        try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
+    }
+
+    if (free_spans.items.len > 0) {
+        try sink.emit(std.mem.sliceAsBytes(free_spans.items));
+    }
 }
 
-fn emitFreeTinyList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
-    _ = core;
-    _ = sink;
-    _ = side;
-    @panic("TODO: emitFreeTinyList");
+fn emitFreeTinyList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide) anyerror!void {
+    const head: u64 = switch (side) {
+        .fwd => core.free_tiny_block_fwd_head.load(.acquire),
+        .rev => core.free_tiny_block_rev_head.load(.acquire),
+    };
+    const first_index = page_ops.stackHeadIndex(head);
+    if (first_index == page_ops.EMPTY_INDEX) return;
+
+    const per_page: u32 = switch (side) {
+        .fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
+        .rev => node_tiny.TINY_BLOCKS_REV_PER_PAGE,
+    };
+
+    const LinkContext = struct {
+        core: *const graph_core.GraphCore,
+
+        pub fn nextIndex(self: @This(), current: u32) !u32 {
+            const page_idx = page_ops.pageOf(current, per_page);
+            const slot_idx = page_ops.slotOf(current, per_page);
+            const raw: usize = switch (side) {
+                .fwd => self.core.tiny_block_fwd_meta_pages.load(page_idx),
+                .rev => self.core.tiny_block_rev_meta_pages.load(page_idx),
+            };
+            const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+            return page_ops.stackMetaNext(&meta_page[slot_idx]);
+        }
+    };
+
+    var free_list = std.ArrayList(u32).init(allocator);
+    defer free_list.deinit();
+
+    const EmittingVisitor = struct {
+        list: *std.ArrayList(u32),
+
+        pub fn visit(self: *@This(), index: u32) !void {
+            try self.list.append(index);
+        }
+    };
+
+    var emitting_visitor = EmittingVisitor{ .list = &free_list };
+    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
+    try sink.emit(std.mem.sliceAsBytes(free_list.items));
 }
 
-fn emitFreePropRows(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
-    _ = core;
-    _ = sink;
-    @panic("TODO: emitFreePropRows");
+fn emitFreePropRows(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator) anyerror!void {
+    const head: u64 = core.free_prop_rows_head.load(.acquire);
+    const first_index = page_ops.stackHeadIndex(head);
+    if (first_index == page_ops.EMPTY_INDEX) return;
+
+    const LinkContext = struct {
+        core: *const graph_core.GraphCore,
+
+        pub fn nextIndex(self: @This(), current: u32) !u32 {
+            const page_idx = page_ops.pageOf(current, constants.PROP_ROWS_PER_PAGE);
+            const slot_idx = page_ops.slotOf(current, constants.PROP_ROWS_PER_PAGE);
+            const raw: usize = self.core.prop_row_meta_pages.load(page_idx);
+            const meta_page: [*]const types.BlockMeta = @ptrFromInt(raw);
+            return page_ops.stackMetaNext(&meta_page[slot_idx]);
+        }
+    };
+
+    var free_list = std.ArrayList(u32).init(allocator);
+    defer free_list.deinit();
+
+    const EmittingVisitor = struct {
+        list: *std.ArrayList(u32),
+
+        pub fn visit(self: *@This(), index: u32) !void {
+            try self.list.append(index);
+        }
+    };
+
+    var emitting_visitor = EmittingVisitor{ .list = &free_list };
+    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
+    try sink.emit(std.mem.sliceAsBytes(free_list.items));
 }
 
 // ── Header / table serialization (pure, unit-testable) ───────────────────

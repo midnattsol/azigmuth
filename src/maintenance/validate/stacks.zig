@@ -18,7 +18,7 @@ pub fn blockStackHeadIndex(graph: *const graph_core.GraphCore, comptime kind: co
             .rev => graph.retired_blocks_rev_head.load(.acquire),
         },
     };
-    return @truncate(head);
+    return page_ops.stackHeadIndex(head);
 }
 
 pub fn blockMetaNextFast(graph: *const graph_core.GraphCore, block_idx: u32, comptime side: common.Side) !u32 {
@@ -31,7 +31,7 @@ pub fn blockMetaNextFast(graph: *const graph_core.GraphCore, block_idx: u32, com
     if (raw == 0) return error.CorruptGraph;
     const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
     const page = page_ptr[0..constants.EDGE_BLOCKS_PER_PAGE];
-    return page[page_ops.slotOf(block_idx, constants.EDGE_BLOCKS_PER_PAGE)].next.load(.acquire);
+    return page_ops.stackMetaNext(&page[page_ops.slotOf(block_idx, constants.EDGE_BLOCKS_PER_PAGE)]);
 }
 
 pub fn populateStackBitmapFast(
@@ -41,14 +41,26 @@ pub fn populateStackBitmapFast(
     comptime side: common.Side,
 ) !void {
     const limit = common.allocatedBlockCount(graph, side);
-    var current = blockStackHeadIndex(graph, kind, side);
-    var visited: u32 = 0;
-    while (current != constants.END_OF_CHAIN) {
-        if (visited >= limit) return error.CorruptGraph;
-        visited += 1;
-        if (!common.bitmapSet(bitmap, current)) return error.CorruptGraph;
-        current = try blockMetaNextFast(graph, current, side);
-    }
+    const Links = struct {
+        graph: *const graph_core.GraphCore,
+
+        pub fn nextIndex(self: @This(), block_idx: u32) !u32 {
+            return blockMetaNextFast(self.graph, block_idx, side);
+        }
+    };
+    const Visitor = struct {
+        bitmap: []u64,
+        limit: u32,
+        visited: u32 = 0,
+
+        pub fn visit(self: *@This(), block_idx: u32) !void {
+            if (self.visited >= self.limit) return error.CorruptGraph;
+            self.visited += 1;
+            if (!common.bitmapSet(self.bitmap, block_idx)) return error.CorruptGraph;
+        }
+    };
+    var visitor = Visitor{ .bitmap = bitmap, .limit = limit };
+    try page_ops.walkDetachedIndexStack(blockStackHeadIndex(graph, kind, side), Links{ .graph = graph }, &visitor);
 }
 
 pub fn groupSpanStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime kind: common.StackKindFast, span_count: u16) u32 {
@@ -57,7 +69,7 @@ pub fn groupSpanStackHeadIndexFast(graph: *const graph_core.GraphCore, comptime 
         .free => graph.free_group_spans_head[span_idx].load(.acquire),
         .retired => graph.retired_group_spans_head[span_idx].load(.acquire),
     };
-    return @truncate(head);
+    return page_ops.stackHeadIndex(head);
 }
 
 pub fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_idx: u32) !u32 {
@@ -67,7 +79,7 @@ pub fn groupMetaNextFast(graph: *const graph_core.GraphCore, group_idx: u32) !u3
     if (raw == 0) return error.CorruptGraph;
     const page_ptr: [*]const types.BlockMeta = @ptrFromInt(raw);
     const page = page_ptr[0..constants.EDGE_GROUPS_PER_PAGE];
-    return page[page_ops.slotOf(group_idx, constants.EDGE_GROUPS_PER_PAGE)].next.load(.acquire);
+    return page_ops.stackMetaNext(&page[page_ops.slotOf(group_idx, constants.EDGE_GROUPS_PER_PAGE)]);
 }
 
 pub fn populateGroupStackBitmapFast(
@@ -78,16 +90,29 @@ pub fn populateGroupStackBitmapFast(
     const limit = graph.loadGroupCount();
     var span_count: u16 = 1;
     while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
-        var current = groupSpanStackHeadIndexFast(graph, kind, span_count);
-        var visited: u32 = 0;
-        while (current != constants.END_OF_CHAIN) {
-            if (visited >= limit) return error.CorruptGraph;
-            visited += 1;
-            for (current..current + span_count) |group_idx_usize| {
-                const group_idx: u32 = @intCast(group_idx_usize);
-                if (!common.bitmapSet(bitmap, group_idx)) return error.CorruptGraph;
+        const Links = struct {
+            graph: *const graph_core.GraphCore,
+
+            pub fn nextIndex(self: @This(), group_idx: u32) !u32 {
+                return groupMetaNextFast(self.graph, group_idx);
             }
-            current = try groupMetaNextFast(graph, current);
-        }
+        };
+        const Visitor = struct {
+            bitmap: []u64,
+            limit: u32,
+            span_count: u16,
+            visited: u32 = 0,
+
+            pub fn visit(self: *@This(), first_group_idx: u32) !void {
+                if (self.visited >= self.limit) return error.CorruptGraph;
+                self.visited += 1;
+                for (first_group_idx..first_group_idx + self.span_count) |group_idx_usize| {
+                    const group_idx: u32 = @intCast(group_idx_usize);
+                    if (!common.bitmapSet(self.bitmap, group_idx)) return error.CorruptGraph;
+                }
+            }
+        };
+        var visitor = Visitor{ .bitmap = bitmap, .limit = limit, .span_count = span_count };
+        try page_ops.walkDetachedIndexStack(groupSpanStackHeadIndexFast(graph, kind, span_count), Links{ .graph = graph }, &visitor);
     }
 }
