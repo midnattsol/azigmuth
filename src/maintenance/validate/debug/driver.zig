@@ -19,8 +19,8 @@ pub fn debugValidateLive(graph: *const graph_core.GraphCore, allocator: std.mem.
         const node_id: u32 = @intCast(node_idx);
         const node = types.NodeId{ .index = node_id };
         const adjacency = node_access.publishedAdjAtConst(graph, node);
-        const meta = node_access.loadPublishedMetaAtConst(graph, node);
-        const node_totals = try shared.appendNodeViolations(graph, allocator, &list, &tracking, node_id, adjacency, node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta), node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta));
+        const state = node_access.loadPublicationStateAtConst(graph, node);
+        const node_totals = try shared.appendNodeViolations(graph, allocator, &list, &tracking, node_id, adjacency, node_access.publishedFwdDegreeFromStateAtConst(graph, node, state), node_access.publishedRevDegreeFromStateAtConst(graph, node, state));
         totals.fwd += node_totals.fwd;
         totals.rev += node_totals.rev;
         if (!adjacency.flags.removed) {

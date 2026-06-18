@@ -9,7 +9,7 @@ const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const node_access = @import("../../core/node_access.zig");
-const node_published_mod = @import("../../storage/node/published.zig");
+const node_adjacency_buffers_mod = @import("../../storage/node/adjacency_buffers.zig");
 const node_tiny = @import("../../storage/node/tiny.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const types = @import("../../core/types.zig");
@@ -72,7 +72,7 @@ fn buildForwardSide(
     defer entries.deinit(graph.allocator);
     var gather = Gather{ .entries = &entries, .allocator = graph.allocator };
     try side_ops.forEachForwardEntryInSide(graph, published_side, &gather, struct {
-        fn run(_: *const graph_core.GraphCore, ctx: *Gather, entry: side_ops.ForwardEntryView) !void {
+        fn segment(_: *const graph_core.GraphCore, ctx: *Gather, entry: side_ops.ForwardEntryView) !void {
             try ctx.entries.append(ctx.allocator, .{
                 .destination_idx = entry.destination,
                 .relation = entry.relation,
@@ -81,7 +81,7 @@ fn buildForwardSide(
                 .prop_row = entry.prop_row,
             });
         }
-    }.run);
+    }.segment);
     for (batch) |input| {
         try entries.append(graph.allocator, .{
             .destination_idx = input.destination_idx,
@@ -99,8 +99,8 @@ fn buildForwardSide(
     // Small result: keep the tiny representation.
     const tiny_cap: usize = if (graph.multigraph_enabled) @import("../../core/tiny_config.zig").TINY_FWD_CAP_MULTI else @import("../../core/tiny_config.zig").TINY_FWD_CAP_SIMPLE;
     if (total <= tiny_cap) {
-        const slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .fwd);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .fwd);
         for (entries.items, 0..) |entry, entry_idx| {
             slot.entries[entry_idx] = .{
                 .destination = entry.destination_idx,
@@ -110,7 +110,7 @@ fn buildForwardSide(
                 .prop_row = entry.prop_row,
             };
         }
-        return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(total));
+        return node_adjacency_buffers_mod.NodeAdjacencyBuffers.makeTiny(slot_idx, @intCast(total));
     }
 
     const span_count: u32 = @intCast((total + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK);
@@ -135,7 +135,7 @@ fn buildForwardSide(
         remaining = remaining[take..];
     }
     _ = source;
-    return .{ .first_block = first_block_idx, .block_count = span_count, .group_count = 0, .first_group = 0 };
+    return .{ .first_block = first_block_idx, .block_count = span_count, .segment_count = 0, .first_segment = 0 };
 }
 
 fn buildReverseSide(
@@ -148,10 +148,10 @@ fn buildReverseSide(
     // Fast path for the dominant fan-out shape: previously isolated
     // destination, few incoming copies — fill a tiny slot directly.
     if (published_side.block_count == 0 and added <= @import("../../core/tiny_config.zig").TINY_REV_CAP) {
-        const slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .rev);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .rev);
         for (0..added) |entry_idx| slot.sources[entry_idx] = source.index;
-        return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(added));
+        return node_adjacency_buffers_mod.NodeAdjacencyBuffers.makeTiny(slot_idx, @intCast(added));
     }
 
     var sources: std.ArrayList(u32) = .empty;
@@ -163,10 +163,10 @@ fn buildReverseSide(
     var gather = Gather{ .sources = &sources, .allocator = graph.allocator };
     if (published_side.block_count != 0) {
         try side_ops.forEachNodeIdInSide(graph, published_side, .rev, &gather, struct {
-            fn run(_: *const graph_core.GraphCore, ctx: *Gather, source_idx: u32) !void {
+            fn segment(_: *const graph_core.GraphCore, ctx: *Gather, source_idx: u32) !void {
                 try ctx.sources.append(ctx.allocator, source_idx);
             }
-        }.run);
+        }.segment);
     }
     for (0..added) |_| try sources.append(graph.allocator, source.index);
     std.sort.pdq(u32, sources.items, {}, std.sort.asc(u32));
@@ -175,10 +175,10 @@ fn buildReverseSide(
     if (total > constants.MAX_DEGREE_PER_SIDE) return error.DegreeLimitReached;
 
     if (total <= @import("../../core/tiny_config.zig").TINY_REV_CAP) {
-        const slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .rev);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .rev);
         for (sources.items, 0..) |source_idx, entry_idx| slot.sources[entry_idx] = source_idx;
-        return node_published_mod.NodePublished.makeTiny(slot_idx, @intCast(total));
+        return node_adjacency_buffers_mod.NodeAdjacencyBuffers.makeTiny(slot_idx, @intCast(total));
     }
 
     const span_count: u32 = @intCast((total + constants.EDGES_PER_BLOCK - 1) / constants.EDGES_PER_BLOCK);
@@ -194,7 +194,7 @@ fn buildReverseSide(
         page_ops.setBlockAliveCount(graph, emit_block_idx, .rev, @intCast(take));
         remaining = remaining[take..];
     }
-    return .{ .first_block = first_block_idx, .block_count = span_count, .group_count = 0, .first_group = 0 };
+    return .{ .first_block = first_block_idx, .block_count = span_count, .segment_count = 0, .first_segment = 0 };
 }
 
 fn retireSideStorage(graph: *graph_core.GraphCore, side: types.SideAdj, comptime which: adjacency.AdjSide) !void {
@@ -231,24 +231,24 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
     }
 
     // Claim the source forward side first.
-    const source_hot = page_ops.nodeHotAt(graph, source);
-    try source_hot.claimFwd();
-    defer source_hot.releaseFwd();
+    const source_mutation_control = page_ops.nodeMutationControlAt(graph, source);
+    try source_mutation_control.claimFwd();
+    defer source_mutation_control.releaseFwd();
 
-    const source_meta = node_access.loadPublishedMetaAtConst(graph, source);
-    if (source_meta.removed) return error.InvalidNode;
-    const source_pub = node_access.publishedFwdFromMeta(graph, source, source_meta);
-    const source_sorted = node_access.nodePublishedAtConst(graph, source).publishedFwdSortedFromMeta(source_meta);
+    const source_state = node_access.loadPublicationStateAtConst(graph, source);
+    if (source_state.removed) return error.InvalidNode;
+    const source_published_side = node_access.publishedFwdFromState(graph, source, source_state);
+    const source_sorted = node_access.nodeAdjacencyBuffersAtConst(graph, source).publishedFwdSortedFromState(source_state);
 
     // Duplicate rejection (simple mode): intra-batch and against the graph.
     if (!graph.multigraph_enabled) {
         std.sort.pdq(SortedInput, batch, {}, inputLessThan);
         for (batch, 0..) |input, batch_idx| {
             if (batch_idx > 0 and batch[batch_idx - 1].destination_idx == input.destination_idx) return error.EdgeAlreadyExists;
-            if (try adjacency.hasEdgeInSideAdjChecked(graph, source_pub, input.destination_idx, source_sorted)) return error.EdgeAlreadyExists;
+            if (try adjacency.hasEdgeInSideAdjChecked(graph, source_published_side, input.destination_idx, source_sorted)) return error.EdgeAlreadyExists;
         }
     } else {
-        for (batch) |*input| input.edge_id = (try source_hot.nextEdgeId()).local;
+        for (batch) |*input| input.edge_id = (try source_mutation_control.nextEdgeId()).local;
         std.sort.pdq(SortedInput, batch, {}, inputLessThan);
     }
 
@@ -258,7 +258,7 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
         for (batch) |*input| input.prop_row = try scratch.allocPropRow(graph);
     }
 
-    // Group by destination and claim every reverse side. Claims fail fast on
+    // Segment by destination and claim every reverse side. Claims fail fast on
     // contention; everything claimed so far is released by the defers.
     var plans: std.ArrayList(DestinationPlan) = .empty;
     defer plans.deinit(graph.allocator);
@@ -272,18 +272,18 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
 
         const want_rev = true;
         var node_claims = if (destination_idx == source.index)
-            claims_mod.ClaimedNodeSides{ .hot = source_hot }
+            claims_mod.ClaimedNodeSides{ .mutation_control = source_mutation_control }
         else
             try claims_mod.tryClaimNodeSides(graph, destination_idx, false, want_rev);
         errdefer node_claims.release();
         if (destination_idx == source.index) try node_claims.ensureRev();
 
-        const destination_meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = destination_idx });
-        if (destination_meta.removed) {
+        const destination_state = node_access.loadPublicationStateAtConst(graph, .{ .index = destination_idx });
+        if (destination_state.removed) {
             node_claims.release();
             return error.InvalidNode;
         }
-        const old_side = node_access.publishedRevFromMeta(graph, .{ .index = destination_idx }, destination_meta);
+        const old_side = node_access.publishedRevFromState(graph, .{ .index = destination_idx }, destination_state);
         try plans.append(graph.allocator, .{
             .destination_idx = destination_idx,
             .added = added,
@@ -294,7 +294,7 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
     }
 
     // Build all replacement sides while everything is still revocable.
-    const new_source_side = try buildForwardSide(graph, source, source_pub, batch, &scratch);
+    const new_source_side = try buildForwardSide(graph, source, source_published_side, batch, &scratch);
     for (plans.items) |*plan| {
         plan.new_side = try buildReverseSide(graph, source, plan.old_side, plan.added, &scratch);
     }
@@ -305,25 +305,25 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
 
     for (plans.items) |plan| {
         const destination: types.NodeId = .{ .index = plan.destination_idx };
-        const destination_meta = node_access.loadPublishedMetaAtConst(graph, destination);
-        node_access.writeStagingRev(graph, destination, destination_meta, plan.new_side);
+        const destination_state = node_access.loadPublicationStateAtConst(graph, destination);
+        node_access.writeStagingRev(graph, destination, destination_state, plan.new_side);
         _ = publish_mod.publishStagedRev(
-            page_ops.nodeMetaAt(graph, destination),
-            page_ops.nodePublishedAt(graph, destination),
-            destination_meta,
-            destination_meta.needs_repair_rev,
+            page_ops.nodePublicationAt(graph, destination),
+            page_ops.nodeAdjacencyBuffersAt(graph, destination),
+            destination_state,
+            destination_state.needs_repair_rev,
             @intCast(plan.added),
             true,
         );
     }
 
-    const fresh_source_meta = node_access.loadPublishedMetaAtConst(graph, source);
-    node_access.writeStagingFwd(graph, source, fresh_source_meta, new_source_side);
+    const fresh_source_state = node_access.loadPublicationStateAtConst(graph, source);
+    node_access.writeStagingFwd(graph, source, fresh_source_state, new_source_side);
     _ = publish_mod.publishStagedFwd(
-        page_ops.nodeMetaAt(graph, source),
-        page_ops.nodePublishedAt(graph, source),
-        fresh_source_meta,
-        fresh_source_meta.needs_repair_fwd,
+        page_ops.nodePublicationAt(graph, source),
+        page_ops.nodeAdjacencyBuffersAt(graph, source),
+        fresh_source_state,
+        fresh_source_state.needs_repair_fwd,
         @intCast(edges.len),
         true,
     );
@@ -332,7 +332,7 @@ pub fn addEdges(graph: *graph_core.GraphCore, source: types.NodeId, edges: []con
 
     // Retire every superseded side wholesale: the rebuilds emitted fresh
     // storage, so nothing in the old sides is shared.
-    try retireSideStorage(graph, source_pub, .fwd);
+    try retireSideStorage(graph, source_published_side, .fwd);
     for (plans.items) |plan| try retireSideStorage(graph, plan.old_side, .rev);
 
     rcu.bumpEpoch(graph);

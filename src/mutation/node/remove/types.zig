@@ -1,13 +1,13 @@
 const std = @import("std");
-const node_meta = @import("../../../storage/node/meta.zig");
+const node_publication = @import("../../../storage/node/publication.zig");
 const types = @import("../../../core/types.zig");
 const common = @import("../../common.zig");
 
 pub const RelatedNode = struct {
     node_idx: u32,
-    node_meta: *node_meta.NodeMeta,
+    node_publication: *node_publication.NodePublicationCell,
     /// Destinations hold their reverse claim so adjacent removeNode calls
-    /// serialize; predecessor forward updates are claim-free (meta-only CAS).
+    /// serialize; predecessor forward updates are claim-free (state-only CAS).
     claims: common.ClaimedNodeSides,
     fwd_degree_delta: u22,
     rev_degree_delta: u22,

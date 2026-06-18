@@ -9,19 +9,19 @@ pub const active_profile: profile.Profile = profile.active;
 /// Entries per page — chosen to fit in common cache sizes.
 pub const NODES_PER_PAGE: u32 = 256; // 256 × 64 B = 16 KB.
 pub const EDGE_BLOCKS_PER_PAGE: u32 = 64; // 64 blocks × (8 B × edges_per_block) per page (32 KB at the default 64-edge blocks); live counts: one 64 B sidecar page per block page.
-pub const EDGE_GROUPS_PER_PAGE: u32 = 128; // 128 × 8 B = 1 KB.
+pub const EDGE_SEGMENTS_PER_PAGE: u32 = 128; // 128 × 8 B = 1 KB.
 
-/// Property-row lifecycle metadata entries per page (edge_properties mode).
+/// Property-row reclamation entries per page (edge_properties mode).
 pub const PROP_ROWS_PER_PAGE: u32 = 256;
 
-/// Sentinel value marking the end of an EdgeBlockGroup chain.
+/// Sentinel value marking the end of an EdgeBlockSegment chain.
 pub const END_OF_CHAIN: u32 = 0xFFFF_FFFF;
 
 /// Minimum occupancy per non-tail block (75% of the block capacity).
 pub const MIN_OCCUPANCY: u7 = (EDGES_PER_BLOCK / 4) * 3;
 
-/// Maximum number of groups per node before repair is required.
-pub const MAX_GROUPS_PER_NODE: u16 = 4;
+/// Maximum number of segments per node before repair is required.
+pub const MAX_SEGMENTS_PER_NODE: u16 = 4;
 
 /// Maximum number of edges per block (16/32/64, fixed by the profile).
 pub const EDGES_PER_BLOCK: u7 = @intCast(active_profile.edges_per_block);
@@ -31,11 +31,11 @@ pub const EDGES_PER_BLOCK: u7 = @intCast(active_profile.edges_per_block);
 /// allocated on demand, so these ceilings cost nothing until used.
 pub const NODE_DIR = active_profile.node_dir;
 pub const EDGE_BLOCK_DIR = active_profile.edge_block_dir;
-pub const EDGE_GROUP_DIR = active_profile.edge_group_dir;
+pub const EDGE_SEGMENT_DIR = active_profile.edge_segment_dir;
 
 pub const MAX_NODE_PAGES: usize = NODE_DIR.maxPages();
 pub const MAX_EDGE_BLOCK_PAGES: usize = EDGE_BLOCK_DIR.maxPages();
-pub const MAX_EDGE_GROUP_PAGES: usize = EDGE_GROUP_DIR.maxPages();
+pub const MAX_EDGE_SEGMENT_PAGES: usize = EDGE_SEGMENT_DIR.maxPages();
 
 /// Total edge-block capacity of one side pool (global, u32-indexed).
 pub const MAX_TOTAL_BLOCKS_PER_POOL: u64 = @as(u64, MAX_EDGE_BLOCK_PAGES) * EDGE_BLOCKS_PER_PAGE;
@@ -62,17 +62,17 @@ comptime {
     // Tiny sides must always promote into a single block.
     std.debug.assert(EDGES_PER_BLOCK >= 16);
     std.debug.assert(@as(u32, MIN_OCCUPANCY) * 4 == @as(u32, EDGES_PER_BLOCK) * 3);
-    std.debug.assert(@sizeOf(types.EdgeBlockGroup) == 8);
+    std.debug.assert(@sizeOf(types.EdgeBlockSegment) == 8);
     std.debug.assert(@sizeOf(types.NodeAdj) == 36);
     std.debug.assert(@sizeOf(types.SideAdj) == 16);
-    std.debug.assert(@sizeOf(types.PublishedMeta) == 8);
-    std.debug.assert(@bitSizeOf(types.PublishedMeta) == 64);
+    std.debug.assert(@sizeOf(types.NodePublicationState) == 8);
+    std.debug.assert(@bitSizeOf(types.NodePublicationState) == 64);
 
     // Structural index spaces must stay clear of their u32 sentinels and tags:
-    // block/group/node indices below END_OF_CHAIN, per-side block counts below
+    // block/segment/node indices below END_OF_CHAIN, per-side block counts below
     // the tiny-mode tag bit, per-side degrees representable in u32.
     std.debug.assert(MAX_TOTAL_BLOCKS_PER_POOL < END_OF_CHAIN);
-    std.debug.assert(@as(u64, MAX_EDGE_GROUP_PAGES) * EDGE_GROUPS_PER_PAGE < END_OF_CHAIN);
+    std.debug.assert(@as(u64, MAX_EDGE_SEGMENT_PAGES) * EDGE_SEGMENTS_PER_PAGE < END_OF_CHAIN);
     std.debug.assert(@as(u64, MAX_NODE_PAGES) * NODES_PER_PAGE >= NODES_PER_PAGE);
     std.debug.assert(MAX_BLOCKS_PER_SIDE < 0x8000_0000); // tiny-mode tag bit
     std.debug.assert(@as(u64, MAX_BLOCKS_PER_SIDE) * EDGES_PER_BLOCK <= std.math.maxInt(u32));

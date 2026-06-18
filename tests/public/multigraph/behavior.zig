@@ -264,7 +264,7 @@ test "multigraph: builder freeze seeds next EdgeId independently per source" {
     try graph.validate();
 }
 
-test "multigraph: removeEdge preserves grouped reverse entries after duplicates" {
+test "multigraph: removeEdge preserves segmented reverse entries after duplicates" {
     var graph = try gz.Graph.initWithOptions(testing.allocator, .{ .multigraph = true });
     defer graph.deinit();
     const source = try graph.addNode();

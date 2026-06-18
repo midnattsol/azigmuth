@@ -5,7 +5,7 @@
 //!    same bytes through the same `PayloadSink` interface, so checksums
 //!    cannot diverge from what lands on disk;
 //!  - the validation ladder: `loader.load` and `frozen.FrozenGraph.open`
-//!    run the exact same hostile-input checks (header → table → length →
+//!    segment the exact same hostile-input checks (header → table → length →
 //!    checksums) before trusting a single payload byte; only the
 //!    materialization differs (copy vs map).
 

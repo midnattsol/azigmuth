@@ -186,19 +186,19 @@ pub fn retireBlockRev(graph: *graph_core.GraphCore, block_idx: u32) !void {
     page_ops.retireBlock(graph, block_idx, current_epoch, .rev);
 }
 
-pub fn retireGroup(graph: *graph_core.GraphCore, group_idx: u32) void {
+pub fn retireSegment(graph: *graph_core.GraphCore, segment_idx: u32) void {
     const current_epoch = graph.epoch.load(.acquire);
-    page_ops.retireGroup(graph, group_idx, current_epoch);
+    page_ops.retireSegment(graph, segment_idx, current_epoch);
 }
 
-pub fn retireTinyBlock(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) void {
+pub fn retireTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) void {
     const current_epoch = graph.epoch.load(.acquire);
-    page_ops.retireTinyBlock(graph, slot_idx, current_epoch, side);
+    page_ops.retireTinySlot(graph, slot_idx, current_epoch, side);
 }
 
-pub fn retireGroupSpan(graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
+pub fn retireSegmentSlots(graph: *graph_core.GraphCore, first_segment_idx: u32, segment_count: u16) void {
     const current_epoch = graph.epoch.load(.acquire);
-    page_ops.retireGroupSpan(graph, first_group_idx, group_count, current_epoch);
+    page_ops.retireSegmentSlots(graph, first_segment_idx, segment_count, current_epoch);
 }
 
 /// Retires one property row (edge_properties mode): the row recycles only
@@ -236,8 +236,8 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore) void {
 
     page_ops.reclaimRetired(graph, safe_epoch, .fwd);
     page_ops.reclaimRetired(graph, safe_epoch, .rev);
-    page_ops.reclaimRetiredGroups(graph, safe_epoch);
-    page_ops.reclaimRetiredTinyBlocks(graph, safe_epoch, .fwd);
-    page_ops.reclaimRetiredTinyBlocks(graph, safe_epoch, .rev);
+    page_ops.reclaimRetiredSegments(graph, safe_epoch);
+    page_ops.reclaimRetiredTinySlots(graph, safe_epoch, .fwd);
+    page_ops.reclaimRetiredTinySlots(graph, safe_epoch, .rev);
     page_ops.reclaimRetiredPropRows(graph, safe_epoch);
 }

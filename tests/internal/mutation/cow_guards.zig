@@ -20,8 +20,8 @@ test "cow guard: addEdge fails defensively when forward free-list returns publis
     }
 
     const source_node = try graph.nodeAt(source);
-    const meta = source_node.loadPublishedMeta();
-    const published_fwd_block = source_node.publishedFwdFromMeta(meta).first_block;
+    const state = source_node.loadPublicationState();
+    const published_fwd_block = source_node.publishedFwdFromState(state).first_block;
 
     // Push the published forward block into the free-list so allocBlock may
     // return it.  This is a deliberate corruption to test defensive guards.
@@ -54,8 +54,8 @@ test "cow guard: removeEdge fails defensively when forward free-list returns pub
     }
 
     const source_node = try graph.nodeAt(source);
-    const meta = source_node.loadPublishedMeta();
-    const published_fwd_block = source_node.publishedFwdFromMeta(meta).first_block;
+    const state = source_node.loadPublicationState();
+    const published_fwd_block = source_node.publishedFwdFromState(state).first_block;
 
     page_ops.freeBlock(&graph.graph, published_fwd_block, .fwd);
 
@@ -76,7 +76,7 @@ test "cow guard: addEdge self-edge does not mutate published blocks in-place" {
     try graph.addEdge(node, node, 0, 0);
 
     const node_buffer = try graph.nodeAt(node);
-    _ = node_buffer.loadPublishedMeta();
+    _ = node_buffer.loadPublicationState();
 
     var it = try graph.neighbors(node);
     const neighbors = try graph_mod.materializeConsuming(&it, testing.allocator);

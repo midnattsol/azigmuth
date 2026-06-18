@@ -7,7 +7,7 @@ const types = graph_mod.types_mod;
 const Graph = graph_mod.Graph;
 const testing = std.testing;
 
-test "graph structure: multiple blocks trigger group creation and still iterate" {
+test "graph structure: multiple blocks trigger segment creation and still iterate" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -116,43 +116,43 @@ test "graph structure: removeEdge preserves unrelated incoming and outgoing adja
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    const d = try graph.addNode();
-    const e = try graph.addNode();
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    const other_destination = try graph.addNode();
+    const incoming_source = try graph.addNode();
+    const downstream = try graph.addNode();
 
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(a, c, 0, 0);
-    try graph.addEdge(d, a, 0, 0);
-    try graph.addEdge(b, e, 0, 0);
+    try graph.addEdge(source, destination, 0, 0);
+    try graph.addEdge(source, other_destination, 0, 0);
+    try graph.addEdge(incoming_source, source, 0, 0);
+    try graph.addEdge(destination, downstream, 0, 0);
 
     try graph.validate();
-    try testing.expect(try graph.removeEdge(a, b));
+    try testing.expect(try graph.removeEdge(source, destination));
     try graph.validate();
 
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(a));
-    var it_a = try graph.neighbors(a);
-    defer it_a.deinit();
-    const fwd_a = try graph_mod.materializeConsuming(&it_a, testing.allocator);
-    defer testing.allocator.free(fwd_a);
-    try testing.expectEqual(c.index, fwd_a[0].index);
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(source));
+    var source_neighbors_it = try graph.neighbors(source);
+    defer source_neighbors_it.deinit();
+    const source_neighbors = try graph_mod.materializeConsuming(&source_neighbors_it, testing.allocator);
+    defer testing.allocator.free(source_neighbors);
+    try testing.expectEqual(other_destination.index, source_neighbors[0].index);
 
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(a));
-    var it_a_rev = try graph.inNeighbors(a);
-    defer it_a_rev.deinit();
-    const rev_a = try graph_mod.materializeConsuming(&it_a_rev, testing.allocator);
-    defer testing.allocator.free(rev_a);
-    try testing.expectEqual(d.index, rev_a[0].index);
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(source));
+    var source_incoming_it = try graph.inNeighbors(source);
+    defer source_incoming_it.deinit();
+    const source_incoming = try graph_mod.materializeConsuming(&source_incoming_it, testing.allocator);
+    defer testing.allocator.free(source_incoming);
+    try testing.expectEqual(incoming_source.index, source_incoming[0].index);
 
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(b));
-    var it_b = try graph.neighbors(b);
-    defer it_b.deinit();
-    const fwd_b = try graph_mod.materializeConsuming(&it_b, testing.allocator);
-    defer testing.allocator.free(fwd_b);
-    try testing.expectEqual(e.index, fwd_b[0].index);
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(destination));
+    var destination_neighbors_it = try graph.neighbors(destination);
+    defer destination_neighbors_it.deinit();
+    const destination_neighbors = try graph_mod.materializeConsuming(&destination_neighbors_it, testing.allocator);
+    defer testing.allocator.free(destination_neighbors);
+    try testing.expectEqual(downstream.index, destination_neighbors[0].index);
 
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(b));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(destination));
     try testing.expectEqual(@as(u64, 3), graph.edgeCount());
 }
 
@@ -160,34 +160,34 @@ test "graph structure: removeEdge preserves destination forward adjacency and re
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    const x = try graph.addNode();
-    const y = try graph.addNode();
+    const removed_source = try graph.addNode();
+    const stable_source = try graph.addNode();
+    const destination = try graph.addNode();
+    const stable_destination_one = try graph.addNode();
+    const stable_destination_two = try graph.addNode();
 
-    try graph.addEdge(b, x, 0, 0);
-    try graph.addEdge(b, y, 0, 0);
-    try graph.addEdge(a, c, 0, 0);
-    try graph.addEdge(x, c, 0, 0);
+    try graph.addEdge(stable_source, stable_destination_one, 0, 0);
+    try graph.addEdge(stable_source, stable_destination_two, 0, 0);
+    try graph.addEdge(removed_source, destination, 0, 0);
+    try graph.addEdge(stable_destination_one, destination, 0, 0);
 
     try graph.validate();
-    try testing.expect(try graph.removeEdge(a, c));
+    try testing.expect(try graph.removeEdge(removed_source, destination));
     try graph.validate();
 
-    try testing.expectEqual(@as(usize, 2), try graph.outDegree(b));
-    var it_b = try graph.neighbors(b);
-    defer it_b.deinit();
-    const fwd_b = try graph_mod.materializeConsuming(&it_b, testing.allocator);
-    defer testing.allocator.free(fwd_b);
-    try testing.expectEqual(@as(usize, 2), fwd_b.len);
+    try testing.expectEqual(@as(usize, 2), try graph.outDegree(stable_source));
+    var stable_neighbors_it = try graph.neighbors(stable_source);
+    defer stable_neighbors_it.deinit();
+    const stable_neighbors = try graph_mod.materializeConsuming(&stable_neighbors_it, testing.allocator);
+    defer testing.allocator.free(stable_neighbors);
+    try testing.expectEqual(@as(usize, 2), stable_neighbors.len);
 
-    try testing.expectEqual(@as(usize, 1), try graph.inDegree(c));
-    var it_c_rev = try graph.inNeighbors(c);
-    defer it_c_rev.deinit();
-    const rev_c = try graph_mod.materializeConsuming(&it_c_rev, testing.allocator);
-    defer testing.allocator.free(rev_c);
-    try testing.expectEqual(x.index, rev_c[0].index);
+    try testing.expectEqual(@as(usize, 1), try graph.inDegree(destination));
+    var destination_incoming_it = try graph.inNeighbors(destination);
+    defer destination_incoming_it.deinit();
+    const destination_incoming = try graph_mod.materializeConsuming(&destination_incoming_it, testing.allocator);
+    defer testing.allocator.free(destination_incoming);
+    try testing.expectEqual(stable_destination_one.index, destination_incoming[0].index);
 }
 
 test "graph structure: removeEdge preserves self-edge and unrelated incoming edge" {
@@ -195,15 +195,15 @@ test "graph structure: removeEdge preserves self-edge and unrelated incoming edg
     defer graph.deinit();
 
     const node = try graph.addNode();
-    const x = try graph.addNode();
-    const y = try graph.addNode();
+    const removed_destination = try graph.addNode();
+    const incoming_source = try graph.addNode();
 
     try graph.addEdge(node, node, 0, 0);
-    try graph.addEdge(node, x, 0, 0);
-    try graph.addEdge(y, node, 0, 0);
+    try graph.addEdge(node, removed_destination, 0, 0);
+    try graph.addEdge(incoming_source, node, 0, 0);
 
     try graph.validate();
-    try testing.expect(try graph.removeEdge(node, x));
+    try testing.expect(try graph.removeEdge(node, removed_destination));
     try graph.validate();
 
     try testing.expectEqual(@as(usize, 1), try graph.outDegree(node));
@@ -221,7 +221,7 @@ test "graph structure: removeEdge preserves self-edge and unrelated incoming edg
     defer testing.allocator.free(rev_node);
     try testing.expectEqual(@as(usize, 2), rev_node.len);
     try testing.expectEqual(node.index, rev_node[0].index);
-    try testing.expectEqual(y.index, rev_node[1].index);
+    try testing.expectEqual(incoming_source.index, rev_node[1].index);
 }
 
 test "graph structure: non-tail simple remove completes and stays consistent" {
@@ -243,7 +243,7 @@ test "graph structure: non-tail simple remove completes and stays consistent" {
     try testing.expectEqual(@as(u64, 64), graph.edgeCount());
 }
 
-test "graph structure: copy-on-write tail replacement preserves grouped adjacency" {
+test "graph structure: copy-on-write tail replacement preserves segmented adjacency" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -309,18 +309,18 @@ test "graph structure: reused free block starts empty" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
-    try testing.expect(try graph.removeEdge(a, b));
+    const source = try graph.addNode();
+    const removed_destination = try graph.addNode();
+    try graph.addEdge(source, removed_destination, 0, 0);
+    try testing.expect(try graph.removeEdge(source, removed_destination));
 
     graph.bumpEpoch();
     graph.bumpEpoch();
     graph.reclaimRetired();
-    const c = try graph.addNode();
-    const d = try graph.addNode();
-    try graph.addEdge(c, d, 0, 0);
+    const recycled_source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(recycled_source, destination, 0, 0);
     try graph.validate();
-    try testing.expectEqual(@as(usize, 1), try graph.outDegree(c));
+    try testing.expectEqual(@as(usize, 1), try graph.outDegree(recycled_source));
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 }

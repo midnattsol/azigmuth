@@ -1,7 +1,7 @@
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
-const node_hot = @import("../../storage/node/hot.zig");
+const node_mutation_control = @import("../../storage/node/mutation_control.zig");
 const types = @import("../../core/types.zig");
 const adjacency = @import("../../adjacency/mod.zig");
 const rcu = @import("../../concurrency/rcu.zig");
@@ -26,29 +26,29 @@ pub fn beginWriter(graph: *graph_core.GraphCore) WriterGuard {
     return .{ .graph = graph };
 }
 
-pub fn claimNodeAdjacency(hot: *node_hot.NodeHot, comptime side: adjacency.AdjSide) !void {
+pub fn claimNodeAdjacency(mutation_control: *node_mutation_control.NodeMutationControl, comptime side: adjacency.AdjSide) !void {
     switch (side) {
-        .fwd => try hot.claimFwd(),
-        .rev => try hot.claimRev(),
+        .fwd => try mutation_control.claimFwd(),
+        .rev => try mutation_control.claimRev(),
     }
 }
 
-pub fn releaseNodeAdjacency(hot: *node_hot.NodeHot, comptime side: adjacency.AdjSide) void {
+pub fn releaseNodeAdjacency(mutation_control: *node_mutation_control.NodeMutationControl, comptime side: adjacency.AdjSide) void {
     switch (side) {
-        .fwd => hot.releaseFwd(),
-        .rev => hot.releaseRev(),
+        .fwd => mutation_control.releaseFwd(),
+        .rev => mutation_control.releaseRev(),
     }
 }
 
 pub fn claimNodeForPublish(graph: *graph_core.GraphCore, node: types.NodeId) !void {
-    const hot = try page_ops.ensureNodeHotAt(graph, node);
-    try claimNodeAdjacency(hot, .fwd);
-    errdefer releaseNodeAdjacency(hot, .fwd);
-    try claimNodeAdjacency(hot, .rev);
+    const mutation_control = try page_ops.ensureNodeMutationControlAt(graph, node);
+    try claimNodeAdjacency(mutation_control, .fwd);
+    errdefer releaseNodeAdjacency(mutation_control, .fwd);
+    try claimNodeAdjacency(mutation_control, .rev);
 }
 
 pub fn releaseNodeForPublish(graph: *graph_core.GraphCore, node: types.NodeId) void {
-    const hot = page_ops.nodeHotAt(graph, node);
-    releaseNodeAdjacency(hot, .rev);
-    releaseNodeAdjacency(hot, .fwd);
+    const mutation_control = page_ops.nodeMutationControlAt(graph, node);
+    releaseNodeAdjacency(mutation_control, .rev);
+    releaseNodeAdjacency(mutation_control, .fwd);
 }

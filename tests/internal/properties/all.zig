@@ -18,26 +18,26 @@ test "properties: addEdgeWithProperties returns stable rows readable via lookup 
     var graph = try initPropGraph();
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    const other_destination = try graph.addNode();
 
-    const row_ab = try graph.addEdgeWithProperties(a, b, 0, 0);
-    const row_ac = try graph.addEdgeWithProperties(a, c, 0, 0);
-    try testing.expect(row_ab != 0);
-    try testing.expect(row_ac != 0);
-    try testing.expect(row_ab != row_ac);
+    const row_source_destination = try graph.addEdgeWithProperties(source, destination, 0, 0);
+    const row_source_other = try graph.addEdgeWithProperties(source, other_destination, 0, 0);
+    try testing.expect(row_source_destination != 0);
+    try testing.expect(row_source_other != 0);
+    try testing.expect(row_source_destination != row_source_other);
 
-    try testing.expectEqual(@as(?u32, row_ab), try graph.edgePropertyRow(a, b));
-    try testing.expectEqual(@as(?u32, row_ac), try graph.edgePropertyRow(a, c));
-    try testing.expectEqual(@as(?u32, null), try graph.edgePropertyRow(b, a));
+    try testing.expectEqual(@as(?u32, row_source_destination), try graph.edgePropertyRow(source, destination));
+    try testing.expectEqual(@as(?u32, row_source_other), try graph.edgePropertyRow(source, other_destination));
+    try testing.expectEqual(@as(?u32, null), try graph.edgePropertyRow(destination, source));
 
     var weights = props.EdgeColumn(f32).init(testing.allocator, 0.0);
     defer weights.deinit();
-    try weights.set(row_ab, 1.5);
-    try weights.set(row_ac, 2.5);
-    try testing.expectEqual(@as(f32, 1.5), weights.get(row_ab));
-    try testing.expectEqual(@as(f32, 2.5), weights.get(row_ac));
+    try weights.set(row_source_destination, 1.5);
+    try weights.set(row_source_other, 2.5);
+    try testing.expectEqual(@as(f32, 1.5), weights.get(row_source_destination));
+    try testing.expectEqual(@as(f32, 2.5), weights.get(row_source_other));
     try testing.expectEqual(@as(f32, 0.0), weights.get(999));
 
     try graph.validate();
@@ -50,19 +50,19 @@ test "properties: rows survive tiny promotion, block growth, and preventive repa
     const source = try graph.addNode();
     var destinations: [200]graph_mod.NodeId = undefined;
     var rows: [200]u32 = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
     // Crosses the tiny cap (8) and multiple 64-edge blocks with tail COWs.
-    for (0..destinations.len) |i| {
-        rows[i] = try graph.addEdgeWithProperties(source, destinations[i], 0, 0);
+    for (0..destinations.len) |destination_idx| {
+        rows[destination_idx] = try graph.addEdgeWithProperties(source, destinations[destination_idx], 0, 0);
     }
-    for (0..destinations.len) |i| {
-        try testing.expectEqual(@as(?u32, rows[i]), try graph.edgePropertyRow(source, destinations[i]));
+    for (0..destinations.len) |destination_idx| {
+        try testing.expectEqual(@as(?u32, rows[destination_idx]), try graph.edgePropertyRow(source, destinations[destination_idx]));
     }
 
     // Preventive full rebuild must carry every row.
     _ = try graph.repairNode(source);
-    for (0..destinations.len) |i| {
-        try testing.expectEqual(@as(?u32, rows[i]), try graph.edgePropertyRow(source, destinations[i]));
+    for (0..destinations.len) |destination_idx| {
+        try testing.expectEqual(@as(?u32, rows[destination_idx]), try graph.edgePropertyRow(source, destinations[destination_idx]));
     }
     try graph.validate();
 }
@@ -71,17 +71,17 @@ test "properties: removed edge's row is retired and recycled after reclaim" {
     var graph = try initPropGraph();
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
+    const source = try graph.addNode();
+    const removed_destination = try graph.addNode();
+    const recycled_destination = try graph.addNode();
 
-    const row_ab = try graph.addEdgeWithProperties(a, b, 0, 0);
-    try testing.expect(try graph.removeEdge(a, b));
-    try testing.expectEqual(@as(?u32, null), try graph.edgePropertyRow(a, b));
+    const recycled_row = try graph.addEdgeWithProperties(source, removed_destination, 0, 0);
+    try testing.expect(try graph.removeEdge(source, removed_destination));
+    try testing.expectEqual(@as(?u32, null), try graph.edgePropertyRow(source, removed_destination));
 
     graph.reclaimRetired();
-    const row_ac = try graph.addEdgeWithProperties(a, c, 0, 0);
-    try testing.expectEqual(row_ab, row_ac);
+    const reused_row = try graph.addEdgeWithProperties(source, recycled_destination, 0, 0);
+    try testing.expectEqual(recycled_row, reused_row);
     try graph.validate();
 }
 
@@ -119,10 +119,10 @@ test "properties: addEdges batch assigns rows; snapshot outEdges exposes them" {
 
     const source = try graph.addNode();
     var destinations: [12]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
 
     var edge_inputs: [12]graph_mod.types_mod.EdgeInput = undefined;
-    for (0..destinations.len) |i| edge_inputs[i] = .{ .destination = destinations[i] };
+    for (0..destinations.len) |destination_idx| edge_inputs[destination_idx] = .{ .destination = destinations[destination_idx] };
     _ = try graph.addEdges(source, &edge_inputs);
 
     var snapshot = try graph.snapshot(ctx_alloc);
@@ -144,26 +144,26 @@ test "properties: builder freeze assigns rows and CSR export aligns them" {
     var builder = try graph_mod.GraphBuilder.initWithOptions(testing.allocator, .{ .edge_properties = true });
     defer builder.deinit();
 
-    const a = try builder.addNode();
-    const b = try builder.addNode();
-    const c = try builder.addNode();
-    try builder.addEdge(a, b, 7, 0);
-    try builder.addEdge(a, c, 8, 0);
-    try builder.addEdge(b, c, 9, 0);
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
+    const other_destination = try builder.addNode();
+    try builder.addEdge(source, destination, 7, 0);
+    try builder.addEdge(source, other_destination, 8, 0);
+    try builder.addEdge(destination, other_destination, 9, 0);
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
-    const row_ab = (try graph.edgePropertyRow(a, b)) orelse return error.TestExpectedEqual;
-    const row_ac = (try graph.edgePropertyRow(a, c)) orelse return error.TestExpectedEqual;
-    const row_bc = (try graph.edgePropertyRow(b, c)) orelse return error.TestExpectedEqual;
-    try testing.expect(row_ab != row_ac and row_ac != row_bc and row_ab != row_bc);
+    const row_source_destination = (try graph.edgePropertyRow(source, destination)) orelse return error.TestExpectedEqual;
+    const row_source_other = (try graph.edgePropertyRow(source, other_destination)) orelse return error.TestExpectedEqual;
+    const row_destination_other = (try graph.edgePropertyRow(destination, other_destination)) orelse return error.TestExpectedEqual;
+    try testing.expect(row_source_destination != row_source_other and row_source_other != row_destination_other and row_source_destination != row_destination_other);
 
     var weights = props.EdgeColumn(u64).init(testing.allocator, 0);
     defer weights.deinit();
-    try weights.set(row_ab, 70);
-    try weights.set(row_ac, 80);
-    try weights.set(row_bc, 90);
+    try weights.set(row_source_destination, 70);
+    try weights.set(row_source_other, 80);
+    try weights.set(row_destination_other, 90);
 
     var csr = blk: {
         var snapshot = try graph.snapshot(ctx_alloc);
@@ -182,7 +182,7 @@ test "properties: builder freeze assigns rows and CSR export aligns them" {
         const end: usize = @intCast(csr.out_offsets[node_idx + 1]);
         for (start..end) |edge_idx| {
             const expected: u64 = switch (node_idx) {
-                0 => if (csr.out_targets[edge_idx] == b.index) @as(u64, 70) else 80,
+                0 => if (csr.out_targets[edge_idx] == destination.index) @as(u64, 70) else 80,
                 1 => 90,
                 else => unreachable,
             };
@@ -196,13 +196,13 @@ test "properties: multigraph + properties give parallel edges distinct rows" {
     var graph = try graph_mod.Graph.initWithOptions(testing.allocator, .{ .multigraph = true, .edge_properties = true });
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const row_1 = try graph.addEdgeWithProperties(a, b, 0, 0);
-    const row_2 = try graph.addEdgeWithProperties(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    const row_1 = try graph.addEdgeWithProperties(source, destination, 0, 0);
+    const row_2 = try graph.addEdgeWithProperties(source, destination, 0, 0);
     try testing.expect(row_1 != row_2);
 
-    var it = try graph.outEdges(a);
+    var it = try graph.outEdges(source);
     defer it.deinit();
     var rows_seen: [2]u32 = .{ 0, 0 };
     var count: usize = 0;
@@ -216,11 +216,11 @@ test "properties: disabled mode rejects property APIs and pays no sidecar" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
-    try testing.expectError(error.UnsupportedOperation, graph.addEdgeWithProperties(a, b, 0, 0));
-    try testing.expectError(error.UnsupportedOperation, graph.edgePropertyRow(a, b));
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
+    try testing.expectError(error.UnsupportedOperation, graph.addEdgeWithProperties(source, destination, 0, 0));
+    try testing.expectError(error.UnsupportedOperation, graph.edgePropertyRow(source, destination));
     try graph.validate();
 }
 
@@ -236,27 +236,27 @@ test "properties: PropertyGraph writes every field on addEdge — recycled rows 
     var pg = try props.PropertyGraph(Schema).init(testing.allocator, .{});
     defer pg.deinit();
 
-    const a = try pg.addNode();
-    const b = try pg.addNode();
-    const c = try pg.addNode();
+    const source = try pg.addNode();
+    const destination = try pg.addNode();
+    const other_destination = try pg.addNode();
 
-    const row_ab = try pg.addEdge(a, b, 0, .{}, .{ .weight = 1.5, .since = 1111 });
-    const values_ab = (try pg.edgeValues(a, b)) orelse return error.TestExpectedEqual;
-    try testing.expectEqual(@as(f32, 1.5), values_ab.weight);
-    try testing.expectEqual(@as(u64, 1111), values_ab.since);
+    const row_source_destination = try pg.addEdge(source, destination, 0, .{}, .{ .weight = 1.5, .since = 1111 });
+    const source_destination_values = (try pg.edgeValues(source, destination)) orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(f32, 1.5), source_destination_values.weight);
+    try testing.expectEqual(@as(u64, 1111), source_destination_values.since);
 
     // Remove + reclaim recycles the row; the wrapper overwrites all fields,
     // so the recycled row carries the NEW edge's values, never the old ones.
-    try testing.expect(try pg.removeEdge(a, b));
+    try testing.expect(try pg.removeEdge(source, destination));
     pg.graph.reclaimRetired();
-    const row_ac = try pg.addEdge(a, c, 0, .{}, .{ .weight = 9.0, .since = 2222 });
-    try testing.expectEqual(row_ab, row_ac);
-    const values_ac = (try pg.edgeValues(a, c)) orelse return error.TestExpectedEqual;
-    try testing.expectEqual(@as(f32, 9.0), values_ac.weight);
-    try testing.expectEqual(@as(u64, 2222), values_ac.since);
+    const row_source_other = try pg.addEdge(source, other_destination, 0, .{}, .{ .weight = 9.0, .since = 2222 });
+    try testing.expectEqual(row_source_destination, row_source_other);
+    const source_other_values = (try pg.edgeValues(source, other_destination)) orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(f32, 9.0), source_other_values.weight);
+    try testing.expectEqual(@as(u64, 2222), source_other_values.since);
 
     // Direct column access for bulk scans.
-    try testing.expectEqual(@as(f32, 9.0), pg.column("weight").get(row_ac));
+    try testing.expectEqual(@as(f32, 9.0), pg.column("weight").get(row_source_other));
 }
 
 test "properties: validate detects out-of-range rows; debugValidate detects duplicates" {
@@ -265,9 +265,9 @@ test "properties: validate detects out-of-range rows; debugValidate detects dupl
 
     const source = try graph.addNode();
     var destinations: [12]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| {
-        destinations[i] = try graph.addNode();
-        _ = try graph.addEdgeWithProperties(source, destinations[i], 0, 0);
+    for (0..destinations.len) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        _ = try graph.addEdgeWithProperties(source, destinations[destination_idx], 0, 0);
     }
     try graph.validate();
 
@@ -306,9 +306,9 @@ test "csr: direct live export matches snapshot export (tombstones + rows)" {
 
     const hub = try graph.addNode();
     var destinations: [40]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| {
-        destinations[i] = try graph.addNode();
-        _ = try graph.addEdgeWithProperties(hub, destinations[i], 0, 0);
+    for (0..destinations.len) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        _ = try graph.addEdgeWithProperties(hub, destinations[destination_idx], 0, 0);
     }
     _ = try graph.addEdgeWithProperties(destinations[0], destinations[1], 0, 0);
     // Tombstones on the hub's forward side.

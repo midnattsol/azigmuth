@@ -3,22 +3,22 @@ const graph_mod = @import("graph_mod");
 const page_ops = graph_mod.page_ops_mod;
 const testing = std.testing;
 
-test "repair: repairNode clears forward tombstones from grouped adjacency" {
+test "repair: repairNode clears forward tombstones from segmented adjacency" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
     var destinations: [200]graph_mod.NodeId = undefined;
-    for (0..200) |i| {
-        destinations[i] = try graph.addNode();
-        try graph.addEdge(source, destinations[i], 0, 0);
+    for (0..200) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, destinations[destination_idx], 0, 0);
     }
 
     // Create a fragmented forward layout by removing from a large adjacency.
     _ = try graph.removeEdge(source, destinations[199]);
 
     var source_adj = try graph.publishedNodeAdj(source);
-    try testing.expect(source_adj.block_count_fwd > 1 or source_adj.group_count_fwd > 0);
+    try testing.expect(source_adj.block_count_fwd > 1 or source_adj.segment_count_fwd > 0);
 
     // Create tombstones: remove destinations in different original blocks.
     _ = try graph.removeNode(destinations[64]);
@@ -42,21 +42,21 @@ test "repair: repairNode clears forward tombstones from grouped adjacency" {
     // The rebuild removes tombstones and packs edges into freshly
     // allocated blocks, but fresh blocks from the retired/free stack
     // are not guaranteed contiguous.  Non-contiguous fresh blocks
-    // create EdgeBlockGroup chains, which trigger needs_repair via the
-    // run fragmentation bound (constants.MAX_GROUPS_PER_NODE).
+    // create EdgeBlockSegment chains, which trigger needs_repair via the
+    // segment fragmentation bound (constants.MAX_SEGMENTS_PER_NODE).
     // This is a genuine design limitation: repair rebuilds do not
     // (currently) compact blocks into a physically contiguous range.
 }
 
-test "repair: repairBudgeted discovers grouped forward tombstone debt without explicit repairNode" {
+test "repair: repairBudgeted discovers segmented forward tombstone debt without explicit repairNode" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
     var destinations: [130]graph_mod.NodeId = undefined;
-    for (0..130) |i| {
-        destinations[i] = try graph.addNode();
-        try graph.addEdge(source, destinations[i], 0, 0);
+    for (0..130) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, destinations[destination_idx], 0, 0);
     }
 
     // Trigger COW on non-tail block via removeEdge.
@@ -74,7 +74,7 @@ test "repair: repairBudgeted discovers grouped forward tombstone debt without ex
     graph.graph.repair_fwd.clearRetainingCapacity();
     graph.graph.repair_rev.clearRetainingCapacity();
 
-    // repairBudgeted must discover grouped tombstone debt via the flag alone.
+    // repairBudgeted must discover segmented tombstone debt via the flag alone.
     const repaired = try graph.repairBudgeted(1);
     try testing.expectEqual(@as(usize, 1), repaired);
     try graph.validate();

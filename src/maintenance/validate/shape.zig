@@ -4,7 +4,7 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
 const node_validity = @import("../../core/node_validity.zig");
@@ -29,18 +29,18 @@ pub fn validateDenseInContiguousBlocks(
     }
 }
 
-pub fn validateDenseInGroupedRuns(
+pub fn validateDenseInSegments(
     graph: *const graph_core.GraphCore,
-    first_group: u32,
-    group_count: u16,
+    first_segment: u32,
+    segment_count: u16,
     comptime side: common.Side,
 ) !void {
-    const end_group = std.math.add(u32, first_group, group_count) catch return error.CorruptGraph;
-    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
-    for (first_group..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        try validateDenseInContiguousBlocks(graph, group.start, group.count, side);
+    const end_segment = std.math.add(u32, first_segment, segment_count) catch return error.CorruptGraph;
+    if (end_segment > graph.loadSegmentCount()) return error.CorruptGraph;
+    for (first_segment..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        try validateDenseInContiguousBlocks(graph, segment.start, segment.count, side);
     }
 }
 
@@ -114,20 +114,20 @@ pub fn validateContiguousBlocksFast(
     return total;
 }
 
-pub fn validateGroupedRunsFast(
+pub fn validateSegmentsFast(
     graph: *const graph_core.GraphCore,
-    first_group: u32,
-    expected_group_count: u16,
+    first_segment: u32,
+    expected_segment_count: u16,
     comptime side: common.Side,
 ) !u64 {
     var total: u64 = 0;
-    const end_group = std.math.add(u32, first_group, expected_group_count) catch return error.CorruptGraph;
-    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
-    for (first_group..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        if (group.count == 0) return error.CorruptGraph;
-        total += try validateContiguousBlocksFast(graph, group.start, group.count, side);
+    const end_segment = std.math.add(u32, first_segment, expected_segment_count) catch return error.CorruptGraph;
+    if (end_segment > graph.loadSegmentCount()) return error.CorruptGraph;
+    for (first_segment..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        if (segment.count == 0) return error.CorruptGraph;
+        total += try validateContiguousBlocksFast(graph, segment.start, segment.count, side);
     }
     return total;
 }
@@ -136,7 +136,7 @@ pub fn validateGroupedRunsFast(
 /// (multigraph: ascending with edge ids strictly ascending within ties,
 /// and ids never zero).
 fn validateTinyFwdEntriesFast(graph: *const graph_core.GraphCore, slot_idx: u32, count: u16) !void {
-    const slot = page_ops.tinyBlockAtConst(graph, slot_idx, .fwd);
+    const slot = page_ops.tinySlotAtConst(graph, slot_idx, .fwd);
     var prev_key: ?u32 = null;
     var prev_id: u32 = 0;
     for (0..count) |entry_idx| {
@@ -161,7 +161,7 @@ fn validateTinyFwdEntriesFast(graph: *const graph_core.GraphCore, slot_idx: u32,
 
 /// Tiny reverse sources: in range and ascending (strict outside multigraph).
 fn validateTinyRevSourcesFast(graph: *const graph_core.GraphCore, slot_idx: u32, count: u16) !void {
-    const slot = page_ops.tinyBlockAtConst(graph, slot_idx, .rev);
+    const slot = page_ops.tinySlotAtConst(graph, slot_idx, .rev);
     var prev_key: ?u32 = null;
     for (0..count) |entry_idx| {
         const source_idx = slot.sources[entry_idx];
@@ -175,8 +175,8 @@ fn validateTinyRevSourcesFast(graph: *const graph_core.GraphCore, slot_idx: u32,
 
 pub fn validateAdjacencyBlocksFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !u64 {
     const side_adj = common.sideAdjOf(adjacency, side);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         switch (side) {
             .fwd => try validateTinyFwdEntriesFast(graph, side_adj.first_block, count),
             .rev => try validateTinyRevSourcesFast(graph, side_adj.first_block, count),
@@ -200,7 +200,7 @@ pub fn validateAdjacencyBlocksFast(graph: *const graph_core.GraphCore, adjacency
 }
 
 pub fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: types.NodeAdj, comptime side: common.Side) !void {
-    if (node_published.NodePublished.isTiny(&common.sideAdjOf(adjacency, side))) return;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&common.sideAdjOf(adjacency, side))) return;
     const block_count = common.blockCount(adjacency, side);
     if (block_count <= 1) return;
 
@@ -209,10 +209,10 @@ pub fn validateOccupancyFast(graph: *const graph_core.GraphCore, adjacency: type
             inner_graph: *const graph_core.GraphCore,
             _: *const graph_core.GraphCore,
             start: u32,
-            run_count: u32,
+            segment_count: u32,
             is_last: bool,
         ) !void {
-            const end = if (is_last) start + run_count - 1 else start + run_count;
+            const end = if (is_last) start + segment_count - 1 else start + segment_count;
             for (start..end) |block_idx| {
                 if (common.blockAlive(inner_graph, @intCast(block_idx), side) < constants.MIN_OCCUPANCY) {
                     return error.CorruptGraph;

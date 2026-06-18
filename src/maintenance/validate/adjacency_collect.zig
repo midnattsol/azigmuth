@@ -3,10 +3,10 @@ const std = @import("std");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 
-pub const DebugGroupSpan = struct {
-    group: u32,
+pub const DebugSegment = struct {
+    segment: u32,
     start: u32,
     count: u32,
 };
@@ -22,10 +22,10 @@ pub fn appendContiguousBlocks(
     }
 }
 
-pub fn spansOverlap(a: DebugGroupSpan, b: DebugGroupSpan) bool {
-    const a_end = a.start + a.count;
-    const b_end = b.start + b.count;
-    return a.start < b_end and b.start < a_end;
+pub fn spansOverlap(left_segment: DebugSegment, right_segment: DebugSegment) bool {
+    const left_end = left_segment.start + left_segment.count;
+    const right_end = right_segment.start + right_segment.count;
+    return left_segment.start < right_end and right_segment.start < left_end;
 }
 
 pub fn collectAdjacencyBlocks(
@@ -39,39 +39,39 @@ pub fn collectAdjacencyBlocks(
 ) !void {
     const side_view = common.sideAdjOf(adjacency, side);
     if (side_view.block_count == 0) return;
-    if (node_published.NodePublished.isTiny(&side_view)) return;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_view)) return;
 
-    if (common.groupCount(adjacency, side) == 0) {
+    if (common.segmentCount(adjacency, side) == 0) {
         try appendContiguousBlocks(blocks, allocator, common.firstBlock(adjacency, side), common.blockCount(adjacency, side));
         return;
     }
 
-    var seen_spans: [64]DebugGroupSpan = undefined;
+    var seen_spans: [64]DebugSegment = undefined;
     var seen_count: usize = 0;
-    const expected_groups = common.groupCount(adjacency, side);
-    const first_group_idx = common.firstGroup(adjacency, side);
-    const end_group = std.math.add(u32, first_group_idx, expected_groups) catch {
-        try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = first_group_idx } });
+    const expected_segments = common.segmentCount(adjacency, side);
+    const first_segment_idx = common.firstSegment(adjacency, side);
+    const end_segment = std.math.add(u32, first_segment_idx, expected_segments) catch {
+        try violations.append(allocator, .{ .blocksegment_chain_cycle = .{ .node = node_id, .segment = first_segment_idx } });
         return;
     };
-    if (end_group > graph.loadGroupCount()) {
-        try violations.append(allocator, .{ .blockgroup_chain_cycle = .{ .node = node_id, .group = first_group_idx } });
+    if (end_segment > graph.loadSegmentCount()) {
+        try violations.append(allocator, .{ .blocksegment_chain_cycle = .{ .node = node_id, .segment = first_segment_idx } });
         return;
     }
 
-    for (first_group_idx..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        const current_span = DebugGroupSpan{ .group = group_idx, .start = group.start, .count = group.count };
+    for (first_segment_idx..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        const current_span = DebugSegment{ .segment = segment_idx, .start = segment.start, .count = segment.count };
         for (seen_spans[0..@min(seen_count, seen_spans.len)]) |seen| {
             if (spansOverlap(seen, current_span)) {
-                try violations.append(allocator, .{ .blockgroup_overlap = .{ .node = node_id, .group_a = seen.group, .group_b = group_idx } });
+                try violations.append(allocator, .{ .blocksegment_overlap = .{ .node = node_id, .segment_a = seen.segment, .segment_b = segment_idx } });
             }
         }
         if (seen_count < seen_spans.len) seen_spans[seen_count] = current_span;
         seen_count += 1;
 
-        for (group.start..group.start + group.count) |block_idx_usize| {
+        for (segment.start..segment.start + segment.count) |block_idx_usize| {
             try blocks.append(allocator, .{ .block_idx = @intCast(block_idx_usize) });
         }
     }

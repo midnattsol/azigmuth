@@ -78,7 +78,7 @@ pub const RepairFlushSummary = struct {
 pub const StorageStats = struct {
     blocks_fwd_allocated: u32,
     blocks_rev_allocated: u32,
-    groups_allocated: u32,
+    segments_allocated: u32,
     tiny_fwd_allocated: u32,
     tiny_rev_allocated: u32,
 };
@@ -93,8 +93,8 @@ pub const DebtStats = struct {
     queued_repair_fwd: usize,
     queued_repair_rev: usize,
 
-    grouped_fwd_nodes: usize,
-    grouped_rev_nodes: usize,
+    segmented_fwd_nodes: usize,
+    segmented_rev_nodes: usize,
 
     estimated_tombstone_fwd_nodes: usize,
 };
@@ -121,16 +121,16 @@ pub const NodeFlags = packed struct(u32) {
     removed: bool,
     _reserved: u29 = 0,
 
-    pub fn fromMeta(meta: PublishedMeta) NodeFlags {
+    pub fn fromPublicationState(state: NodePublicationState) NodeFlags {
         return .{
-            .needs_repair_fwd = meta.needs_repair_fwd,
-            .needs_repair_rev = meta.needs_repair_rev,
-            .removed = meta.removed,
+            .needs_repair_fwd = state.needs_repair_fwd,
+            .needs_repair_rev = state.needs_repair_rev,
+            .removed = state.removed,
         };
     }
 };
 
-pub const PublishedMeta = packed struct(u64) {
+pub const NodePublicationState = packed struct(u64) {
     idx_fwd: u1 = 0,
     idx_rev: u1 = 0,
     needs_repair_fwd: bool = false,
@@ -142,11 +142,11 @@ pub const PublishedMeta = packed struct(u64) {
     degree_rev: u22 = 0,
     version: u13 = 0,
 
-    pub fn flags(self: PublishedMeta) NodeFlags {
-        return NodeFlags.fromMeta(self);
+    pub fn flags(self: NodePublicationState) NodeFlags {
+        return NodeFlags.fromPublicationState(self);
     }
 
-    pub fn withFlags(self: PublishedMeta, node_flags: NodeFlags) PublishedMeta {
+    pub fn withFlags(self: NodePublicationState, node_flags: NodeFlags) NodePublicationState {
         var next = self;
         next.needs_repair_fwd = node_flags.needs_repair_fwd;
         next.needs_repair_rev = node_flags.needs_repair_rev;
@@ -154,13 +154,13 @@ pub const PublishedMeta = packed struct(u64) {
         return next;
     }
 
-    pub fn bumpedVersion(self: PublishedMeta) PublishedMeta {
+    pub fn bumpedVersion(self: NodePublicationState) NodePublicationState {
         var next = self;
         next.version +%= 1;
         return next;
     }
 
-    pub fn withFwdDegree(self: PublishedMeta, degree_fwd: u32) PublishedMeta {
+    pub fn withFwdDegree(self: NodePublicationState, degree_fwd: u32) NodePublicationState {
         const inline_limit: u22 = 65535 * 64;
         var next = self;
         if (degree_fwd <= inline_limit) {
@@ -173,7 +173,7 @@ pub const PublishedMeta = packed struct(u64) {
         return next;
     }
 
-    pub fn withRevDegree(self: PublishedMeta, degree_rev: u32) PublishedMeta {
+    pub fn withRevDegree(self: NodePublicationState, degree_rev: u32) NodePublicationState {
         const inline_limit: u22 = 65535 * 64;
         var next = self;
         if (degree_rev <= inline_limit) {
@@ -208,25 +208,25 @@ pub const Edge = packed struct {
 pub const SideAdj = extern struct {
     first_block: u32,
     block_count: u32,
-    group_count: u16,
-    first_group: u32,
+    segment_count: u16,
+    first_segment: u32,
 };
 
 // ── Combined adjacency snapshot ───────────────────────────────────────
 
 /// Full-node adjacency snapshot for iteration, validation, and bulk operations.
-/// Composed on demand from the published NodeMeta + NodePublished pools.
+/// Composed on demand from the published NodePublicationCell + NodeAdjacencyBuffers pools.
 /// Full published adjacency snapshot.
 pub const NodeAdj = extern struct {
     first_block_fwd: u32,
     block_count_fwd: u32,
-    group_count_fwd: u16,
-    first_group_fwd: u32,
+    segment_count_fwd: u16,
+    first_segment_fwd: u32,
 
     first_block_rev: u32,
     block_count_rev: u32,
-    group_count_rev: u16,
-    first_group_rev: u32,
+    segment_count_rev: u16,
+    first_segment_rev: u32,
 
     flags: NodeFlags,
 };
@@ -269,29 +269,23 @@ pub const EdgeBlockFwdProps = extern struct {
     rows: [EDGES_PER_BLOCK]u32,
 };
 
-// ── Contiguous edge block group ──────────────────────────────────────
+// ── Contiguous edge block segment ──────────────────────────────────────
 
-/// One physically contiguous run of edge blocks within a grouped side.
-/// Grouped sides publish `group_count` consecutive descriptors starting at
-/// `first_group`. 8 bytes — chain linkage was removed once runs became
-/// consecutive spans.
-pub const EdgeBlockGroup = extern struct {
+/// One physically contiguous segment of edge blocks within a segmented side.
+/// Segmented sides publish `segment_count` consecutive descriptors starting at
+/// `first_segment`. 8 bytes.
+pub const EdgeBlockSegment = extern struct {
     start: u32,
     count: u32,
 };
 
-/// Per-block metadata used by lock-free retired/free stacks.
-/// Stored out-of-line so retiring a published block never mutates memory that
-/// an active reader may still be scanning.
-pub const BlockMeta = struct {
+/// Per-index reclamation entry used by lock-free free/retired stacks. Stored
+/// out-of-line so retiring published storage never mutates memory an active
+/// reader may still be scanning.
+pub const ReclamationEntry = struct {
     next: std.atomic.Value(u32),
-    epoch: std.atomic.Value(u64),
-};
-
-/// Tracks a retired block index and the epoch when it was retired.
-pub const RetiredBlock = struct {
-    block: u32,
-    epoch: u64,
+    /// Meaningful while the index is in a retired stack; ignored in free stacks.
+    retired_epoch: std.atomic.Value(u64),
 };
 
 /// Validation violation type. Returned by `debugValidate`.
@@ -308,16 +302,16 @@ pub const Violation = union(enum) {
     unsorted_block: struct { node: u32, block: u32, slot: u32 },
     duplicate_edge_id: struct { node: u32, edge_id: u32 },
     edge_id_counter_regressed: struct { node: u32, next_id: u32, max_seen: u32 },
-    blockgroup_chain_cycle: struct { node: u32, group: u32 },
-    blockgroup_overlap: struct { node: u32, group_a: u32, group_b: u32 },
-    run_fragmentation_requires_repair: struct { node: u32, group: u32, count: u32 },
-    grouped_layout_needs_canonicalization: struct { node: u32, first_group: u32 },
+    blocksegment_chain_cycle: struct { node: u32, segment: u32 },
+    blocksegment_overlap: struct { node: u32, segment_a: u32, segment_b: u32 },
+    segment_fragmentation_requires_repair: struct { node: u32, segment: u32, count: u32 },
+    segmented_layout_needs_canonicalization: struct { node: u32, first_segment: u32 },
     block_double_owned: struct { block: u32 },
     block_orphaned_in_free_list: struct { block: u32 },
     repair_debt_invalid_node: struct { entry: u32 },
     removed_node_has_outgoing: struct { node: u32 },
     removed_node_has_reverse_residual: struct { node: u32, degree_rev: u32 },
-    removed_node_has_reverse_storage: struct { node: u32, block_count_rev: u32, group_count_rev: u16 },
+    removed_node_has_reverse_storage: struct { node: u32, block_count_rev: u32, segment_count_rev: u16 },
     removed_node_marked_for_repair: struct { node: u32 },
     forward_tombstone_missing_repair_flag: struct { node: u32 },
     reverse_tombstone_missing_repair_flag: struct { node: u32 },
@@ -326,6 +320,6 @@ pub const Violation = union(enum) {
     forward_reverse_count_mismatch: struct { forward_total: u64, reverse_total: u64 },
     unreachable_forward_block: struct { block: u32 },
     unreachable_reverse_block: struct { block: u32 },
-    unreachable_group: struct { group: u32 },
-    block_count_group_mismatch: struct { node: u32, declared: u32, actual: u32 },
+    unreachable_segment: struct { segment: u32 },
+    block_count_segment_mismatch: struct { node: u32, declared: u32, actual: u32 },
 };

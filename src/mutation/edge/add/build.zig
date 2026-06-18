@@ -3,7 +3,7 @@ const tiny_config = @import("../../../core/tiny_config.zig");
 const graph_core = @import("../../../core/graph_core.zig");
 const types = @import("../../../core/types.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
-const node_published = @import("../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../storage/node/adjacency_buffers.zig");
 const node_tiny = @import("../../../storage/node/tiny.zig");
 const common = @import("../../common.zig");
 
@@ -78,22 +78,22 @@ pub fn insertReverseEdge(graph: *graph_core.GraphCore, block_idx: u32, source: t
 
 pub fn canUseTinyFwdSide(graph: *const graph_core.GraphCore, side_adj: types.SideAdj) bool {
     _ = graph;
-    return side_adj.block_count == 0 or node_published.NodePublished.isTiny(&side_adj);
+    return side_adj.block_count == 0 or node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj);
 }
 
 pub fn canUseTinyRevSide(destination_side: types.SideAdj) bool {
-    return destination_side.block_count == 0 or node_published.NodePublished.isTiny(&destination_side);
+    return destination_side.block_count == 0 or node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&destination_side);
 }
 
 fn cloneTinyFwdIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj, scratch: *common.MutationScratch) !u32 {
-    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
-    page_ops.tinyBlockAt(graph, new_slot_idx, .fwd).* = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd).*;
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
+    page_ops.tinySlotAt(graph, new_slot_idx, .fwd).* = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd).*;
     return new_slot_idx;
 }
 
 fn cloneTinyRevIntoNewSlot(graph: *graph_core.GraphCore, side_adj: types.SideAdj, scratch: *common.MutationScratch) !u32 {
-    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
-    page_ops.tinyBlockAt(graph, new_slot_idx, .rev).* = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev).*;
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
+    page_ops.tinySlotAt(graph, new_slot_idx, .rev).* = page_ops.tinySlotAtConst(graph, side_adj.first_block, .rev).*;
     return new_slot_idx;
 }
 
@@ -109,25 +109,25 @@ pub fn buildForwardTinyOrPromoted(
 ) !types.SideAdj {
     const cap: u16 = if (graph.multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE;
     if (source_side.block_count == 0) {
-        const slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .fwd);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .fwd);
         _ = try node_tiny.insertFwd(slot, 0, destination.index, relation, @bitCast(raw_flags), edge_id, prop_row, graph.multigraph_enabled);
-        return node_published.NodePublished.makeTiny(slot_idx, 1);
+        return node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(slot_idx, 1);
     }
 
-    const count = node_published.NodePublished.tinyCount(&source_side);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&source_side);
     if (count < cap) {
         const slot_idx = try cloneTinyFwdIntoNewSlot(graph, source_side, scratch);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .fwd);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .fwd);
         const new_count = try node_tiny.insertFwd(slot, count, destination.index, relation, @bitCast(raw_flags), edge_id, prop_row, graph.multigraph_enabled);
-        return node_published.NodePublished.makeTiny(slot_idx, new_count);
+        return node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(slot_idx, new_count);
     }
 
     const block_idx = try scratch.allocBlock(graph, .fwd);
     const block = page_ops.edgeBlockAt(graph, block_idx, .fwd);
     block.* = std.mem.zeroes(types.EdgeBlockFwd);
     if (graph.multigraph_enabled) page_ops.edgeBlockFwdIdsAt(graph, block_idx).* = std.mem.zeroes(types.EdgeBlockFwdIds);
-    const slot = page_ops.tinyBlockAtConst(graph, source_side.first_block, .fwd);
+    const slot = page_ops.tinySlotAtConst(graph, source_side.first_block, .fwd);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
         block.destinations[entry_idx] = entry.destination;
@@ -138,7 +138,7 @@ pub fn buildForwardTinyOrPromoted(
     }
     page_ops.setBlockAliveCount(graph, block_idx, .fwd, @intCast(count));
     try insertForwardEdge(graph, block_idx, destination, relation, raw_flags, edge_id, prop_row);
-    return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
+    return .{ .first_block = block_idx, .block_count = 1, .segment_count = 0, .first_segment = 0 };
 }
 
 pub fn buildReverseTinyOrPromoted(
@@ -149,26 +149,26 @@ pub fn buildReverseTinyOrPromoted(
 ) !types.SideAdj {
     const cap: u16 = tiny_config.TINY_REV_CAP;
     if (destination_side.block_count == 0) {
-        const slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .rev);
+        const slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .rev);
         _ = node_tiny.insertRev(slot, 0, source.index);
-        return node_published.NodePublished.makeTiny(slot_idx, 1);
+        return node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(slot_idx, 1);
     }
 
-    const count = node_published.NodePublished.tinyCount(&destination_side);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&destination_side);
     if (count < cap) {
         const slot_idx = try cloneTinyRevIntoNewSlot(graph, destination_side, scratch);
-        const slot = page_ops.tinyBlockAt(graph, slot_idx, .rev);
+        const slot = page_ops.tinySlotAt(graph, slot_idx, .rev);
         const new_count = node_tiny.insertRev(slot, count, source.index);
-        return node_published.NodePublished.makeTiny(slot_idx, new_count);
+        return node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(slot_idx, new_count);
     }
 
     const block_idx = try scratch.allocBlock(graph, .rev);
     const block = page_ops.edgeBlockAt(graph, block_idx, .rev);
     block.* = std.mem.zeroes(types.EdgeBlockRev);
-    const slot = page_ops.tinyBlockAtConst(graph, destination_side.first_block, .rev);
+    const slot = page_ops.tinySlotAtConst(graph, destination_side.first_block, .rev);
     for (0..count) |entry_idx| block.sources[entry_idx] = slot.sources[entry_idx];
     page_ops.setBlockAliveCount(graph, block_idx, .rev, @intCast(count));
     insertReverseEdge(graph, block_idx, source);
-    return .{ .first_block = block_idx, .block_count = 1, .group_count = 0, .first_group = 0 };
+    return .{ .first_block = block_idx, .block_count = 1, .segment_count = 0, .first_segment = 0 };
 }

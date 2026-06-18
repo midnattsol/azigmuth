@@ -33,19 +33,19 @@ pub const Graph = opaque {
     /// Allocates and returns a heap-allocated `*Graph`.  The caller owns the
     /// returned pointer and must call `deinit()` or `deinitChecked()` when done.
     pub fn init(allocator: std.mem.Allocator) internal.GraphError!*Graph {
-        const g = try allocator.create(internal.Graph);
-        errdefer allocator.destroy(g);
-        g.* = try internal.Graph.init(allocator);
-        return @ptrCast(g);
+        const graph_handle = try allocator.create(internal.Graph);
+        errdefer allocator.destroy(graph_handle);
+        graph_handle.* = try internal.Graph.init(allocator);
+        return @ptrCast(graph_handle);
     }
 
     /// Allocates and returns a heap-allocated `*Graph` with the given options.
     /// Caller owns the pointer; must call `deinit()` or `deinitChecked()`.
     pub fn initWithOptions(allocator: std.mem.Allocator, options: internal.GraphOptions) internal.GraphError!*Graph {
-        const g = try allocator.create(internal.Graph);
-        errdefer allocator.destroy(g);
-        g.* = try internal.Graph.initWithOptions(allocator, options);
-        return @ptrCast(g);
+        const graph_handle = try allocator.create(internal.Graph);
+        errdefer allocator.destroy(graph_handle);
+        graph_handle.* = try internal.Graph.initWithOptions(allocator, options);
+        return @ptrCast(graph_handle);
     }
 
     /// Destroys the graph handle unconditionally.  All page-backed storage,
@@ -57,10 +57,10 @@ pub const Graph = opaque {
     /// diagnostic that includes the active call, writer, repairer, and reader
     /// overflow counts.
     pub fn deinit(self: *Graph) void {
-        const g = self.inner();
-        const alloc = g.graph.allocator;
-        g.deinit();
-        alloc.destroy(g);
+        const graph_handle = self.inner();
+        const allocator = graph_handle.graph.allocator;
+        graph_handle.deinit();
+        allocator.destroy(graph_handle);
     }
 
     /// Safe teardown: returns `error.GraphBusy` if any reader, writer, or
@@ -72,10 +72,10 @@ pub const Graph = opaque {
     /// contract if an impossible post-close active-user state were ever to be
     /// observed.
     pub fn deinitChecked(self: *Graph) internal.DeinitError!void {
-        const g = self.inner();
-        const alloc = g.graph.allocator;
-        g.deinitChecked() catch |err| return err;
-        alloc.destroy(g);
+        const graph_handle = self.inner();
+        const allocator = graph_handle.graph.allocator;
+        graph_handle.deinitChecked() catch |err| return err;
+        allocator.destroy(graph_handle);
     }
 
     pub fn addNode(self: *Graph) internal.GraphError!internal.NodeId {

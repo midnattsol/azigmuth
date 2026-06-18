@@ -100,10 +100,10 @@ test "rcu: reclaimRetired handles no readers safely" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     const destination = try graph.addNode();
-    try graph.addEdge(src, destination, 0, 0);
-    try testing.expect(try graph.removeEdge(src, destination));
+    try graph.addEdge(source, destination, 0, 0);
+    try testing.expect(try graph.removeEdge(source, destination));
 
     graph.reclaimRetired();
     try graph.validate();
@@ -135,8 +135,8 @@ test "rcu: many sequential readers do not leak slots" {
     defer graph.deinit();
 
     const iterations: usize = 100;
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
+    var iteration_idx: usize = 0;
+    while (iteration_idx < iterations) : (iteration_idx += 1) {
         const token = graph.readerEnter() catch unreachable;
         graph.readerExit(token);
     }
@@ -149,36 +149,36 @@ test "rcu: writer proceeds while a concurrent reader holds an iterator" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
-    const dst1 = try graph.addNode();
-    const dst2 = try graph.addNode();
-    try graph.addEdge(src, dst1, 0, 0);
+    const source = try graph.addNode();
+    const destination_one = try graph.addNode();
+    const destination_two = try graph.addNode();
+    try graph.addEdge(source, destination_one, 0, 0);
 
     var stop = std.atomic.Value(bool).init(false);
     var writer_done = std.atomic.Value(bool).init(false);
 
     const writer_thread = try std.Thread.spawn(.{}, struct {
-        fn run(graph_ptr: *graph_mod.Graph, src_node: graph_mod.NodeId, destination: graph_mod.NodeId, done: *std.atomic.Value(bool)) void {
-            _ = graph_ptr.addEdge(src_node, destination, 0, 0) catch {};
+        fn segment(graph_ptr: *graph_mod.Graph, source_node: graph_mod.NodeId, destination: graph_mod.NodeId, done: *std.atomic.Value(bool)) void {
+            _ = graph_ptr.addEdge(source_node, destination, 0, 0) catch {};
             done.store(true, .release);
         }
-    }.run, .{ &graph, src, dst2, &writer_done });
+    }.segment, .{ &graph, source, destination_two, &writer_done });
 
     const ReaderCtx = struct {
         graph: *graph_mod.Graph,
-        src: graph_mod.NodeId,
+        source: graph_mod.NodeId,
         stop: *std.atomic.Value(bool),
-        fn run(ctx: *@This()) void {
+        fn segment(ctx: *@This()) void {
             while (!ctx.stop.load(.acquire)) {
-                var it = ctx.graph.neighbors(ctx.src) catch continue;
+                var it = ctx.graph.neighbors(ctx.source) catch continue;
                 while (it.next() != null) {}
                 it.deinit();
             }
         }
     };
 
-    var reader_ctx = ReaderCtx{ .graph = &graph, .src = src, .stop = &stop };
-    const reader_thread = try std.Thread.spawn(.{}, ReaderCtx.run, .{&reader_ctx});
+    var reader_ctx = ReaderCtx{ .graph = &graph, .source = source, .stop = &stop };
+    const reader_thread = try std.Thread.spawn(.{}, ReaderCtx.segment, .{&reader_ctx});
 
     // Wait for the writer to finish, then stop.
     while (!writer_done.load(.acquire)) {
@@ -208,14 +208,14 @@ test "rcu: retired blocks not reclaimed while reader holds old epoch" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     const destination = try graph.addNode();
-    try graph.addEdge(src, destination, 0, 0);
+    try graph.addEdge(source, destination, 0, 0);
 
     const token = graph.readerEnter() catch unreachable;
 
     // Remove the edge; this retires the forward/reverse blocks.
-    try testing.expect(try graph.removeEdge(src, destination));
+    try testing.expect(try graph.removeEdge(source, destination));
     graph.bumpEpoch();
 
     // With the reader still active, reclaim should be a no-op because
@@ -238,8 +238,8 @@ test "rcu: epoch increments do not affect already-entered readers" {
 
     const reader_epoch = token.epoch;
 
-    var i: usize = 0;
-    while (i < 10) : (i += 1) {
+    var increment_idx: usize = 0;
+    while (increment_idx < 10) : (increment_idx += 1) {
         graph.bumpEpoch();
     }
 

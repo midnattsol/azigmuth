@@ -12,12 +12,12 @@ pub inline fn nodeExistsRawIndex(graph: *const graph_core.GraphCore, node_idx: u
 
 pub fn isNodeRemoved(graph: *const graph_core.GraphCore, node: types.NodeId) bool {
     if (!nodeExistsRaw(graph, node)) return false;
-    return node_access.loadPublishedMetaAtConst(graph, node).removed;
+    return node_access.loadPublicationStateAtConst(graph, node).removed;
 }
 
 pub fn isNodeRemovedIndex(graph: *const graph_core.GraphCore, node_idx: u32) bool {
     if (!nodeExistsRawIndex(graph, node_idx)) return false;
-    return node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx }).removed;
+    return node_access.loadPublicationStateAtConst(graph, .{ .index = node_idx }).removed;
 }
 
 pub fn isNodeLive(graph: *const graph_core.GraphCore, node: types.NodeId) bool {

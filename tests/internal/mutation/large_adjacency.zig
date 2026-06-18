@@ -12,17 +12,17 @@ fn fillBlock(graph: *graph_mod.Graph, block_idx: u32, first_dest: u32, count: u7
     switch (side) {
         .fwd => {
             var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
-            for (0..count) |i| {
-                block.destinations[i] = first_dest + @as(u32, @intCast(i));
-                block.relations[i] = 0;
-                block.flags[i] = 0;
+            for (0..count) |slot_idx| {
+                block.destinations[slot_idx] = first_dest + @as(u32, @intCast(slot_idx));
+                block.relations[slot_idx] = 0;
+                block.flags[slot_idx] = 0;
             }
             page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
         },
         .rev => {
             var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .rev);
-            for (0..count) |i| {
-                block.sources[i] = first_dest + @as(u32, @intCast(i));
+            for (0..count) |slot_idx| {
+                block.sources[slot_idx] = first_dest + @as(u32, @intCast(slot_idx));
             }
             page_ops.setBlockAliveCount(&graph.graph, block_idx, .rev, @intCast(count));
         },
@@ -46,25 +46,27 @@ test "large adjacency: removeEdge from tail block preserves all blocks when adja
 
     const block_count: u16 = 130;
     const source = try graph.addNode();
-    for (0..block_count) |_| { _ = try graph.addNode(); }
+    for (0..block_count) |_| {
+        _ = try graph.addNode();
+    }
 
     var blocks: [block_count]u32 = undefined;
-    for (0..block_count) |i| {
-        blocks[i] = try graph.allocBlockFwd();
-        fillBlock(&graph, blocks[i], @intCast(i + 1), 1, .fwd);
+    for (0..block_count) |block_idx| {
+        blocks[block_idx] = try graph.allocBlockFwd();
+        fillBlock(&graph, blocks[block_idx], @intCast(block_idx + 1), 1, .fwd);
     }
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).first_block = blocks[0];
     publish.publishedFwdSide(source_node).block_count = block_count;
-    publish.publishedFwdSide(source_node).group_count = 0;
+    publish.publishedFwdSide(source_node).segment_count = 0;
     publish.setPublishedFwdDegree(source_node, block_count);
     publish.setPublishedFlags(source_node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     try publish.syncToPublished(&graph, source.index);
 
-    for (1..block_count + 1) |dest_idx| {
-        try publishReverseSource(&graph, @intCast(dest_idx), source.index);
+    for (1..block_count + 1) |destination_idx| {
+        try publishReverseSource(&graph, @intCast(destination_idx), source.index);
     }
     graph.graph.edge_count.store(block_count, .release);
 
@@ -73,7 +75,7 @@ test "large adjacency: removeEdge from tail block preserves all blocks when adja
 
     const after = try graph.publishedNodeAdj(source);
     try testing.expectEqual(@as(u16, block_count - 1), after.block_count_fwd);
-    try testing.expectEqual(@as(u16, 0), after.group_count_fwd);
+    try testing.expectEqual(@as(u16, 0), after.segment_count_fwd);
     try testing.expectEqual(@as(u64, block_count - 1), graph.edgeCount());
 }
 
@@ -83,13 +85,15 @@ test "large adjacency: addEdge COW preserves all blocks when adjacency has >128 
 
     const block_count: u16 = 130;
     const source = try graph.addNode();
-    for (0..block_count) |_| { _ = try graph.addNode(); }
+    for (0..block_count) |_| {
+        _ = try graph.addNode();
+    }
 
     var blocks: [block_count]u32 = undefined;
-    for (0..block_count) |i| {
-        blocks[i] = try graph.allocBlockFwd();
-        if (i == block_count - 1) {
-            fillBlock(&graph, blocks[i], 1, 63, .fwd);
+    for (0..block_count) |block_idx| {
+        blocks[block_idx] = try graph.allocBlockFwd();
+        if (block_idx == block_count - 1) {
+            fillBlock(&graph, blocks[block_idx], 1, 63, .fwd);
         }
     }
 
@@ -97,13 +101,13 @@ test "large adjacency: addEdge COW preserves all blocks when adjacency has >128 
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).first_block = blocks[0];
     publish.publishedFwdSide(source_node).block_count = block_count;
-    publish.publishedFwdSide(source_node).group_count = 0;
+    publish.publishedFwdSide(source_node).segment_count = 0;
     publish.setPublishedFwdDegree(source_node, 63);
     publish.setPublishedFlags(source_node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     try publish.syncToPublished(&graph, source.index);
 
-    for (0..63) |j| {
-        try publishReverseSource(&graph, 1 + @as(u32, @intCast(j)), source.index);
+    for (0..63) |destination_offset| {
+        try publishReverseSource(&graph, 1 + @as(u32, @intCast(destination_offset)), source.index);
     }
     graph.graph.edge_count.store(63, .release);
 
@@ -115,13 +119,15 @@ test "large adjacency: addEdge COW preserves all blocks when adjacency has >128 
     try testing.expectEqual(@as(u64, 64), graph.edgeCount());
 }
 
-test "large adjacency: addEdge tail COW does not reject when MAX_GROUPS_PER_NODE tail group has single block" {
+test "large adjacency: addEdge tail COW does not reject when MAX_SEGMENTS_PER_NODE tail segment has single block" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const total_dest: u32 = (4 * 64) + 1;
     const source = try graph.addNode();
-    for (0..total_dest) |_| { _ = try graph.addNode(); }
+    for (0..total_dest) |_| {
+        _ = try graph.addNode();
+    }
 
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
@@ -132,26 +138,26 @@ test "large adjacency: addEdge tail COW does not reject when MAX_GROUPS_PER_NODE
     fillBlock(&graph, b2, 129, 64, .fwd);
     fillBlock(&graph, b3, 193, 64, .fwd);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    const g2 = try graph.allocGroup();
-    const g3 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    const g2 = try graph.allocSegment();
+    const g3 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g3).* = .{ .start = b3, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).block_count = 4;
-    publish.publishedFwdSide(source_node).group_count = 4;
-    publish.publishedFwdSide(source_node).first_group = g0;
+    publish.publishedFwdSide(source_node).segment_count = 4;
+    publish.publishedFwdSide(source_node).first_segment = g0;
     publish.setPublishedFlags(source_node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     publish.setPublishedFwdDegree(source_node, 256);
     try publish.syncToPublished(&graph, source.index);
 
-    for (1..257) |dest_idx| {
-        try publishReverseSource(&graph, @intCast(dest_idx), source.index);
+    for (1..257) |destination_idx| {
+        try publishReverseSource(&graph, @intCast(destination_idx), source.index);
     }
     graph.graph.edge_count.store(256, .release);
 

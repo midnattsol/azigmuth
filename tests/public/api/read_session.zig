@@ -9,9 +9,9 @@ test "read session: point reads without whole-graph capture" {
 
     const source = try graph.addNode();
     var destinations: [8]azigmuth.NodeId = undefined;
-    for (0..destinations.len) |i| {
-        destinations[i] = try graph.addNode();
-        try graph.addEdge(source, destinations[i], 0, .{});
+    for (0..destinations.len) |destination_idx| {
+        destinations[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, destinations[destination_idx], 0, .{});
     }
 
     var session = try graph.readSession(testing.allocator);

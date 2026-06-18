@@ -88,12 +88,12 @@ const types = @import("core/types.zig");
 /// `Schema` must be a struct whose fields all carry default values:
 ///
 ///   const Weights = struct { weight: f32 = 0.0, since: u64 = 0 };
-///   var g = try azigmuth.PropertyGraph(Weights).init(allocator, .{});
-///   defer g.deinit();
-///   const row = try g.addEdge(a, b, 0, .{}, .{ .weight = 1.5, .since = now });
+///   var property_graph = try azigmuth.PropertyGraph(Weights).init(allocator, .{});
+///   defer property_graph.deinit();
+///   const row = try property_graph.addEdge(source, destination, 0, .{}, .{ .weight = 1.5, .since = now });
 ///
 /// Everything not property-related is reached through the inner handle
-/// (`g.graph`): snapshots, algorithms, repair, validation.
+/// (`property_graph.graph`): snapshots, algorithms, repair, validation.
 pub fn PropertyGraph(comptime Schema: type) type {
     const schema_info = @typeInfo(Schema);
     if (schema_info != .@"struct") @compileError("PropertyGraph schema must be a struct");

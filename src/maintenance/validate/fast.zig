@@ -30,24 +30,24 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
     var retired_forward_blocks: [common.TRACKED_BLOCK_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_BLOCK_BITMAP_WORDS;
     var retired_reverse_blocks: [common.TRACKED_BLOCK_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_BLOCK_BITMAP_WORDS;
 
-    var owned_groups: [common.TRACKED_GROUP_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_GROUP_BITMAP_WORDS;
-    var free_groups: [common.TRACKED_GROUP_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_GROUP_BITMAP_WORDS;
-    var retired_groups: [common.TRACKED_GROUP_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_GROUP_BITMAP_WORDS;
+    var owned_segments: [common.TRACKED_SEGMENT_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_SEGMENT_BITMAP_WORDS;
+    var free_segments: [common.TRACKED_SEGMENT_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_SEGMENT_BITMAP_WORDS;
+    var retired_segments: [common.TRACKED_SEGMENT_BITMAP_WORDS]u64 = [_]u64{0} ** common.TRACKED_SEGMENT_BITMAP_WORDS;
 
     try stacks.populateStackBitmapFast(graph, free_forward_blocks[0..], .free, .fwd);
     try stacks.populateStackBitmapFast(graph, free_reverse_blocks[0..], .free, .rev);
     try stacks.populateStackBitmapFast(graph, retired_forward_blocks[0..], .retired, .fwd);
     try stacks.populateStackBitmapFast(graph, retired_reverse_blocks[0..], .retired, .rev);
-    try stacks.populateGroupStackBitmapFast(graph, free_groups[0..], .free);
-    try stacks.populateGroupStackBitmapFast(graph, retired_groups[0..], .retired);
+    try stacks.populateSegmentStackBitmapFast(graph, free_segments[0..], .free);
+    try stacks.populateSegmentStackBitmapFast(graph, retired_segments[0..], .retired);
 
     for (0..node_count) |node_idx| {
         const node_id: u32 = @intCast(node_idx);
         const node = types.NodeId{ .index = node_id };
         const adjacency = node_access.publishedAdjAtConst(graph, node);
-        const meta = node_access.loadPublishedMetaAtConst(graph, node);
-        const degree_fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta);
-        const degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta);
+        const state = node_access.loadPublicationStateAtConst(graph, node);
+        const degree_fwd = node_access.publishedFwdDegreeFromStateAtConst(graph, node, state);
+        const degree_rev = node_access.publishedRevDegreeFromStateAtConst(graph, node, state);
 
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .fwd);
         _ = try shape.validateAdjacencyBlocksFast(graph, adjacency, .rev);
@@ -55,8 +55,8 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         const rev_visible = sums.sumVisibleAdjacency(graph, adjacency, .rev);
         total_visible_forward += fwd_visible;
         total_visible_reverse += rev_visible;
-        try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_forward_blocks[0..], free_forward_blocks[0..], retired_forward_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .fwd);
-        try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], owned_groups[0..], free_groups[0..], retired_groups[0..], .rev);
+        try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_forward_blocks[0..], free_forward_blocks[0..], retired_forward_blocks[0..], owned_segments[0..], free_segments[0..], retired_segments[0..], .fwd);
+        try ownership.validateAdjacencyOwnershipAndLayoutFast(graph, adjacency, owned_reverse_blocks[0..], free_reverse_blocks[0..], retired_reverse_blocks[0..], owned_segments[0..], free_segments[0..], retired_segments[0..], .rev);
         try shape.validateOccupancyFast(graph, adjacency, .fwd);
         try shape.validateOccupancyFast(graph, adjacency, .rev);
         try consistency.validateForwardEdgeIdsFast(graph, node_id, adjacency);
@@ -103,11 +103,11 @@ pub fn validate(graph: *const graph_core.GraphCore) !void {
         }
     }
     {
-        const group_limit = @min(graph.loadGroupCount(), common.MAX_TRACKED_GROUPS);
-        for (0..group_limit) |group_idx| {
-            if (!common.bitmapIsSet(owned_groups[0..], @intCast(group_idx)) and
-                !common.bitmapIsSet(free_groups[0..], @intCast(group_idx)) and
-                !common.bitmapIsSet(retired_groups[0..], @intCast(group_idx)))
+        const segment_limit = @min(graph.loadSegmentCount(), common.MAX_TRACKED_SEGMENTS);
+        for (0..segment_limit) |segment_idx| {
+            if (!common.bitmapIsSet(owned_segments[0..], @intCast(segment_idx)) and
+                !common.bitmapIsSet(free_segments[0..], @intCast(segment_idx)) and
+                !common.bitmapIsSet(retired_segments[0..], @intCast(segment_idx)))
             {
                 return error.CorruptGraph;
             }

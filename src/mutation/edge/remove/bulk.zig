@@ -44,11 +44,11 @@ fn rebuildBulkRemovalSides(
     destination: types.NodeId,
     scratch: *common.MutationScratch,
 ) !remove_common.BulkRemovalResult {
-    const forward_result = try remove_rebuild.rebuildForwardRemoveAll(graph, &remove_state.source_pub, destination.index, scratch);
+    const forward_result = try remove_rebuild.rebuildForwardRemoveAll(graph, &remove_state.source_published_side, destination.index, scratch);
     if (forward_result.removed <= 1) return error.CorruptGraph;
 
     staging.source_staging.* = forward_result.new_side;
-    staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_pub, source.index, forward_result.removed, scratch);
+    staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_published_side, source.index, forward_result.removed, scratch);
 
     var source_publish_adj = common.nodeAdjForSide(staging.source_staging.*, endpoints.source_flags, .fwd);
     repair.updateRepairDebt(graph, &source_publish_adj, source.index, .fwd);
@@ -83,10 +83,10 @@ pub fn removeBulkDestinationMatches(
         graph,
         &scratch,
         endpoints,
-        remove_state.source_pub,
-        remove_state.destination_pub,
-        remove_state.old_source_groups,
-        remove_state.old_destination_groups,
+        remove_state.source_published_side,
+        remove_state.destination_published_side,
+        remove_state.old_source_segments,
+        remove_state.old_destination_segments,
         source,
         destination,
         result,

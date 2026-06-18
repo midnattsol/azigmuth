@@ -13,7 +13,7 @@ pub const LiveReadSnapshot = struct {
     /// True when `reader_token` is a retain on a longer-lived owner (a
     /// ReadSession): release the retain on exit instead of closing the token.
     token_retained: bool = false,
-    meta: types.PublishedMeta,
+    state: types.NodePublicationState,
     node_adj_snapshot: types.NodeAdj,
     degree_fwd: u32,
     degree_rev: u32,
@@ -35,8 +35,8 @@ pub fn releaseCapturedReader(graph: *const graph_core.GraphCore, capture: LiveRe
 
 pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.SideAdj {
     return switch (direction) {
-        .fwd => .{ .first_block = node_adj.first_block_fwd, .block_count = node_adj.block_count_fwd, .group_count = node_adj.group_count_fwd, .first_group = node_adj.first_group_fwd },
-        .rev => .{ .first_block = node_adj.first_block_rev, .block_count = node_adj.block_count_rev, .group_count = node_adj.group_count_rev, .first_group = node_adj.first_group_rev },
+        .fwd => .{ .first_block = node_adj.first_block_fwd, .block_count = node_adj.block_count_fwd, .segment_count = node_adj.segment_count_fwd, .first_segment = node_adj.first_segment_fwd },
+        .rev => .{ .first_block = node_adj.first_block_rev, .block_count = node_adj.block_count_rev, .segment_count = node_adj.segment_count_rev, .first_segment = node_adj.first_segment_rev },
     };
 }
 
@@ -45,7 +45,7 @@ pub fn sideAdj(direction: enum { fwd, rev }, node_adj: types.NodeAdj) types.Side
 /// The composed `NodeAdj` and degrees are read from the per-side
 /// double-buffers, which a subsequent writer may recycle as staging the
 /// moment one publish flips the side index. The seqlock-style re-read of
-/// `published_meta` below is therefore mandatory: it guarantees the slots
+/// `publication_state` below is therefore mandatory: it guarantees the slots
 /// were not overwritten while being read, so the snapshot is never a torn
 /// mix of two published versions (the seqlock reader rule).
 pub fn captureNodeSnapshot(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!LiveReadSnapshot {
@@ -80,22 +80,22 @@ fn captureNodeSnapshotImpl(graph: *const graph_core.GraphCore, node: types.NodeI
         }
     } else rcu.readerExit(@constCast(graph), reader_token);
 
-    const published_ref = node_access.nodePublishedAtConst(graph, node);
-    var meta = node_access.loadPublishedMetaAtConst(graph, node);
+    const buffers_ref = node_access.nodeAdjacencyBuffersAtConst(graph, node);
+    var state = node_access.loadPublicationStateAtConst(graph, node);
     while (true) {
-        const node_adj_snapshot = node_access.publishedAdjFromMetaAtConst(graph, node, meta);
-        const degree_fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta);
-        const degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta);
-        const sorted_fwd = published_ref.publishedFwdSortedFromMeta(meta);
-        const sorted_rev = published_ref.publishedRevSortedFromMeta(meta);
+        const node_adj_snapshot = node_access.publishedAdjFromStateAtConst(graph, node, state);
+        const degree_fwd = node_access.publishedFwdDegreeFromStateAtConst(graph, node, state);
+        const degree_rev = node_access.publishedRevDegreeFromStateAtConst(graph, node, state);
+        const sorted_fwd = buffers_ref.publishedFwdSortedFromState(state);
+        const sorted_rev = buffers_ref.publishedRevSortedFromState(state);
 
-        const after = node_access.loadPublishedMetaAtConst(graph, node);
-        if (@as(u64, @bitCast(meta)) == @as(u64, @bitCast(after))) {
+        const after = node_access.loadPublicationStateAtConst(graph, node);
+        if (@as(u64, @bitCast(state)) == @as(u64, @bitCast(after))) {
             try node_validity.ensureLiveSnapshot(node_adj_snapshot);
             return .{
                 .reader_token = reader_token,
                 .token_retained = token_retained,
-                .meta = meta,
+                .state = state,
                 .node_adj_snapshot = node_adj_snapshot,
                 .degree_fwd = degree_fwd,
                 .degree_rev = degree_rev,
@@ -103,7 +103,7 @@ fn captureNodeSnapshotImpl(graph: *const graph_core.GraphCore, node: types.NodeI
                 .sorted_rev = sorted_rev,
             };
         }
-        meta = after;
+        state = after;
     }
 }
 
@@ -116,18 +116,18 @@ pub fn validateReverseSideQuick(graph: *const graph_core.GraphCore, side_snapsho
 }
 
 /// Returns whether a candidate node should be treated as removed during live iteration.
-/// Caches the candidate's NodeMeta page: 8 bytes per node keeps the removed
+/// Caches the candidate's NodePublicationCell page: 8 bytes per node keeps the removed
 /// filter dense in cache during multi-candidate scans.
 pub fn candidateRemoved(iterator: anytype, graph: *const graph_core.GraphCore, candidate_idx: u32) bool {
     if (candidate_idx >= graph.publishedNodeCount()) return true;
     const page_idx = page_ops.pageOf(candidate_idx, constants.NODES_PER_PAGE);
     if (iterator.cached_node_page == null or iterator.cached_node_page_idx != page_idx) {
-        iterator.cached_node_page = page_ops.nodeMetaPageAtConst(graph, page_idx);
+        iterator.cached_node_page = page_ops.nodePublicationPageAtConst(graph, page_idx);
         iterator.cached_node_page_idx = page_idx;
     }
 
     const slot_idx = page_ops.slotOf(candidate_idx, constants.NODES_PER_PAGE);
-    return iterator.cached_node_page.?[slot_idx].loadPublishedMeta().removed;
+    return iterator.cached_node_page.?[slot_idx].loadPublicationState().removed;
 }
 
 /// Releases the reader token held by one live iterator, if still active.

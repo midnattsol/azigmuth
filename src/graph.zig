@@ -17,10 +17,10 @@ const graph_snapshot_api = @import("query/snapshot/api.zig");
 const node_bitmap = @import("core/node_bitmap.zig");
 const node_validity = @import("core/node_validity.zig");
 const algorithm_context = @import("algorithms/context.zig");
-const node_meta_mod = @import("storage/node/meta.zig");
-const node_hot_mod = @import("storage/node/hot.zig");
-const node_hot_layout_mod = @import("storage/node/hot_layout.zig");
-const node_published_mod = @import("storage/node/published.zig");
+const node_publication_mod = @import("storage/node/publication.zig");
+const node_mutation_control_mod = @import("storage/node/mutation_control.zig");
+const node_mutation_control_layout_mod = @import("storage/node/mutation_control_layout.zig");
+const node_adjacency_buffers_mod = @import("storage/node/adjacency_buffers.zig");
 const node_tiny_mod = @import("storage/node/tiny.zig");
 
 // ── Internal API used by public wrappers ─────────────────────────────────
@@ -141,14 +141,14 @@ pub const Graph = struct {
             .repair_rev = .empty,
         };
 
-        // Pre-allocate the first meta page so an empty graph keeps the
+        // Pre-allocate the first publication page so an empty graph keeps the
         // historical "init allocates" contract and OOM tests stay meaningful.
-        _ = try state_value.node_meta_pages.slotPtr(allocator, 0);
-        const first_meta = try allocator.alloc(node_meta_mod.NodeMeta, constants.NODES_PER_PAGE);
-        errdefer allocator.free(first_meta);
-        @memset(first_meta, .{});
-        const first_page_slot = try state_value.node_meta_pages.slotPtr(allocator, 0);
-        first_page_slot.store(@intFromPtr(first_meta.ptr), .release);
+        _ = try state_value.node_publication_pages.slotPtr(allocator, 0);
+        const first_publication_page = try allocator.alloc(node_publication_mod.NodePublicationCell, constants.NODES_PER_PAGE);
+        errdefer allocator.free(first_publication_page);
+        @memset(first_publication_page, .{});
+        const first_page_slot = try state_value.node_publication_pages.slotPtr(allocator, 0);
+        first_page_slot.store(@intFromPtr(first_publication_page.ptr), .release);
 
         return .{ .graph = state_value };
     }
@@ -171,28 +171,28 @@ pub const Graph = struct {
         }
 
         const alloc = self.graph.allocator;
-        freeAtomicPages(node_meta_mod.NodeMeta, alloc, &self.graph.node_meta_pages, constants.NODES_PER_PAGE);
-        freeAtomicPages(node_published_mod.NodePublished, alloc, &self.graph.node_published_pages, constants.NODES_PER_PAGE);
-        freeAtomicPages(node_hot_layout_mod.Slot, alloc, &self.graph.node_hot_pages, constants.NODES_PER_PAGE);
-        freeAtomicPages(node_tiny_mod.TinyFwdBlock, alloc, &self.graph.tiny_block_fwd_pages, node_tiny_mod.TINY_BLOCKS_FWD_PER_PAGE);
-        freeAtomicPages(node_tiny_mod.TinyRevBlock, alloc, &self.graph.tiny_block_rev_pages, node_tiny_mod.TINY_BLOCKS_REV_PER_PAGE);
+        freeAtomicPages(node_publication_mod.NodePublicationCell, alloc, &self.graph.node_publication_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_adjacency_buffers_mod.NodeAdjacencyBuffers, alloc, &self.graph.node_adjacency_buffer_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_mutation_control_layout_mod.Slot, alloc, &self.graph.node_mutation_control_pages, constants.NODES_PER_PAGE);
+        freeAtomicPages(node_tiny_mod.TinyFwdSlot, alloc, &self.graph.tiny_fwd_slot_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
+        freeAtomicPages(node_tiny_mod.TinyRevSlot, alloc, &self.graph.tiny_rev_slot_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
         freeAtomicPages(std.atomic.Value(u64), alloc, &self.graph.repair_queued_fwd_pages, node_bitmap.WORDS_PER_PAGE);
         freeAtomicPages(std.atomic.Value(u64), alloc, &self.graph.repair_queued_rev_pages, node_bitmap.WORDS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockFwd, alloc, &self.graph.edge_blocks_fwd_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(types.EdgeBlockRev, alloc, &self.graph.edge_blocks_rev_pages, constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.EdgeBlockGroup, alloc, &self.graph.edge_block_group_pages, constants.EDGE_GROUPS_PER_PAGE);
+        freeAtomicPages(types.EdgeBlockSegment, alloc, &self.graph.edge_block_segment_pages, constants.EDGE_SEGMENTS_PER_PAGE);
         if (self.graph.multigraph_enabled) freeAtomicPages(types.EdgeBlockFwdIds, alloc, &self.graph.edge_blocks_fwd_id_pages, constants.EDGE_BLOCKS_PER_PAGE);
         if (self.graph.edge_properties_enabled) {
             freeAtomicPages(types.EdgeBlockFwdProps, alloc, &self.graph.edge_blocks_fwd_prop_pages, constants.EDGE_BLOCKS_PER_PAGE);
-            freeAtomicPages(types.BlockMeta, alloc, &self.graph.prop_row_meta_pages, constants.PROP_ROWS_PER_PAGE);
+            freeAtomicPages(types.ReclamationEntry, alloc, &self.graph.prop_row_reclamation_pages, constants.PROP_ROWS_PER_PAGE);
         }
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_fwd_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.ReclamationEntry, alloc, &self.graph.edge_blocks_fwd_reclamation_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(u8, alloc, &self.graph.edge_blocks_fwd_alive_pages, constants.EDGE_BLOCKS_PER_PAGE);
         freeAtomicPages(u8, alloc, &self.graph.edge_blocks_rev_alive_pages, constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_blocks_rev_meta_pages, constants.EDGE_BLOCKS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.edge_block_group_meta_pages, constants.EDGE_GROUPS_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_block_fwd_meta_pages, node_tiny_mod.TINY_BLOCKS_FWD_PER_PAGE);
-        freeAtomicPages(types.BlockMeta, alloc, &self.graph.tiny_block_rev_meta_pages, node_tiny_mod.TINY_BLOCKS_REV_PER_PAGE);
+        freeAtomicPages(types.ReclamationEntry, alloc, &self.graph.edge_blocks_rev_reclamation_pages, constants.EDGE_BLOCKS_PER_PAGE);
+        freeAtomicPages(types.ReclamationEntry, alloc, &self.graph.edge_block_segment_reclamation_pages, constants.EDGE_SEGMENTS_PER_PAGE);
+        freeAtomicPages(types.ReclamationEntry, alloc, &self.graph.tiny_fwd_slot_reclamation_pages, node_tiny_mod.TINY_FWD_SLOTS_PER_PAGE);
+        freeAtomicPages(types.ReclamationEntry, alloc, &self.graph.tiny_rev_slot_reclamation_pages, node_tiny_mod.TINY_REV_SLOTS_PER_PAGE);
 
         self.graph.repair_fwd.deinit(alloc);
         self.graph.repair_rev.deinit(alloc);
@@ -245,32 +245,32 @@ pub const Graph = struct {
             return node_access.publishedAdjAtConst(self.core, self.node);
         }
 
-        pub fn loadPublishedMeta(self: NodeRef) types.PublishedMeta {
-            return node_access.loadPublishedMetaAtConst(self.core, self.node);
+        pub fn loadPublicationState(self: NodeRef) types.NodePublicationState {
+            return node_access.loadPublicationStateAtConst(self.core, self.node);
         }
 
-        pub fn storePublishedMeta(self: NodeRef, meta: types.PublishedMeta) void {
-            page_ops.nodeMetaAt(self.core, self.node).storePublishedMeta(meta);
+        pub fn storePublicationState(self: NodeRef, state: types.NodePublicationState) void {
+            page_ops.nodePublicationAt(self.core, self.node).storePublicationState(state);
         }
 
-        pub fn publishedFwdFromMeta(self: NodeRef, meta: types.PublishedMeta) types.SideAdj {
-            return node_access.publishedFwdFromMeta(self.core, self.node, meta);
+        pub fn publishedFwdFromState(self: NodeRef, state: types.NodePublicationState) types.SideAdj {
+            return node_access.publishedFwdFromState(self.core, self.node, state);
         }
 
-        pub fn publishedRevFromMeta(self: NodeRef, meta: types.PublishedMeta) types.SideAdj {
-            return node_access.publishedRevFromMeta(self.core, self.node, meta);
+        pub fn publishedRevFromState(self: NodeRef, state: types.NodePublicationState) types.SideAdj {
+            return node_access.publishedRevFromState(self.core, self.node, state);
         }
 
-        pub fn publishedAdjFromMeta(self: NodeRef, meta: types.PublishedMeta) types.NodeAdj {
-            return node_access.publishedAdjFromMetaAtConst(self.core, self.node, meta);
+        pub fn publishedAdjFromState(self: NodeRef, state: types.NodePublicationState) types.NodeAdj {
+            return node_access.publishedAdjFromStateAtConst(self.core, self.node, state);
         }
 
         pub fn publishedFwd(self: NodeRef) types.SideAdj {
-            return node_access.publishedFwdFromMeta(self.core, self.node, self.loadPublishedMeta());
+            return node_access.publishedFwdFromState(self.core, self.node, self.loadPublicationState());
         }
 
         pub fn publishedRev(self: NodeRef) types.SideAdj {
-            return node_access.publishedRevFromMeta(self.core, self.node, self.loadPublishedMeta());
+            return node_access.publishedRevFromState(self.core, self.node, self.loadPublicationState());
         }
     };
 
@@ -297,20 +297,20 @@ pub const Graph = struct {
         return page_ops.allocBlock(&self.graph, .rev);
     }
 
-    pub fn allocGroup(self: *Graph) !u32 {
-        return page_ops.allocGroup(&self.graph);
+    pub fn allocSegment(self: *Graph) !u32 {
+        return page_ops.allocSegment(&self.graph);
     }
 
-    pub fn allocGroupSpan(self: *Graph, count: u16) !u32 {
-        return page_ops.allocGroupSpan(&self.graph, count);
+    pub fn allocSegmentSlots(self: *Graph, count: u16) !u32 {
+        return page_ops.allocSegmentSlots(&self.graph, count);
     }
 
-    pub fn freeGroup(self: *Graph, idx: u32) void {
-        page_ops.freeGroup(&self.graph, idx);
+    pub fn freeSegment(self: *Graph, idx: u32) void {
+        page_ops.freeSegment(&self.graph, idx);
     }
 
-    pub fn freeGroupSpan(self: *Graph, first_idx: u32, count: u16) void {
-        page_ops.freeGroupSpan(&self.graph, first_idx, count);
+    pub fn freeSegmentSlots(self: *Graph, first_idx: u32, count: u16) void {
+        page_ops.freeSegmentSlots(&self.graph, first_idx, count);
     }
 
     pub fn hasEdgeInAdj(self: *const Graph, adj: types.NodeAdj, target: u32) bool {
@@ -450,9 +450,9 @@ pub const Graph = struct {
         return .{
             .blocks_fwd_allocated = @atomicLoad(u32, @constCast(&core.block_fwd_count), .acquire),
             .blocks_rev_allocated = @atomicLoad(u32, @constCast(&core.block_rev_count), .acquire),
-            .groups_allocated = @atomicLoad(u32, @constCast(&core.group_count), .acquire),
-            .tiny_fwd_allocated = @atomicLoad(u32, @constCast(&core.tiny_block_fwd_count), .acquire),
-            .tiny_rev_allocated = @atomicLoad(u32, @constCast(&core.tiny_block_rev_count), .acquire),
+            .segments_allocated = @atomicLoad(u32, @constCast(&core.segment_count), .acquire),
+            .tiny_fwd_allocated = @atomicLoad(u32, @constCast(&core.tiny_fwd_slot_count), .acquire),
+            .tiny_rev_allocated = @atomicLoad(u32, @constCast(&core.tiny_rev_slot_count), .acquire),
         };
     }
 

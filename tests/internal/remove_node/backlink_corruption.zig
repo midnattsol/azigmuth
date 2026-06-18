@@ -14,9 +14,9 @@ test "removeNode corruption: missing reverse backlink is rejected" {
     try graph.addEdge(source, destination, 0, 0);
 
     const destination_adj = try graph.publishedNodeAdj(destination);
-    if (destination_adj.block_count_rev > 0 and destination_adj.group_count_rev == 0 and publish.reverseLiveCount(&graph, destination_adj) catch 0 > 0) {
+    if (destination_adj.block_count_rev > 0 and destination_adj.segment_count_rev == 0 and publish.reverseLiveCount(&graph, destination_adj) catch 0 > 0) {
         try publish.writeReverseSource(&graph, destination_adj, 0, graph.graph.publishedNodeCount() + 10);
-    } else if (destination_adj.block_count_rev > 0 and destination_adj.group_count_rev == 0) {
+    } else if (destination_adj.block_count_rev > 0 and destination_adj.segment_count_rev == 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, destination_adj.first_block_rev, .rev);
         const alive = page_ops.blockAliveCount(&graph.graph, destination_adj.first_block_rev, .rev);
         var found = false;
@@ -42,7 +42,7 @@ test "removeNode corruption: duplicated reverse backlink is rejected" {
     try graph.addEdge(source, destination, 0, 0);
 
     const destination_adj = try graph.publishedNodeAdj(destination);
-    if (destination_adj.block_count_rev > 0 and destination_adj.group_count_rev == 0) {
+    if (destination_adj.block_count_rev > 0 and destination_adj.segment_count_rev == 0) {
         try publish.appendReverseSource(&graph, destination, destination_adj, source.index);
     }
 
@@ -58,9 +58,9 @@ test "removeNode corruption: missing incoming reverse backlink is rejected" {
     try graph.addEdge(source, removed_node, 0, 0);
 
     const removed_node_adj = try graph.publishedNodeAdj(removed_node);
-    if (removed_node_adj.block_count_rev > 0 and removed_node_adj.group_count_rev == 0 and publish.reverseLiveCount(&graph, removed_node_adj) catch 0 > 0) {
+    if (removed_node_adj.block_count_rev > 0 and removed_node_adj.segment_count_rev == 0 and publish.reverseLiveCount(&graph, removed_node_adj) catch 0 > 0) {
         try publish.writeReverseSource(&graph, removed_node_adj, 0, graph.graph.publishedNodeCount() + 10);
-    } else if (removed_node_adj.block_count_rev > 0 and removed_node_adj.group_count_rev == 0) {
+    } else if (removed_node_adj.block_count_rev > 0 and removed_node_adj.segment_count_rev == 0) {
         const block = page_ops.edgeBlockAt(&graph.graph, removed_node_adj.first_block_rev, .rev);
         const alive = page_ops.blockAliveCount(&graph.graph, removed_node_adj.first_block_rev, .rev);
         var found = false;
@@ -86,7 +86,7 @@ test "removeNode corruption: duplicated incoming reverse backlink is rejected" {
     try graph.addEdge(source, removed_node, 0, 0);
 
     const removed_node_adj = try graph.publishedNodeAdj(removed_node);
-    if (removed_node_adj.block_count_rev > 0 and removed_node_adj.group_count_rev == 0) {
+    if (removed_node_adj.block_count_rev > 0 and removed_node_adj.segment_count_rev == 0) {
         try publish.appendReverseSource(&graph, removed_node, removed_node_adj, source.index);
     }
 
@@ -102,7 +102,7 @@ test "removeNode corruption: duplicated outgoing forward destination is rejected
     try graph.addEdge(source, destination, 0, 0);
 
     const source_adj = try graph.publishedNodeAdj(source);
-    if (source_adj.block_count_fwd > 0 and source_adj.group_count_fwd == 0) {
+    if (source_adj.block_count_fwd > 0 and source_adj.segment_count_fwd == 0) {
         const last_entry = try publish.readForwardEntry(&graph, source_adj, (try publish.forwardLiveCount(&graph, source_adj)) - 1);
         try publish.appendForwardEntry(&graph, source, source_adj, last_entry);
     }
@@ -119,7 +119,7 @@ test "removeNode corruption: forward destination out of range is rejected" {
     try graph.addEdge(source, destination, 0, 0);
 
     const adj = try graph.publishedNodeAdj(source);
-    if (adj.block_count_fwd > 0 and adj.group_count_fwd == 0) {
+    if (adj.block_count_fwd > 0 and adj.segment_count_fwd == 0) {
         try publish.writeForwardDestination(&graph, adj, 0, graph.graph.publishedNodeCount() + 1);
     }
 

@@ -28,18 +28,18 @@ fn publishForwardBlock(graph: *graph_mod.Graph, node: graph_mod.NodeId, block_id
     try publish.syncToPublished(graph, node.index);
 }
 
-fn publishForwardGroups(
+fn publishForwardSegments(
     graph: *graph_mod.Graph,
     node: graph_mod.NodeId,
-    first_group: u32,
+    first_segment: u32,
     block_count: u16,
-    group_count: u16,
+    segment_count: u16,
 ) !void {
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = block_count;
-    publish.publishedFwdSide(node_buffer).group_count = group_count;
-    publish.publishedFwdSide(node_buffer).first_group = first_group;
+    publish.publishedFwdSide(node_buffer).segment_count = segment_count;
+    publish.publishedFwdSide(node_buffer).first_segment = first_segment;
     try publish.syncToPublished(graph, node.index);
 }
 
@@ -123,10 +123,8 @@ test "validation: multigraph detects reverse multiplicity mismatch" {
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(
-        containsViolation(violations, .forward_reverse_multiplicity_mismatch) or
-            containsViolation(violations, .forward_reverse_count_mismatch)
-    );
+    try testing.expect(containsViolation(violations, .forward_reverse_multiplicity_mismatch) or
+        containsViolation(violations, .forward_reverse_count_mismatch));
 }
 
 test "validation: multigraph detects zero edge id in sidecar" {
@@ -173,8 +171,8 @@ test "validation: multigraph detects regressed next edge id counter" {
     const destination = try graph.addNode();
     _ = try graph.addEdgeWithId(source, destination, 0, 0);
 
-    page_ops.nodeHotAt(&graph.graph, source).storeNextLocalEdgeId(1);
-    page_ops.nodeHotAt(&graph.graph, source).storeNextLocalEdgeId(1);
+    page_ops.nodeMutationControlAt(&graph.graph, source).storeNextLocalEdgeId(1);
+    page_ops.nodeMutationControlAt(&graph.graph, source).storeNextLocalEdgeId(1);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
@@ -245,42 +243,42 @@ test "validation: detects underfull non-tail blocks" {
     try testing.expect(containsViolation(violations, .occupancy_below_threshold));
 }
 
-test "validation: detects grouped span declared past allocated runs" {
+test "validation: detects segmented slot_entry declared past allocated segments" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
     const block = try graph.allocBlockFwd();
-    const group = try graph.allocGroup();
+    const segment = try graph.allocSegment();
 
     page_ops.setBlockAliveCount(&graph.graph, block, .fwd, 0);
-    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
-    try publishForwardGroups(&graph, node, group, 1, 2);
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment).* = .{ .start = block, .count = 1 };
+    try publishForwardSegments(&graph, node, segment, 1, 2);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(containsViolation(violations, .blockgroup_chain_cycle));
+    try testing.expect(containsViolation(violations, .blocksegment_chain_cycle));
 }
 
-test "validation: detects overlapping block groups" {
+test "validation: detects overlapping block segments" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
     const block0 = try graph.allocBlockFwd();
     _ = try graph.allocBlockFwd();
-    const group0 = try graph.allocGroup();
-    const group1 = try graph.allocGroup();
+    const segment0 = try graph.allocSegment();
+    const segment1 = try graph.allocSegment();
 
-    page_ops.edgeBlockGroupAt(&graph.graph, group0).* = .{ .start = block0, .count = 2 };
-    page_ops.edgeBlockGroupAt(&graph.graph, group1).* = .{ .start = block0 + 1, .count = 1 };
-    try publishForwardGroups(&graph, node, group0, 3, 2);
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment0).* = .{ .start = block0, .count = 2 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment1).* = .{ .start = block0 + 1, .count = 1 };
+    try publishForwardSegments(&graph, node, segment0, 3, 2);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(containsViolation(violations, .blockgroup_overlap));
+    try testing.expect(containsViolation(violations, .blocksegment_overlap));
 }
 
 test "validation: detects double-owned blocks" {
@@ -347,7 +345,7 @@ test "validation: detects invalid repair debt entries" {
     try testing.expect(containsViolation(violations, .repair_debt_invalid_node));
 }
 
-test "validation: grouped block_count mismatch vs sum of group.count is detected" {
+test "validation: segmented block_count mismatch vs sum of segment.count is detected" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -358,9 +356,9 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
     fillBlockWithDestinations(&graph, b0, 1, 1);
     fillBlockWithDestinations(&graph, b1, 2, 1);
 
-    const g0 = try graph.allocGroup();
-    // Single group covering 2 physically contiguous blocks.
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 2 };
+    const g0 = try graph.allocSegment();
+    // Single segment covering 2 physically contiguous blocks.
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 2 };
 
     // Reverse adjacency for both destinations so forward/reverse consistency passes.
     const rb0 = try graph.allocBlockRev();
@@ -386,11 +384,11 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
 
     const node = try graph.nodeAt(.{ .index = 0 });
     publish.clearPublishedSides(node);
-    // block_count says 1, but the chain spans 2 blocks.
+    // block_count says 1, but the chain segment_descriptors 2 blocks.
     publish.publishedFwdSide(node).first_block = b0;
     publish.publishedFwdSide(node).block_count = 1;
-    publish.publishedFwdSide(node).group_count = 1;
-    publish.publishedFwdSide(node).first_group = g0;
+    publish.publishedFwdSide(node).segment_count = 1;
+    publish.publishedFwdSide(node).first_segment = g0;
     publish.setPublishedFwdDegree(node, @as(u22, @intCast(2)));
     graph.graph.edge_count.store(2, .release);
 
@@ -400,10 +398,10 @@ test "validation: grouped block_count mismatch vs sum of group.count is detected
 
 fn fillBlockWithDestinations(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
-    for (0..count) |i| {
-        block.destinations[i] = first_destination + @as(u32, @intCast(i));
-        block.relations[i] = 0;
-        block.flags[i] = 0;
+    for (0..count) |slot_idx| {
+        block.destinations[slot_idx] = first_destination + @as(u32, @intCast(slot_idx));
+        block.relations[slot_idx] = 0;
+        block.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
@@ -437,7 +435,7 @@ test "validation: detects published exact degree mismatch on forward side" {
 
     // Corrupt the published forward degree — it should match the visible count.
     publish.setPublishedFwdDegree(try graph.nodeAt(source), 999);
-    publish.syncMetaToPublished(&graph, source.index);
+    publish.syncPublicationStateToPublished(&graph, source.index);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 }
@@ -451,7 +449,7 @@ test "validation: detects published exact degree mismatch on reverse side" {
     try graph.addEdge(source, target, 0, 0);
 
     publish.setPublishedRevDegree(try graph.nodeAt(target), 999);
-    publish.syncMetaToPublished(&graph, target.index);
+    publish.syncPublicationStateToPublished(&graph, target.index);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 
@@ -478,11 +476,11 @@ test "validation: detects predecessor with tombstone but missing needs_repair_fw
     // have needs_repair_fwd set.  Clearing it creates a hidden invariant violation.
     var source_node = try graph.nodeAt(source);
     {
-        var flags = source_node.loadPublishedMeta().flags();
+        var flags = source_node.loadPublicationState().flags();
         flags.needs_repair_fwd = false;
         publish.setPublishedFlags(source_node, flags);
     }
-    publish.syncMetaToPublished(&graph, source.index);
+    publish.syncPublicationStateToPublished(&graph, source.index);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 
@@ -503,11 +501,11 @@ test "validation: debugValidate reports missing needs_repair_fwd on predecessor 
 
     var source_node = try graph.nodeAt(source);
     {
-        var flags = source_node.loadPublishedMeta().flags();
+        var flags = source_node.loadPublicationState().flags();
         flags.needs_repair_fwd = false;
         publish.setPublishedFlags(source_node, flags);
     }
-    publish.syncMetaToPublished(&graph, source.index);
+    publish.syncPublicationStateToPublished(&graph, source.index);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
@@ -561,12 +559,12 @@ test "validation: removed node with non-zero published degree is flagged" {
     // Removed nodes must have published degree 0 on both sides.
     const node = graph.nodeRefAny(target);
     publish.setPublishedRevDegree(node, 1);
-    publish.syncMetaToPublished(&graph, target.index);
+    publish.syncPublicationStateToPublished(&graph, target.index);
 
     try testing.expectError(error.CorruptGraph, graph.validate());
 }
 
-test "validation: debugValidate survives invalid first_group" {
+test "validation: debugValidate survives invalid first_segment" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -576,15 +574,15 @@ test "validation: debugValidate survives invalid first_group" {
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-    try publishForwardGroups(&graph, node, 0xFF_FFFF, 1, 1);
+    try publishForwardSegments(&graph, node, 0xFF_FFFF, 1, 1);
     graph.graph.edge_count.store(1, .release);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(containsViolation(violations, .blockgroup_chain_cycle));
+    try testing.expect(containsViolation(violations, .blocksegment_chain_cycle));
 }
 
-test "validation: debugValidate continues after malformed group span with later inconsistency" {
+test "validation: debugValidate continues after malformed segment slot_entry with later inconsistency" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -595,19 +593,19 @@ test "validation: debugValidate continues after malformed group span with later 
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-    const group = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
-    try publishForwardGroups(&graph, node, group, 1, 2);
+    const segment = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment).* = .{ .start = block, .count = 1 };
+    try publishForwardSegments(&graph, node, segment, 1, 2);
 
     graph.graph.edge_count.store(2, .release);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(containsViolation(violations, .blockgroup_chain_cycle));
+    try testing.expect(containsViolation(violations, .blocksegment_chain_cycle));
     try testing.expect(containsViolation(violations, .edge_count_mismatch));
 }
 
-test "validation: validate returns CorruptGraph for invalid first_group" {
+test "validation: validate returns CorruptGraph for invalid first_segment" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -618,7 +616,7 @@ test "validation: validate returns CorruptGraph for invalid first_group" {
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = 1;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
-    try publishForwardGroups(&graph, node, 0xFF_FFFF, 1, 1);
+    try publishForwardSegments(&graph, node, 0xFF_FFFF, 1, 1);
     graph.graph.edge_count.store(1, .release);
 
     try testing.expectError(error.CorruptGraph, graph.validate());

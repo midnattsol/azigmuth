@@ -9,9 +9,9 @@ test "rcu: reclaimRetired is no-op when safe_epoch has not advanced" {
 
     const block = try graph.allocBlockFwd();
     try graph.retireBlockFwd(block);
-        // First reclaim: safe_epoch advances, blocks should be reclaimed.
+    // First reclaim: safe_epoch advances, blocks should be reclaimed.
     graph.reclaimRetired();
-        // Retire another block with a fresh epoch.
+    // Retire another block with a fresh epoch.
     const block2 = try graph.allocBlockFwd();
     graph.bumpEpoch();
     try graph.retireBlockFwd(block2);
@@ -54,7 +54,7 @@ test "rcu: reclaimRetired advances last_reclaim_epoch after reader exits" {
     graph.reclaimRetired();
     const last_after = graph.graph.last_reclaim_epoch.load(.monotonic);
     try testing.expect(last_after > last_before);
-    }
+}
 
 test "rcu: long-running reader does not cause retired list growth beyond retired capacity" {
     var graph = try graph_mod.Graph.init(testing.allocator);
@@ -64,11 +64,11 @@ test "rcu: long-running reader does not cause retired list growth beyond retired
     const token = graph.readerEnter() catch unreachable;
 
     // Do many add-edge + remove-edge cycles; each cycle retires blocks.
-    const src = try graph.addNode();
-    const dst = try graph.addNode();
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
     for (0..20) |_| {
-        try graph.addEdge(src, dst, 0, 0);
-        try testing.expect(try graph.removeEdge(src, dst));
+        try graph.addEdge(source, destination, 0, 0);
+        try testing.expect(try graph.removeEdge(source, destination));
     }
     graph.bumpEpoch();
     graph.reclaimRetired();
@@ -80,6 +80,6 @@ test "rcu: long-running reader does not cause retired list growth beyond retired
     graph.bumpEpoch();
     graph.reclaimRetired();
 
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(src));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(dst));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(destination));
 }

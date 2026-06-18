@@ -6,11 +6,11 @@ const publish = @import("publish");
 
 const testing = std.testing;
 
-fn publishedOfTest(graph: *graph_mod.Graph, node: graph_mod.NodeId) *graph_mod.node_published_mod.NodePublished {
-    return graph_mod.page_ops_mod.ensureNodePublishedAt(&graph.graph, node) catch @panic("ensure published failed");
+fn publishedOfTest(graph: *graph_mod.Graph, node: graph_mod.NodeId) *graph_mod.node_adjacency_buffers_mod.NodeAdjacencyBuffers {
+    return graph_mod.page_ops_mod.ensureNodeAdjacencyBuffersAt(&graph.graph, node) catch @panic("ensure published failed");
 }
 
-test "snapshot coherence: publishedAdjFromMeta can return stale side buffers after slot reuse" {
+test "snapshot coherence: publishedAdjFromState can return stale side buffers after slot reuse" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -22,12 +22,12 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
     publishedOfTest(&graph, node).fwd[0] = types.SideAdj{
         .first_block = b0,
         .block_count = 1,
-        .group_count = 0,
-        .first_group = 0,
+        .segment_count = 0,
+        .first_segment = 0,
     };
-    var meta0 = node_buffer.loadPublishedMeta();
+    var meta0 = node_buffer.loadPublicationState();
     meta0.idx_fwd = 0;
-    node_buffer.storePublishedMeta(meta0);
+    node_buffer.storePublicationState(meta0);
 
     const snapshot_a = graph.nodeRefAny(node).publishedAdj();
     try testing.expectEqual(@as(u32, b0), snapshot_a.first_block_fwd);
@@ -38,28 +38,28 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
     publishedOfTest(&graph, node).fwd[1] = types.SideAdj{
         .first_block = b1,
         .block_count = 1,
-        .group_count = 0,
-        .first_group = 0,
+        .segment_count = 0,
+        .first_segment = 0,
     };
     var meta1 = meta0;
     meta1.idx_fwd = 1;
-    node_buffer.storePublishedMeta(meta1);
+    node_buffer.storePublicationState(meta1);
 
     // ---- publish state C: flip back to slot 0, overwriting old state A
     const b3 = try graph.allocBlockFwd();
     publishedOfTest(&graph, node).fwd[0] = types.SideAdj{
         .first_block = b3,
         .block_count = 3,
-        .group_count = 0,
-        .first_group = 0,
+        .segment_count = 0,
+        .first_segment = 0,
     };
     var meta2 = meta1;
     meta2.idx_fwd = 0;
-    node_buffer.storePublishedMeta(meta2);
+    node_buffer.storePublicationState(meta2);
 
     // ---- reader that cached meta0 before the flips now reads from
-    //      publishedAdjFromMeta(meta0). It gets slot 0 → state C, not A.
-    const snapshot_from_meta0 = node_buffer.publishedAdjFromMeta(meta0);
+    //      publishedAdjFromState(meta0). It gets slot 0 → state C, not A.
+    const snapshot_from_meta0 = node_buffer.publishedAdjFromState(meta0);
     try testing.expectEqual(@as(u32, b3), snapshot_from_meta0.first_block_fwd);
     try testing.expectEqual(@as(u16, 3), snapshot_from_meta0.block_count_fwd);
 
@@ -68,7 +68,7 @@ test "snapshot coherence: publishedAdjFromMeta can return stale side buffers aft
     try testing.expectEqual(@as(u32, b3), latest.first_block_fwd);
 }
 
-test "snapshot coherence: publishedAdjFromMeta on reverse side can also return stale data" {
+test "snapshot coherence: publishedAdjFromState on reverse side can also return stale data" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -79,44 +79,44 @@ test "snapshot coherence: publishedAdjFromMeta on reverse side can also return s
     publishedOfTest(&graph, node).rev[0] = types.SideAdj{
         .first_block = r0,
         .block_count = 1,
-        .group_count = 0,
-        .first_group = 0,
+        .segment_count = 0,
+        .first_segment = 0,
     };
-    var meta0 = node_buffer.loadPublishedMeta();
+    var meta0 = node_buffer.loadPublicationState();
     meta0.idx_rev = 0;
-    node_buffer.storePublishedMeta(meta0);
+    node_buffer.storePublicationState(meta0);
 
     // Publish slot 1
     const r1 = try graph.allocBlockRev();
     publishedOfTest(&graph, node).rev[1] = types.SideAdj{
         .first_block = r1,
         .block_count = 2,
-        .group_count = 0,
-        .first_group = 0,
+        .segment_count = 0,
+        .first_segment = 0,
     };
     var meta1 = meta0;
     meta1.idx_rev = 1;
-    node_buffer.storePublishedMeta(meta1);
+    node_buffer.storePublicationState(meta1);
 
     // Overwrite slot 0
     const r2 = try graph.allocBlockRev();
     publishedOfTest(&graph, node).rev[0] = types.SideAdj{
         .first_block = r2,
         .block_count = 3,
-        .group_count = 0,
-        .first_group = 0,
+        .segment_count = 0,
+        .first_segment = 0,
     };
     var meta2 = meta1;
     meta2.idx_rev = 0;
-    node_buffer.storePublishedMeta(meta2);
+    node_buffer.storePublicationState(meta2);
 
     // meta0 (idx_rev=0) now reads slot 0 → state with r2 = 3, not r0 = 1
-    const snapshot_from_meta0 = node_buffer.publishedAdjFromMeta(meta0);
+    const snapshot_from_meta0 = node_buffer.publishedAdjFromState(meta0);
     try testing.expectEqual(@as(u32, r2), snapshot_from_meta0.first_block_rev);
     try testing.expectEqual(@as(u16, 3), snapshot_from_meta0.block_count_rev);
 }
 
-test "snapshot coherence: isNodeRemoved via publishedAdj().flags.removed can disagree with loadPublishedMeta().removed" {
+test "snapshot coherence: isNodeRemoved via publishedAdj().flags.removed can disagree with loadPublicationState().removed" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -124,34 +124,34 @@ test "snapshot coherence: isNodeRemoved via publishedAdj().flags.removed can dis
     const node_buffer = try graph.nodeAt(node);
 
     // Start with removed=false, slot 0 published.
-    var meta0 = node_buffer.loadPublishedMeta();
+    var meta0 = node_buffer.loadPublicationState();
     meta0.removed = false;
     meta0.idx_fwd = 0;
-    node_buffer.storePublishedMeta(meta0);
+    node_buffer.storePublicationState(meta0);
 
     // Flip to slot 1, still removed=false.
     var meta1 = meta0;
     meta1.idx_fwd = 1;
-    node_buffer.storePublishedMeta(meta1);
+    node_buffer.storePublicationState(meta1);
 
     // Overwrite slot 0 with removed=true, publish.
     var meta2 = meta1;
     meta2.idx_fwd = 0;
     meta2.removed = true;
-    node_buffer.storePublishedMeta(meta2);
+    node_buffer.storePublicationState(meta2);
 
     try testing.expect(meta2.removed);
-    try testing.expect(node_buffer.loadPublishedMeta().removed);
+    try testing.expect(node_buffer.loadPublicationState().removed);
 
     // publishedAdj() rebuilds flags from side buffers → carries meta2.flags() = removed=true.
     // This is correct — it reflects the latest published state.
     try testing.expect(node_buffer.publishedAdj().flags.removed);
 
-    // But publishedAdjFromMeta(meta0) would carry meta0.flags() = removed=false.
+    // But publishedAdjFromState(meta0) would carry meta0.flags() = removed=false.
     // The flags field in NodeAdj is set from meta.flags(), which is stable per-meta.
     // The side-buffer issue is separate (block indices can be stale).
     // Flags come from meta.flags() directly, so they stay consistent with the meta snapshot.
-    const snapshot_from_meta0 = node_buffer.publishedAdjFromMeta(meta0);
+    const snapshot_from_meta0 = node_buffer.publishedAdjFromState(meta0);
     try testing.expect(!snapshot_from_meta0.flags.removed);
 }
 
@@ -165,17 +165,17 @@ test "snapshot coherence: mixed fwd/rev slot reuse corrupts both sides simultane
     // State A: fwd=0 rev=0, side buffers at originals
     const fwd_a = try graph.allocBlockFwd();
     const rev_a = try graph.allocBlockRev();
-    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_a, .block_count = 1, .group_count = 0, .first_group = 0 };
-    publishedOfTest(&graph, node).rev[0] = types.SideAdj{ .first_block = rev_a, .block_count = 1, .group_count = 0, .first_group = 0 };
-    var meta0 = node_buffer.loadPublishedMeta();
+    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_a, .block_count = 1, .segment_count = 0, .first_segment = 0 };
+    publishedOfTest(&graph, node).rev[0] = types.SideAdj{ .first_block = rev_a, .block_count = 1, .segment_count = 0, .first_segment = 0 };
+    var meta0 = node_buffer.loadPublicationState();
     meta0.idx_fwd = 0;
     meta0.idx_rev = 0;
-    node_buffer.storePublishedMeta(meta0);
+    node_buffer.storePublicationState(meta0);
 
     // Flip both independently: fwd→1, rev still 0
     var meta1 = meta0;
     meta1.idx_fwd = 1;
-    node_buffer.storePublishedMeta(meta1);
+    node_buffer.storePublicationState(meta1);
 
     // After just flipping fwd, slot 0 for fwd is now inactive but still holds A.
     // The reverse side has NOT flipped, so slot 0 for rev is still active.
@@ -183,17 +183,17 @@ test "snapshot coherence: mixed fwd/rev slot reuse corrupts both sides simultane
     // Now flip both: fwd→0, rev→1. This reuses fwd slot 0 which is stale.
     const fwd_b = try graph.allocBlockFwd();
     const rev_b = try graph.allocBlockRev();
-    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_b, .block_count = 2, .group_count = 0, .first_group = 0 };
-    publishedOfTest(&graph, node).rev[1] = types.SideAdj{ .first_block = rev_b, .block_count = 2, .group_count = 0, .first_group = 0 };
+    publishedOfTest(&graph, node).fwd[0] = types.SideAdj{ .first_block = fwd_b, .block_count = 2, .segment_count = 0, .first_segment = 0 };
+    publishedOfTest(&graph, node).rev[1] = types.SideAdj{ .first_block = rev_b, .block_count = 2, .segment_count = 0, .first_segment = 0 };
     var meta2 = meta1;
     meta2.idx_fwd = 0;
     meta2.idx_rev = 1;
-    node_buffer.storePublishedMeta(meta2);
+    node_buffer.storePublicationState(meta2);
 
     // A reader with cached meta0 (fwd=0 rev=0) now reads:
     //  - fwd slot 0 = fwd_b (overwritten by subsequent publish)
     //  - rev slot 0 = rev_a (never overwritten, still correct for meta0)
-    const snapshot = node_buffer.publishedAdjFromMeta(meta0);
+    const snapshot = node_buffer.publishedAdjFromState(meta0);
     try testing.expectEqual(@as(u32, fwd_b), snapshot.first_block_fwd);
     try testing.expectEqual(@as(u32, rev_a), snapshot.first_block_rev);
 

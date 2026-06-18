@@ -5,7 +5,7 @@ const constants = @import("../../../core/constants.zig");
 const graph_core = @import("../../../core/graph_core.zig");
 const node_access = @import("../../../core/node_access.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
-const node_published = @import("../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../storage/node/adjacency_buffers.zig");
 const types = @import("../../../core/types.zig");
 const adjacency = @import("../../../adjacency/mod.zig");
 const rcu = @import("../../../concurrency/rcu.zig");
@@ -49,7 +49,7 @@ pub fn repairBothSides(graph: *graph_core.GraphCore, node: types.NodeId) !bool {
 }
 
 /// True when the side is in compact canonical form: empty, tiny, or a single
-/// contiguous run whose non-tail blocks are all full. A non-canonical side is
+/// contiguous segment whose non-tail blocks are all full. A non-canonical side is
 /// the layout precondition for mutation-side `RepairRequired`, so explicit
 /// `repairNode` rebuilds it preventively.
 fn sideIsCanonical(
@@ -58,8 +58,8 @@ fn sideIsCanonical(
     comptime side: adjacency.AdjSide,
 ) bool {
     if (side_view.block_count == 0) return true;
-    if (node_published.NodePublished.isTiny(&side_view)) return true;
-    if (side_view.group_count != 0) return false;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_view)) return true;
+    if (side_view.segment_count != 0) return false;
 
     const tail_block_idx = side_view.first_block + side_view.block_count - 1;
     for (side_view.first_block..tail_block_idx) |block_idx_usize| {
@@ -113,8 +113,8 @@ fn rebuildTinyReverseSideForRepair(
     published_side: *const types.SideAdj,
     published_adj: *const types.NodeAdj,
 ) !RepairRebuild {
-    const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .rev);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(published_side);
+    const slot = page_ops.tinySlotAtConst(graph, published_side.first_block, .rev);
 
     var alive_total: u16 = 0;
     for (0..count) |entry_idx| {
@@ -130,8 +130,8 @@ fn rebuildTinyReverseSideForRepair(
         return .{ .staging_adj = staging_adj, .alive_total = 0 };
     }
 
-    const new_slot_idx = try page_ops.allocTinyBlockRaw(graph, .rev);
-    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .rev);
+    const new_slot_idx = try page_ops.allocTinySlotRaw(graph, .rev);
+    const new_block = page_ops.tinySlotAt(graph, new_slot_idx, .rev);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
         const source_idx = slot.sources[entry_idx];
@@ -140,7 +140,7 @@ fn rebuildTinyReverseSideForRepair(
         write_idx += 1;
     }
 
-    side_adj.writeSide(&staging_adj, .rev, node_published.NodePublished.makeTiny(new_slot_idx, write_idx));
+    side_adj.writeSide(&staging_adj, .rev, node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(new_slot_idx, write_idx));
     return .{ .staging_adj = staging_adj, .alive_total = write_idx };
 }
 
@@ -150,13 +150,13 @@ fn rebuildSideForRepair(
     published_adj: *const types.NodeAdj,
     comptime side: adjacency.AdjSide,
 ) !RepairRebuild {
-    if (side == .rev and node_published.NodePublished.isTiny(published_side)) {
+    if (side == .rev and node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(published_side)) {
         return rebuildTinyReverseSideForRepair(graph, published_side, published_adj);
     }
 
     var sorted = switch (side) {
-        .fwd => try rebuild_mod.sortedRebuildForward(graph, published_side.first_block, published_side.block_count, published_side.group_count, published_side.first_group, graph.allocator),
-        .rev => try rebuild_mod.sortedRebuildReverse(graph, published_side.first_block, published_side.block_count, published_side.group_count, published_side.first_group, null, graph.allocator),
+        .fwd => try rebuild_mod.sortedRebuildForward(graph, published_side.first_block, published_side.block_count, published_side.segment_count, published_side.first_segment, graph.allocator),
+        .rev => try rebuild_mod.sortedRebuildReverse(graph, published_side.first_block, published_side.block_count, published_side.segment_count, published_side.first_segment, null, graph.allocator),
     };
     defer sorted.new_blocks.deinit(graph.allocator);
     errdefer sorted.dropped_prop_rows.deinit(graph.allocator);
@@ -182,14 +182,14 @@ fn rebuildSideForRepair(
 fn repairedDegrees(
     graph: *const graph_core.GraphCore,
     node: types.NodeId,
-    meta: types.PublishedMeta,
+    state: types.NodePublicationState,
     alive_total: usize,
     comptime side: adjacency.AdjSide,
 ) PublishedDegrees {
     const new_alive_count: u32 = @intCast(alive_total);
     return switch (side) {
-        .fwd => .{ .fwd = new_alive_count, .rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, meta) },
-        .rev => .{ .fwd = node_access.publishedFwdDegreeFromMetaAtConst(graph, node, meta), .rev = new_alive_count },
+        .fwd => .{ .fwd = new_alive_count, .rev = node_access.publishedRevDegreeFromStateAtConst(graph, node, state) },
+        .rev => .{ .fwd = node_access.publishedFwdDegreeFromStateAtConst(graph, node, state), .rev = new_alive_count },
     };
 }
 
@@ -200,17 +200,17 @@ fn publishRepairedAdjacency(
     degrees: PublishedDegrees,
     comptime rebuilt_side: adjacency.AdjSide,
 ) !void {
-    const published_ref = page_ops.nodePublishedAt(graph, .{ .index = node_idx });
-    const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
+    const buffers_ref = page_ops.nodeAdjacencyBuffersAt(graph, .{ .index = node_idx });
+    const state = node_access.loadPublicationStateAtConst(graph, .{ .index = node_idx });
     // The rebuilt side is emitted in sorted order; the other side keeps its
     // current published sortedness.
-    const sorted_fwd = if (rebuilt_side == .fwd) true else published_ref.publishedFwdSortedFromMeta(meta);
-    const sorted_rev = if (rebuilt_side == .rev) true else published_ref.publishedRevSortedFromMeta(meta);
+    const sorted_fwd = if (rebuilt_side == .fwd) true else buffers_ref.publishedFwdSortedFromState(state);
+    const sorted_rev = if (rebuilt_side == .rev) true else buffers_ref.publishedRevSortedFromState(state);
     side_adj.publishBothAdj(
         graph,
         .{ .index = node_idx },
-        page_ops.nodeMetaAt(graph, .{ .index = node_idx }),
-        published_ref,
+        page_ops.nodePublicationAt(graph, .{ .index = node_idx }),
+        buffers_ref,
         staging_adj,
         degrees.fwd,
         degrees.rev,
@@ -228,8 +228,8 @@ fn publishRepairedSide(
     comptime side: adjacency.AdjSide,
 ) !usize {
     debt_mod.updateRepairDebt(graph, staging_adj, node_idx, side);
-    const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
-    const degrees = repairedDegrees(graph, .{ .index = node_idx }, meta, alive_total, side);
+    const state = node_access.loadPublicationStateAtConst(graph, .{ .index = node_idx });
+    const degrees = repairedDegrees(graph, .{ .index = node_idx }, state, alive_total, side);
 
     try publishRepairedAdjacency(graph, node_idx, staging_adj.*, degrees, side);
 
@@ -266,10 +266,10 @@ fn repairPublishedSide(
 }
 
 fn sideFlagAfter(graph: *const graph_core.GraphCore, node_idx: u32, comptime side: adjacency.AdjSide) bool {
-    const meta = node_access.loadPublishedMetaAtConst(graph, .{ .index = node_idx });
+    const state = node_access.loadPublicationStateAtConst(graph, .{ .index = node_idx });
     return switch (side) {
-        .fwd => meta.needs_repair_fwd,
-        .rev => meta.needs_repair_rev,
+        .fwd => state.needs_repair_fwd,
+        .rev => state.needs_repair_rev,
     };
 }
 

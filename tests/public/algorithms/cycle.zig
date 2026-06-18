@@ -43,9 +43,9 @@ test "two nodes no cycle" {
     var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    const a = try builder.addNode();
-    const b = try builder.addNode();
-    try builder.addEdge(a, b, 0, .{});
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
+    try builder.addEdge(source, destination, 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
@@ -56,10 +56,10 @@ test "two nodes with cycle" {
     var builder = try azigmuth.GraphBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
-    const a = try builder.addNode();
-    const b = try builder.addNode();
-    try builder.addEdge(a, b, 0, .{});
-    try builder.addEdge(b, a, 0, .{});
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
+    try builder.addEdge(source, destination, 0, .{});
+    try builder.addEdge(destination, source, 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
@@ -164,11 +164,11 @@ test "cycle detection ignores removed nodes" {
     var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, .{});
-    try graph.addEdge(b, a, 0, .{});
-    _ = try graph.removeNode(a);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, .{});
+    try graph.addEdge(destination, source, 0, .{});
+    _ = try graph.removeNode(source);
 
     try graph.validate();
     try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));
@@ -222,13 +222,13 @@ test "cycle detection with dense hub and many tombstoned sources is correct" {
     const hub = try graph.addNode();
     const sender_count: usize = 100;
     var senders: [sender_count]azigmuth.NodeId = undefined;
-    for (0..sender_count) |i| {
-        senders[i] = try graph.addNode();
-        try graph.addEdge(senders[i], hub, 0, .{});
+    for (0..sender_count) |sender_idx| {
+        senders[sender_idx] = try graph.addNode();
+        try graph.addEdge(senders[sender_idx], hub, 0, .{});
     }
 
-    for (0..sender_count) |i| {
-        if (i % 3 == 0) _ = try graph.removeNode(senders[i]);
+    for (0..sender_count) |sender_idx| {
+        if (sender_idx % 3 == 0) _ = try graph.removeNode(senders[sender_idx]);
     }
 
     try graph.validate();
@@ -245,15 +245,15 @@ test "cycle detection with tombstoned self-loop node returns false" {
     var graph = try azigmuth.Graph.init(std.testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    try graph.addEdge(a, a, 0, .{});
-    try graph.addEdge(a, b, 0, .{});
-    try graph.addEdge(b, c, 0, .{});
-    try graph.addEdge(c, a, 0, .{});
+    const source = try graph.addNode();
+    const middle = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, source, 0, .{});
+    try graph.addEdge(source, middle, 0, .{});
+    try graph.addEdge(middle, destination, 0, .{});
+    try graph.addEdge(destination, source, 0, .{});
 
-    _ = try graph.removeNode(a);
+    _ = try graph.removeNode(source);
     try graph.validate();
 
     try std.testing.expectEqual(false, try hasCycleOnGraph(graph, std.testing.allocator));

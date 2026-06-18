@@ -1,4 +1,4 @@
-//! Adjacency chain manipulation — groups, block traversal, and edge search.
+//! Adjacency chain manipulation — segments, block traversal, and edge search.
 
 const std = @import("std");
 const constants = @import("../core/constants.zig");
@@ -7,7 +7,7 @@ const node_access = @import("../core/node_access.zig");
 const tiny_config = @import("../core/tiny_config.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const node_published = @import("../storage/node/published.zig");
+const node_adjacency_buffers = @import("../storage/node/adjacency_buffers.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const node_validity = @import("../core/node_validity.zig");
 
@@ -25,9 +25,9 @@ pub fn validateSideAdjLayoutForSide(
     side_adj: types.SideAdj,
     comptime side: AdjSide,
 ) !void {
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        if (side_adj.group_count != 0 or side_adj.first_group != 0) return error.CorruptGraph;
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        if (side_adj.segment_count != 0 or side_adj.first_segment != 0) return error.CorruptGraph;
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         const max_count: u16 = switch (side) {
             .fwd => if (graph.multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE,
             .rev => tiny_config.TINY_REV_CAP,
@@ -42,11 +42,11 @@ pub fn validateSideAdjLayoutForSide(
 
     const block_limit = allocatedBlockCount(graph, side);
     if (side_adj.block_count == 0) {
-        if (side_adj.group_count != 0) return error.CorruptGraph;
+        if (side_adj.segment_count != 0) return error.CorruptGraph;
         return;
     }
 
-    if (side_adj.group_count == 0) {
+    if (side_adj.segment_count == 0) {
         if (side_adj.first_block >= block_limit) return error.CorruptGraph;
         const end = std.math.add(u32, side_adj.first_block, side_adj.block_count) catch return error.CorruptGraph;
         if (end > block_limit) return error.CorruptGraph;
@@ -54,42 +54,42 @@ pub fn validateSideAdjLayoutForSide(
     }
 
     var total_blocks: u32 = 0;
-    if (side_adj.first_group >= graph.loadGroupCount()) return error.CorruptGraph;
-    const end_group = std.math.add(u32, side_adj.first_group, side_adj.group_count) catch return error.CorruptGraph;
-    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
-    for (side_adj.first_group..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        if (group.count == 0) return error.CorruptGraph;
-        if (group.start >= block_limit) return error.CorruptGraph;
-        const end = std.math.add(u32, group.start, group.count) catch return error.CorruptGraph;
+    if (side_adj.first_segment >= graph.loadSegmentCount()) return error.CorruptGraph;
+    const end_segment = std.math.add(u32, side_adj.first_segment, side_adj.segment_count) catch return error.CorruptGraph;
+    if (end_segment > graph.loadSegmentCount()) return error.CorruptGraph;
+    for (side_adj.first_segment..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        if (segment.count == 0) return error.CorruptGraph;
+        if (segment.start >= block_limit) return error.CorruptGraph;
+        const end = std.math.add(u32, segment.start, segment.count) catch return error.CorruptGraph;
         if (end > block_limit) return error.CorruptGraph;
-        total_blocks += group.count;
+        total_blocks += segment.count;
     }
 
     if (total_blocks != side_adj.block_count) return error.CorruptGraph;
 }
 
 pub fn validateSideAdjLayout(graph: *const graph_core.GraphCore, side_adj: types.SideAdj) !void {
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        if (side_adj.group_count != 0 or side_adj.first_group != 0) return error.CorruptGraph;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        if (side_adj.segment_count != 0 or side_adj.first_segment != 0) return error.CorruptGraph;
         return;
     }
     if (side_adj.block_count == 0) {
-        if (side_adj.group_count != 0) return error.CorruptGraph;
+        if (side_adj.segment_count != 0) return error.CorruptGraph;
         return;
     }
-    if (side_adj.group_count == 0) return;
+    if (side_adj.segment_count == 0) return;
 
     var total_blocks: u32 = 0;
-    if (side_adj.first_group >= graph.loadGroupCount()) return error.CorruptGraph;
-    const end_group = std.math.add(u32, side_adj.first_group, side_adj.group_count) catch return error.CorruptGraph;
-    if (end_group > graph.loadGroupCount()) return error.CorruptGraph;
-    for (side_adj.first_group..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        if (group.count == 0) return error.CorruptGraph;
-        total_blocks += group.count;
+    if (side_adj.first_segment >= graph.loadSegmentCount()) return error.CorruptGraph;
+    const end_segment = std.math.add(u32, side_adj.first_segment, side_adj.segment_count) catch return error.CorruptGraph;
+    if (end_segment > graph.loadSegmentCount()) return error.CorruptGraph;
+    for (side_adj.first_segment..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        if (segment.count == 0) return error.CorruptGraph;
+        total_blocks += segment.count;
     }
 
     if (total_blocks != side_adj.block_count) return error.CorruptGraph;
@@ -100,14 +100,14 @@ pub fn sideAdjOfNode(node_adj: types.NodeAdj, comptime side: AdjSide) types.Side
         .fwd => .{
             .first_block = node_adj.first_block_fwd,
             .block_count = node_adj.block_count_fwd,
-            .group_count = node_adj.group_count_fwd,
-            .first_group = node_adj.first_group_fwd,
+            .segment_count = node_adj.segment_count_fwd,
+            .first_segment = node_adj.first_segment_fwd,
         },
         .rev => .{
             .first_block = node_adj.first_block_rev,
             .block_count = node_adj.block_count_rev,
-            .group_count = node_adj.group_count_rev,
-            .first_group = node_adj.first_group_rev,
+            .segment_count = node_adj.segment_count_rev,
+            .first_segment = node_adj.first_segment_rev,
         },
     };
 }
@@ -120,13 +120,13 @@ pub fn validateNodeAdjLayout(graph: *const graph_core.GraphCore, node_adj: types
 
 pub fn tailBlockIndexSideChecked(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) !?u32 {
     if (side_adj.block_count == 0) return null;
-    if (node_published.NodePublished.isTiny(side_adj)) return null;
-    if (side_adj.group_count == 0) return side_adj.first_block + side_adj.block_count - 1;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(side_adj)) return null;
+    if (side_adj.segment_count == 0) return side_adj.first_block + side_adj.block_count - 1;
 
     try validateSideAdjLayout(graph, side_adj.*);
 
-    const tail_group = page_ops.edgeBlockGroupAt(graph, side_adj.first_group + side_adj.group_count - 1);
-    return tail_group.start + tail_group.count - 1;
+    const tail_segment = page_ops.edgeBlockSegmentAt(graph, side_adj.first_segment + side_adj.segment_count - 1);
+    return tail_segment.start + tail_segment.count - 1;
 }
 
 pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.SideAdj) ?u32 {
@@ -136,23 +136,23 @@ pub fn tailBlockIndexSide(graph: *graph_core.GraphCore, side_adj: *const types.S
 pub fn hasEdgeInSideAdjChecked(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, target: u32, globally_sorted: bool) !bool {
     if (side_adj.block_count == 0) return false;
     try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             if (slot.entries[entry_idx].destination == target) return true;
         }
         return false;
     }
-    if (side_adj.group_count == 0) {
+    if (side_adj.segment_count == 0) {
         return hasEdgeInForwardRun(graph, side_adj.first_block, side_adj.block_count, target, globally_sorted);
     }
 
-    const end_group = side_adj.first_group + side_adj.group_count;
-    for (side_adj.first_group..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        if (hasEdgeInForwardRun(graph, group.start, group.count, target, globally_sorted)) return true;
+    const end_segment = side_adj.first_segment + side_adj.segment_count;
+    for (side_adj.first_segment..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        if (hasEdgeInForwardRun(graph, segment.start, segment.count, target, globally_sorted)) return true;
     }
     return false;
 }
@@ -248,8 +248,8 @@ pub fn hasEdgeInAdj(graph: *const graph_core.GraphCore, node_adj: types.NodeAdj,
 }
 
 pub fn findTinyForwardSlotById(graph: *const graph_core.GraphCore, side_adj: types.SideAdj, destination_idx: u32, edge_id: u32) ?u7 {
-    const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-    const count = node_published.NodePublished.tinyCount(&side_adj);
+    const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
         if (entry.destination == destination_idx and entry.edge_id == edge_id) return @intCast(entry_idx);
@@ -281,8 +281,8 @@ pub fn countForwardDestinationMatchesChecked(
     graph: *const graph_core.GraphCore,
     first_block: u32,
     block_count: u32,
-    group_count: u16,
-    first_group: u32,
+    segment_count: u16,
+    first_segment: u32,
     destination_idx: u32,
 ) !u32 {
     if (block_count == 0) return 0;
@@ -290,14 +290,14 @@ pub fn countForwardDestinationMatchesChecked(
     const side_adj: types.SideAdj = .{
         .first_block = first_block,
         .block_count = block_count,
-        .group_count = group_count,
-        .first_group = first_group,
+        .segment_count = segment_count,
+        .first_segment = first_segment,
     };
     try validateSideAdjLayoutForSide(graph, side_adj, .fwd);
 
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyBlockAtConst(graph, first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const slot = page_ops.tinySlotAtConst(graph, first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         var total_tiny: u32 = 0;
         for (0..count) |entry_idx| {
             if (slot.entries[entry_idx].destination == destination_idx) total_tiny += 1;
@@ -307,7 +307,7 @@ pub fn countForwardDestinationMatchesChecked(
 
     var total: u32 = 0;
 
-    if (group_count == 0) {
+    if (segment_count == 0) {
         for (first_block..first_block + block_count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             total += countForwardInBlock(block, page_ops.blockAliveCount(graph, @intCast(block_idx), .fwd), destination_idx);
@@ -315,11 +315,11 @@ pub fn countForwardDestinationMatchesChecked(
         return total;
     }
 
-    const end_group = first_group + group_count;
-    for (first_group..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx| {
+    const end_segment = first_segment + segment_count;
+    for (first_segment..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        for (segment.start..segment.start + segment.count) |block_idx| {
             const block = page_ops.edgeBlockAtConst(graph, @intCast(block_idx), .fwd);
             total += countForwardInBlock(block, page_ops.blockAliveCount(graph, @intCast(block_idx), .fwd), destination_idx);
         }
@@ -331,16 +331,16 @@ pub fn countForwardDestinationMatches(
     graph: *const graph_core.GraphCore,
     first_block: u32,
     block_count: u32,
-    group_count: u16,
-    first_group: u32,
+    segment_count: u16,
+    first_segment: u32,
     destination_idx: u32,
 ) u32 {
     return countForwardDestinationMatchesChecked(
         graph,
         first_block,
         block_count,
-        group_count,
-        first_group,
+        segment_count,
+        first_segment,
         destination_idx,
     ) catch 0;
 }

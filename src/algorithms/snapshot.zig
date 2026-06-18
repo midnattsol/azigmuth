@@ -93,7 +93,7 @@ pub const ReadSnapshot = struct {
     /// Executes a Wayfind plan against this captured view. The query sees
     /// exactly this snapshot; later graph mutations are invisible.
     pub fn wayfind(self: *const ReadSnapshot, plan: wayfind_mod.Plan, ctx: context_mod.Context, params: wayfind_mod.Params) wayfind_mod.ExecError!wayfind_mod.Result {
-        return wayfind_exec.run(plan, &self.view, ctx, params);
+        return wayfind_exec.segment(plan, &self.view, ctx, params);
     }
 
     /// Copies the snapshot's logical forward adjacency into caller-owned flat

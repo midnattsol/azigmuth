@@ -6,7 +6,7 @@ const side_ops = @import("../../adjacency/side_ops.zig");
 const side_traversal = @import("../side_traversal.zig");
 const snapshot_capture = @import("capture.zig");
 const snapshot_view = @import("view.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 const node_tiny = @import("../../storage/node/tiny.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 
@@ -30,21 +30,21 @@ fn initNeighborCursor(
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
         .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_idx = cursor_init.traversal.current_group_idx,
+        .current_segment_idx = cursor_init.traversal.current_segment_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_block = cursor_init.tiny.tiny_block,
+        .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_candidates = check_removed_candidates,
-        .group_count_bound = cursor_init.group_count_bound,
+        .segment_count_bound = cursor_init.segment_count_bound,
         .degree_hint = degree_hint,
     };
     if (cursor.tiny_mode) {
         switch (direction) {
-            .fwd => cursor.cached_tiny_fwd = page_ops.tinyBlockAtConst(view.core, cursor.tiny_block, .fwd),
-            .rev => cursor.cached_tiny_rev = page_ops.tinyBlockAtConst(view.core, cursor.tiny_block, .rev),
+            .fwd => cursor.cached_tiny_fwd = page_ops.tinySlotAtConst(view.core, cursor.tiny_slot, .fwd),
+            .rev => cursor.cached_tiny_rev = page_ops.tinySlotAtConst(view.core, cursor.tiny_slot, .rev),
         }
     }
-    side_traversal.primeGroupedTraversal(&cursor, view.core);
+    side_traversal.primeSegmentedTraversal(&cursor, view.core);
     return cursor;
 }
 
@@ -59,17 +59,17 @@ fn initOutEdgeCursor(
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
         .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_idx = cursor_init.traversal.current_group_idx,
+        .current_segment_idx = cursor_init.traversal.current_segment_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_block = cursor_init.tiny.tiny_block,
+        .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_destinations = check_removed_destinations,
-        .group_count_bound = cursor_init.group_count_bound,
+        .segment_count_bound = cursor_init.segment_count_bound,
     };
     if (iterator.tiny_mode) {
-        iterator.cached_tiny_fwd = page_ops.tinyBlockAtConst(view.core, iterator.tiny_block, .fwd);
+        iterator.cached_tiny_fwd = page_ops.tinySlotAtConst(view.core, iterator.tiny_slot, .fwd);
     }
-    side_traversal.primeGroupedTraversal(&iterator, view.core);
+    side_traversal.primeSegmentedTraversal(&iterator, view.core);
     return iterator;
 }
 
@@ -80,29 +80,29 @@ pub const SnapshotNeighborIterator = struct {
     contiguous_mode: bool,
     current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_idx: u32,
+    current_segment_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_block: u32 = 0,
+    tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
-    cached_tiny_rev: ?*const node_tiny.TinyRevBlock = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_alive_raw: usize = 0,
 
     check_removed_candidates: bool,
-    groups_visited: u16 = 0,
-    group_count_bound: u16 = 0,
+    segments_visited: u16 = 0,
+    segment_count_bound: u16 = 0,
     degree_hint: u32 = 0,
 
-    fn advanceToNextGroup(self: *SnapshotNeighborIterator) bool {
-        return side_traversal.advanceToNextGroup(self, self.view.core);
+    fn advanceToNextSegment(self: *SnapshotNeighborIterator) bool {
+        return side_traversal.advanceToNextSegment(self, self.view.core);
     }
 
     fn loadNextNonEmptySpan(self: *SnapshotNeighborIterator) bool {
@@ -206,28 +206,28 @@ pub const SnapshotOutEdgeIterator = struct {
     contiguous_mode: bool,
     current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_idx: u32,
+    current_segment_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_block: u32 = 0,
+    tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_alive_raw: usize = 0,
 
     check_removed_destinations: bool,
-    groups_visited: u16 = 0,
-    group_count_bound: u16 = 0,
+    segments_visited: u16 = 0,
+    segment_count_bound: u16 = 0,
 
-    fn advanceToNextGroup(self: *SnapshotOutEdgeIterator) bool {
-        return side_traversal.advanceToNextGroup(self, self.view.core);
+    fn advanceToNextSegment(self: *SnapshotOutEdgeIterator) bool {
+        return side_traversal.advanceToNextSegment(self, self.view.core);
     }
 
     fn loadNextNonEmptySpan(self: *SnapshotOutEdgeIterator) bool {
@@ -312,9 +312,9 @@ pub fn forEachNeighborInView(
     const len_bound: u32 = @intCast(view.node_state.len);
     const check_removed = view.needsRepairFwd(node_idx);
 
-    if (node_published.NodePublished.isTiny(&side)) {
-        const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side)) {
+        const slot = page_ops.tinySlotAtConst(view.core, side.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side);
         for (0..count) |entry_idx| {
             const candidate = slot.entries[entry_idx].destination;
             if (candidate >= len_bound) continue;
@@ -365,12 +365,12 @@ pub const FrameNeighborCursor = struct {
         const side = view.fwdSide(node_idx);
         const check_removed = view.needsRepairFwd(node_idx);
 
-        if (side.block_count != 0 and node_published.NodePublished.isTiny(&side)) {
-            const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .fwd);
+        if (side.block_count != 0 and node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side)) {
+            const slot = page_ops.tinySlotAtConst(view.core, side.first_block, .fwd);
             return .{
-                .block_cursor = side_ops.BlockCursor.init(.{ .first_block = 0, .block_count = 0, .group_count = 0, .first_group = 0 }),
+                .block_cursor = side_ops.BlockCursor.init(.{ .first_block = 0, .block_count = 0, .segment_count = 0, .first_segment = 0 }),
                 .tiny_entries = &slot.entries,
-                .current_live = node_published.NodePublished.tinyCount(&side),
+                .current_live = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side),
                 .tiny_mode = true,
                 .check_removed = check_removed,
             };

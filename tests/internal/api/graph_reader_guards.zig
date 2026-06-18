@@ -8,14 +8,14 @@ test "graph readers: neighbor iterator deinit releases RCU reader count" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 
     {
-        var iterator = try graph.neighbors(a);
+        var iterator = try graph.neighbors(source);
         try testing.expectEqual(@as(u32, 1), graph.graph.active_readers.load(.acquire));
         _ = iterator.next();
         iterator.deinit();
@@ -28,14 +28,14 @@ test "graph readers: reader guard remains active until iterator deinit" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
 
     const start_readers = graph.graph.active_readers.load(.acquire);
-    var iterator = try graph.neighbors(a);
+    var iterator = try graph.neighbors(source);
 
     const after_readers = graph.graph.active_readers.load(.acquire);
     try testing.expect(after_readers > start_readers);
@@ -49,9 +49,9 @@ test "graph readers: validate APIs release reader guards" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
     try testing.expectEqual(@as(u32, 0), graph.graph.active_readers.load(.acquire));
     try graph.validate();

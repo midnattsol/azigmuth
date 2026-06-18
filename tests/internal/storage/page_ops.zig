@@ -45,19 +45,19 @@ test "page_ops: forward and reverse block allocation crosses page boundary" {
 
     try testing.expectEqual(constants.EDGE_BLOCKS_PER_PAGE, last_forward_block);
     try testing.expectEqual(constants.EDGE_BLOCKS_PER_PAGE, last_reverse_block);
-        }
+}
 
-test "page_ops: group allocation crosses page boundary" {
+test "page_ops: segment allocation crosses page boundary" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    var last_group: u32 = 0;
-    for (0..constants.EDGE_GROUPS_PER_PAGE + 1) |_| {
-        last_group = try graph.allocGroup();
+    var last_segment: u32 = 0;
+    for (0..constants.EDGE_SEGMENTS_PER_PAGE + 1) |_| {
+        last_segment = try graph.allocSegment();
     }
 
-    try testing.expectEqual(constants.EDGE_GROUPS_PER_PAGE, last_group);
-    }
+    try testing.expectEqual(constants.EDGE_SEGMENTS_PER_PAGE, last_segment);
+}
 
 test "page_ops: reused reverse block starts empty" {
     var graph = try graph_mod.Graph.init(testing.allocator);
@@ -71,7 +71,7 @@ test "page_ops: reused reverse block starts empty" {
     graph.bumpEpoch();
     graph.bumpEpoch();
     graph.reclaimRetired();
-        const next_source = try graph.addNode();
+    const next_source = try graph.addNode();
     try graph.addEdge(next_source, destination, 0, 0);
     try graph.validate();
     try testing.expectEqual(@as(usize, 1), try graph.inDegree(destination));

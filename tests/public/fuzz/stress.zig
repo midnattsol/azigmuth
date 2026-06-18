@@ -7,12 +7,12 @@ const azigmuth = @import("azigmuth");
 const testing = std.testing;
 
 fn expectNoStructuralViolations(violations: []const azigmuth.Violation) !void {
-    for (violations) |v| {
-        switch (v) {
+    for (violations) |violation| {
+        switch (violation) {
             .block_double_owned,
             .block_orphaned_in_free_list,
-            .blockgroup_chain_cycle,
-            .blockgroup_overlap,
+            .blocksegment_chain_cycle,
+            .blocksegment_overlap,
             .retired_block_reachable,
             .unreachable_forward_block,
             .unreachable_reverse_block,
@@ -44,26 +44,26 @@ test "fuzz: sequential add/remove/repair with validate after each step" {
 
         switch (step % 5) {
             0 => {
-                const from: u32 = @intCast((state >> 4) % node_limit);
-                const to: u32 = @intCast(((state >> 16) ^ next_xor) % node_limit);
-                if (from != to) {
-                    _ = graph.addEdge(.{ .index = from }, .{ .index = to }, 0, .{}) catch {};
+                const source_idx: u32 = @intCast((state >> 4) % node_limit);
+                const destination_idx: u32 = @intCast(((state >> 16) ^ next_xor) % node_limit);
+                if (source_idx != destination_idx) {
+                    _ = graph.addEdge(.{ .index = source_idx }, .{ .index = destination_idx }, 0, .{}) catch {};
                 }
             },
             1 => {
-                const from: u32 = @intCast((state >> 8) % node_limit);
-                const to: u32 = @intCast(((state >> 20) ^ next_xor) % node_limit);
-                if (from != to) {
-                    _ = graph.removeEdge(.{ .index = from }, .{ .index = to }) catch {};
+                const source_idx: u32 = @intCast((state >> 8) % node_limit);
+                const destination_idx: u32 = @intCast(((state >> 20) ^ next_xor) % node_limit);
+                if (source_idx != destination_idx) {
+                    _ = graph.removeEdge(.{ .index = source_idx }, .{ .index = destination_idx }) catch {};
                 }
             },
             2 => {
-                const idx: u32 = @intCast(state % node_limit);
-                _ = graph.removeNode(.{ .index = idx }) catch {};
+                const node_idx: u32 = @intCast(state % node_limit);
+                _ = graph.removeNode(.{ .index = node_idx }) catch {};
             },
             3 => {
-                const idx: u32 = @intCast((state >> 12) % node_limit);
-                _ = graph.repairNode(.{ .index = idx }) catch azigmuth.RepairNodeSummary{};
+                const node_idx: u32 = @intCast((state >> 12) % node_limit);
+                _ = graph.repairNode(.{ .index = node_idx }) catch azigmuth.RepairNodeSummary{};
             },
             4 => {
                 _ = graph.repairBudgeted(2) catch {};
@@ -94,15 +94,15 @@ test "fuzz: sequential hot-node add/remove with periodic validate" {
     var state: u64 = 0x12345678_90ABCDEF;
     for (0..150) |step| {
         state = state *% 6364136223846793005 +% 1442695040888963407 +% step;
-        const a: u32 = 0; // hot node
-        const b: u32 = @intCast(1 + (state % 19));
-        if (a != b) {
+        const hot_node_idx: u32 = 0;
+        const peer_idx: u32 = @intCast(1 + (state % 19));
+        if (hot_node_idx != peer_idx) {
             switch (step % 3) {
-                0 => _ = graph.addEdge(.{ .index = a }, .{ .index = b }, 0, .{}) catch {},
-                1 => _ = graph.removeEdge(.{ .index = a }, .{ .index = b }) catch {},
+                0 => _ = graph.addEdge(.{ .index = hot_node_idx }, .{ .index = peer_idx }, 0, .{}) catch {},
+                1 => _ = graph.removeEdge(.{ .index = hot_node_idx }, .{ .index = peer_idx }) catch {},
                 2 => _ = {
-                    _ = graph.addEdge(.{ .index = a }, .{ .index = b }, 0, .{}) catch {};
-                    _ = graph.removeEdge(.{ .index = a }, .{ .index = b }) catch {};
+                    _ = graph.addEdge(.{ .index = hot_node_idx }, .{ .index = peer_idx }, 0, .{}) catch {};
+                    _ = graph.removeEdge(.{ .index = hot_node_idx }, .{ .index = peer_idx }) catch {};
                 },
                 else => unreachable,
             }
@@ -126,16 +126,16 @@ test "fuzz: OOM injection on addEdge/removeEdge/removeNode leaves stable graph" 
         var graph = try azigmuth.Graph.init(failing_allocator.allocator());
         defer graph.deinit();
 
-        const a = try graph.addNode();
-        const b = try graph.addNode();
-        const c = try graph.addNode();
-        try graph.addEdge(a, b, 0, .{});
-        try graph.addEdge(a, c, 0, .{});
+        const source = try graph.addNode();
+        const middle = try graph.addNode();
+        const destination = try graph.addNode();
+        try graph.addEdge(source, middle, 0, .{});
+        try graph.addEdge(source, destination, 0, .{});
 
         failing_allocator.fail_index = failing_allocator.alloc_index + failure_offset;
 
         // Try a mutation that may or may not succeed.
-        const result = graph.addEdge(b, c, 0, .{});
+        const result = graph.addEdge(middle, destination, 0, .{});
         if (result) |_| {
             try testing.expectEqual(@as(u64, 3), graph.edgeCount());
         } else |err| {
@@ -153,14 +153,14 @@ test "fuzz: stress addEdge on same pair 100 times with interleaved repair" {
     var graph = try azigmuth.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
 
     for (0..100) |_| {
         // Add edge (may fail on duplicate).
-        _ = graph.addEdge(a, b, 0, .{}) catch {};
+        _ = graph.addEdge(source, destination, 0, .{}) catch {};
         // Remove edge.
-        _ = graph.removeEdge(a, b) catch {};
+        _ = graph.removeEdge(source, destination) catch {};
 
         _ = graph.validate() catch {};
     }

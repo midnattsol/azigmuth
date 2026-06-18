@@ -40,11 +40,11 @@ pub fn blockListNeedsRepack(
 
 fn blockListRunCount(block_list: []const u32) u16 {
     if (block_list.len == 0) return 0;
-    var run_count: u16 = 1;
+    var segment_count: u16 = 1;
     for (block_list[0 .. block_list.len - 1], block_list[1..]) |current, next| {
-        if (next != current + 1) run_count += 1;
+        if (next != current + 1) segment_count += 1;
     }
-    return run_count;
+    return segment_count;
 }
 
 /// Copies the listed blocks `[merge_start, merge_start + merge_len)` into a
@@ -72,9 +72,9 @@ fn mergeWindowIntoFreshSpan(
     }
 }
 
-/// Resolves a run-bound overflow (more than constants.MAX_GROUPS_PER_NODE runs) with block-level copies
+/// Resolves a segment-bound overflow (more than constants.MAX_SEGMENTS_PER_NODE segments) with block-level copies
 /// only — no per-entry re-sort. A lightly fragmented list (the scattered
-/// single-removal case: one extra run) merges just the cheapest adjacent run
+/// single-removal case: one extra segment) merges just the cheapest adjacent segment
 /// pair; a heavily fragmented one (e.g. a repair rebuild fed from a scattered
 /// free stack) is copied wholesale into one contiguous span, which is O(B)
 /// and strictly cheaper than pairwise merging at that point.
@@ -84,13 +84,13 @@ pub fn coalesceRunsByBlockCopy(
     block_list: *std.ArrayList(u32),
     comptime side: adjacency.AdjSide,
 ) !void {
-    if (blockListRunCount(block_list.items) > constants.MAX_GROUPS_PER_NODE * 2) {
+    if (blockListRunCount(block_list.items) > constants.MAX_SEGMENTS_PER_NODE * 2) {
         try mergeWindowIntoFreshSpan(graph, scratch, block_list, 0, block_list.items.len, side);
         return;
     }
 
-    while (blockListRunCount(block_list.items) > constants.MAX_GROUPS_PER_NODE) {
-        // Single pass: locate the adjacent run pair with the fewest blocks.
+    while (blockListRunCount(block_list.items) > constants.MAX_SEGMENTS_PER_NODE) {
+        // Single pass: locate the adjacent segment pair with the fewest blocks.
         var best_start: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         var previous_start: usize = 0;
@@ -223,7 +223,7 @@ pub fn repackBlockListDense(
 
 /// Applies the hard-bound fixups when needed and builds the side metadata:
 /// occupancy-floor violations take the dense repack (which also restores
-/// contiguity); a pure run-bound overflow takes the cheap block-copy
+/// contiguity); a pure segment-bound overflow takes the cheap block-copy
 /// coalesce.
 pub fn buildSideFromBlockListBounded(
     graph: *graph_core.GraphCore,
@@ -233,7 +233,7 @@ pub fn buildSideFromBlockListBounded(
 ) !types.SideAdj {
     if (blockListNeedsRepack(graph, block_list.items, side)) {
         try repackBlockListDense(graph, scratch, block_list, side);
-    } else if (blockListRunCount(block_list.items) > constants.MAX_GROUPS_PER_NODE) {
+    } else if (blockListRunCount(block_list.items) > constants.MAX_SEGMENTS_PER_NODE) {
         try coalesceRunsByBlockCopy(graph, scratch, block_list, side);
     }
     return buildSideFromBlockList(graph, scratch, block_list.items);

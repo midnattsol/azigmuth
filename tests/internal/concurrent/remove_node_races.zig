@@ -68,9 +68,9 @@ test "concurrent: removeNode survives forward mutation on a predecessor being va
     const predecessor_count: usize = 20;
     var predecessors: [predecessor_count]graph_mod.NodeId = undefined;
 
-    for (0..predecessor_count) |i| {
-        predecessors[i] = try graph.addNode();
-        try graph.addEdge(predecessors[i], target, 0, 0);
+    for (0..predecessor_count) |predecessor_idx| {
+        predecessors[predecessor_idx] = try graph.addNode();
+        try graph.addEdge(predecessors[predecessor_idx], target, 0, 0);
     }
     const other_node = try graph.addNode();
 
@@ -160,8 +160,8 @@ test "concurrent: removeNode observer tolerates transient mixed-version reads" {
     defer graph.deinit();
 
     const target = try graph.addNode();
-    const pred = try graph.addNode();
-    try graph.addEdge(pred, target, 0, 0);
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, target, 0, 0);
 
     var stop = std.atomic.Value(bool).init(false);
     var start_gate = std.atomic.Value(u32).init(2);
@@ -174,7 +174,7 @@ test "concurrent: removeNode observer tolerates transient mixed-version reads" {
     };
     var obs_ctx = DegreeObserverCtx{
         .graph = &graph,
-        .predecessor = pred,
+        .predecessor = predecessor,
         .target = target,
         .stop = &stop,
         .start_gate = &start_gate,
@@ -205,40 +205,40 @@ test "concurrent: removeNode on adjacent endpoints does not double-decrement edg
         var graph = try graph_mod.Graph.init(allocator);
         defer graph.deinit();
 
-        const a = try graph.addNode();
-        const b = try graph.addNode();
-        try graph.addEdge(a, b, 0, 0);
+        const source = try graph.addNode();
+        const destination = try graph.addNode();
+        try graph.addEdge(source, destination, 0, 0);
 
         var stop = std.atomic.Value(bool).init(false);
         var start_gate = std.atomic.Value(u32).init(2);
 
-        var a_ctx = RemoveNodeCtx{
+        var source_ctx = RemoveNodeCtx{
             .graph = &graph,
-            .target = a,
+            .target = source,
             .stop = &stop,
             .start_gate = &start_gate,
         };
-        var b_ctx = RemoveNodeCtx{
+        var destination_ctx = RemoveNodeCtx{
             .graph = &graph,
-            .target = b,
+            .target = destination,
             .stop = &stop,
             .start_gate = &start_gate,
         };
 
-        const thread_a = try std.Thread.spawn(.{}, removeNodeLoop, .{&a_ctx});
-        const thread_b = try std.Thread.spawn(.{}, removeNodeLoop, .{&b_ctx});
+        const source_thread = try std.Thread.spawn(.{}, removeNodeLoop, .{&source_ctx});
+        const destination_thread = try std.Thread.spawn(.{}, removeNodeLoop, .{&destination_ctx});
 
         var wait_for_both: usize = 0;
-        while ((a_ctx.successes.load(.acquire) == 0 or b_ctx.successes.load(.acquire) == 0) and wait_for_both < SpinBudget) : (wait_for_both += 1) {
+        while ((source_ctx.successes.load(.acquire) == 0 or destination_ctx.successes.load(.acquire) == 0) and wait_for_both < SpinBudget) : (wait_for_both += 1) {
             std.atomic.spinLoopHint();
         }
         stop.store(true, .release);
 
-        thread_a.join();
-        thread_b.join();
+        source_thread.join();
+        destination_thread.join();
 
-        try testing.expectEqual(@as(u64, 1), a_ctx.successes.load(.acquire));
-        try testing.expectEqual(@as(u64, 1), b_ctx.successes.load(.acquire));
+        try testing.expectEqual(@as(u64, 1), source_ctx.successes.load(.acquire));
+        try testing.expectEqual(@as(u64, 1), destination_ctx.successes.load(.acquire));
         try testing.expectEqual(@as(u64, 0), graph.edgeCount());
         try graph.validate();
     }
@@ -246,8 +246,8 @@ test "concurrent: removeNode on adjacent endpoints does not double-decrement edg
 
 test "concurrent: removeNode predecessor degree update does not require forward claim" {
     // removeNode must publish
-    // predecessor degree updates via CAS on published_meta WITHOUT claiming
-    // claim_fwd.  The CAS helper (publishMetaFwdUpdated) provides this.
+    // predecessor degree updates via CAS on publication_state WITHOUT claiming
+    // claim_fwd.  The CAS helper (publishStateFwdUpdated) provides this.
     // This test verifies that removeNode tolerates an unrelated forward writer
     // on the predecessor (e.g. celebrity deletion under concurrent mutation).
     var graph = try graph_mod.Graph.init(testing.allocator);
@@ -257,7 +257,7 @@ test "concurrent: removeNode predecessor degree update does not require forward 
     const predecessor = try graph.addNode();
     try graph.addEdge(predecessor, target, 0, 0);
 
-    const predecessor_claim = &graph_mod.page_ops_mod.nodeHotAt(&graph.graph, predecessor).claim_fwd;
+    const predecessor_claim = &graph_mod.page_ops_mod.nodeMutationControlAt(&graph.graph, predecessor).claim_fwd;
     try testing.expectEqual(@as(u8, 0), predecessor_claim.cmpxchgStrong(0, 1, .acq_rel, .acquire) orelse 0);
 
     // removeNode must succeed even though predecessor's claim_fwd is held

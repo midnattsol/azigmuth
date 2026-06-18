@@ -97,8 +97,8 @@ test "repair debt: updateRepairDebtSide flags forward tombstones immediately aft
 
     _ = try graph.removeNode(destination);
 
-    const source_meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
-    try testing.expect(source_meta.needs_repair_fwd);
+    const source_state = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+    try testing.expect(source_state.needs_repair_fwd);
     try graph.validate();
 }
 
@@ -182,10 +182,10 @@ fn addNodesForTest(graph: *graph_mod.Graph, count: usize) !void {
 
 fn fillBlock(graph: *graph_mod.Graph, block_idx: u32, first_destination: u32, count: u7) void {
     var block = page_ops.edgeBlockAt(&graph.graph, block_idx, .fwd);
-    for (0..count) |i| {
-        block.destinations[i] = first_destination + @as(u32, @intCast(i));
-        block.relations[i] = 0;
-        block.flags[i] = 0;
+    for (0..count) |slot_idx| {
+        block.destinations[slot_idx] = first_destination + @as(u32, @intCast(slot_idx));
+        block.relations[slot_idx] = 0;
+        block.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, block_idx, .fwd, @intCast(count));
 }
@@ -322,7 +322,7 @@ test "repair debt: tail underfill remains logically valid and repair-safe" {
 
     // Hot-path mutation may conservatively leave needs_repair_fwd set even
     // when only tail underfill occurred. Repair must preserve logical
-    // correctness, but a grouped non-contiguous rebuild may still carry debt.
+    // correctness, but a segmented non-contiguous rebuild may still carry debt.
     _ = try graph.repairNode(source);
     const node_buffer = try graph.nodeAt(source);
     try testing.expectEqual(@as(usize, destination_count - 2), try graph.outDegree(source));
@@ -358,7 +358,7 @@ test "repair: repairBudgeted with max_steps zero returns zero" {
     try testing.expectEqual(@as(usize, 0), compacted);
 }
 
-test "repair debt: grouped non-tail runs below 4 blocks are valid layout" {
+test "repair debt: segmented non-tail segments below 4 blocks are valid layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -374,18 +374,18 @@ test "repair debt: grouped non-tail runs below 4 blocks are valid layout" {
     fillBlock(&graph, b2, 65, 64);
     fillBlock(&graph, b4, 129, 1);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    const g2 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    const g2 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = 3;
-    publish.publishedFwdSide(node_buffer).group_count = 3;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 3;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
 
     var staging_adj = node_buffer.publishedAdj();
@@ -393,7 +393,7 @@ test "repair debt: grouped non-tail runs below 4 blocks are valid layout" {
     try testing.expect(!staging_adj.flags.needs_repair_fwd);
 }
 
-test "repair debt: validate accepts run fragmentation without repair flag" {
+test "repair debt: validate accepts segment fragmentation without repair flag" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -411,12 +411,12 @@ test "repair debt: validate accepts run fragmentation without repair flag" {
     fillBlock(&graph, b2, 65, 64);
     fillBlock(&graph, b4, 129, 1);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    const g2 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    const g2 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b2, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g2).* = .{ .start = b4, .count = 1 };
 
     try publishReverseSourcesForForwardRange(&graph, node.index, 1, 64);
     try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
@@ -425,8 +425,8 @@ test "repair debt: validate accepts run fragmentation without repair flag" {
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = 3;
-    publish.publishedFwdSide(node_buffer).group_count = 3;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 3;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
     try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(129, .release);
@@ -434,14 +434,14 @@ test "repair debt: validate accepts run fragmentation without repair flag" {
     try graph.validate();
 }
 
-test "repair debt: contiguous MAX_GROUPS_PER_NODE groups do not trigger canonical repair debt" {
+test "repair debt: contiguous MAX_SEGMENTS_PER_NODE segments do not trigger canonical repair debt" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     try addNodesForTest(&graph, 50);
     const node = graph_mod.NodeId{ .index = 0 };
 
-    // Build 4 single-block groups (exactly MAX_GROUPS_PER_NODE).
+    // Build 4 single-block segments (exactly MAX_SEGMENTS_PER_NODE).
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
     const b2 = try graph.allocBlockFwd();
@@ -451,27 +451,27 @@ test "repair debt: contiguous MAX_GROUPS_PER_NODE groups do not trigger canonica
     fillBlock(&graph, b2, 129, 64);
     fillBlock(&graph, b3, 193, 1);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    const g2 = try graph.allocGroup();
-    const g3 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g3).* = .{ .start = b3, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    const g2 = try graph.allocSegment();
+    const g3 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g3).* = .{ .start = b3, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = 4;
-    publish.publishedFwdSide(node_buffer).group_count = 4;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 4;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
 
     var staging_adj = node_buffer.publishedAdj();
     graph_mod.repair_mod.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
     try testing.expect(!staging_adj.flags.needs_repair_fwd);
 }
 
-test "repair debt: repairNode canonicalizes grouped contiguous layout preventively" {
+test "repair debt: repairNode canonicalizes segmented contiguous layout preventively" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -485,12 +485,12 @@ test "repair debt: repairNode canonicalizes grouped contiguous layout preventive
     fillBlock(&graph, b1, 65, 64);
     fillBlock(&graph, b2, 129, 1);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    const g2 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    const g2 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
 
     try publishReverseSourcesForForwardRange(&graph, node.index, 1, 64);
     try publishReverseSourcesForForwardRange(&graph, node.index, 65, 64);
@@ -500,14 +500,14 @@ test "repair debt: repairNode canonicalizes grouped contiguous layout preventive
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).first_block = b0;
     publish.publishedFwdSide(node_buffer).block_count = 3;
-    publish.publishedFwdSide(node_buffer).group_count = 3;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 3;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(129)));
     publish.setPublishedFlags(node_buffer, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(129, .release);
 
-    // Explicit repairNode performs preventive canonicalization: the grouped
+    // Explicit repairNode performs preventive canonicalization: the segmented
     // layout is rebuilt into a compact form and the work is reported.
     const summary = try graph.repairNode(node);
     try testing.expect(summary.repaired_fwd);
@@ -599,7 +599,7 @@ test "repair debt: repairBudgeted skips removed queue entries and still compacts
     try testing.expectEqual(@as(usize, 0), try graph.outDegree(source));
 }
 
-test "repair debt: repairNode canonicalizes single-block grouped adjacency preventively" {
+test "repair debt: repairNode canonicalizes single-block segmented adjacency preventively" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -608,8 +608,8 @@ test "repair debt: repairNode canonicalizes single-block grouped adjacency preve
     const b0 = try graph.allocBlockFwd();
     fillBlock(&graph, b0, 1, 1);
 
-    const g0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    const g0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     // Reverse backlink so forward/reverse consistency holds.
     const rb = try graph.allocBlockRev();
@@ -628,8 +628,8 @@ test "repair debt: repairNode canonicalizes single-block grouped adjacency preve
     publish.clearPublishedSides(node);
     publish.publishedFwdSide(node).first_block = b0;
     publish.publishedFwdSide(node).block_count = 1;
-    publish.publishedFwdSide(node).group_count = 1;
-    publish.publishedFwdSide(node).first_group = g0;
+    publish.publishedFwdSide(node).segment_count = 1;
+    publish.publishedFwdSide(node).first_segment = g0;
     publish.setPublishedFwdDegree(node, @as(u22, @intCast(1)));
     publish.setPublishedFlags(node, .{ .needs_repair_fwd = true, .needs_repair_rev = false, .removed = false });
     try publish.syncToPublished(&graph, 0);
@@ -640,7 +640,7 @@ test "repair debt: repairNode canonicalizes single-block grouped adjacency preve
     try graph.validate();
 
     const repaired = try graph.publishedNodeAdj(.{ .index = 0 });
-    try testing.expectEqual(@as(u16, 0), repaired.group_count_fwd);
+    try testing.expectEqual(@as(u16, 0), repaired.segment_count_fwd);
     try testing.expectEqual(@as(u32, 1), repaired.block_count_fwd);
     try testing.expect(!repaired.flags.removed);
 }
@@ -665,11 +665,11 @@ test "repair debt: flushRepairs does not discover unflagged tombstone debt" {
     // Clear needs_repair_fwd and all repair-debt sources. flushRepairs should
     // drain only explicit debt, so the tombstone must remain untouched.
     {
-        var meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
-        var flags = meta.flags();
+        var state = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+        var flags = state.flags();
         flags.needs_repair_fwd = false;
-        meta = meta.withFlags(flags);
-        publish.storePublishedMeta(&graph, source.index, meta);
+        state = state.withFlags(flags);
+        publish.storePublicationState(&graph, source.index, state);
     }
 
     // Drain best-effort queues.
@@ -691,14 +691,14 @@ test "repair debt: flushRepairs does not discover unflagged tombstone debt" {
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 }
 
-test "repair debt: valid two-run grouped forward adjacency does not set spurious needs_repair" {
+test "repair debt: valid two-segment segmented forward adjacency does not set spurious needs_repair" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     try addNodesForTest(&graph, 258);
     const node = graph_mod.NodeId{ .index = 0 };
 
-    // Group 0: 4 contiguous full blocks (all at or above MIN_OCCUPANCY).
+    // Segment 0: 4 contiguous full blocks (all at or above MIN_OCCUPANCY).
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
     const b2 = try graph.allocBlockFwd();
@@ -709,33 +709,33 @@ test "repair debt: valid two-run grouped forward adjacency does not set spurious
     fillBlock(&graph, b3, 193, 64);
 
     // Block at the next index is allocated but not owned by any node,
-    // creating a physical gap so the two groups are non-contiguous and
-    // a grouped-but-contiguous canonicalization is not required.
+    // creating a physical gap so the two segments are non-contiguous and
+    // a segmented-but-contiguous canonicalization is not required.
     _ = try graph.allocBlockFwd();
 
-    // Group 1: single tail block.
+    // Segment 1: single tail block.
     const b5 = try graph.allocBlockFwd();
     fillBlock(&graph, b5, 257, 1);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 4 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b5, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 4 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b5, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).first_block = b0;
     publish.publishedFwdSide(node_buffer).block_count = 5;
-    publish.publishedFwdSide(node_buffer).group_count = 2;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 2;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(257)));
 
     var staging_adj = node_buffer.publishedAdj();
     graph_mod.repair_mod.updateRepairDebt(&graph.graph, &staging_adj, node.index, .fwd);
 
-    // This is a healthy grouped adjacency: 4 full blocks in the
-    // first run (≥4 blocks, no under-full non-tail), 1 tail block
-    // in the second run, groups are non-contiguous, no tombstones.
+    // This is a healthy segmented adjacency: 4 full blocks in the
+    // first segment (≥4 blocks, no under-full non-tail), 1 tail block
+    // in the second segment, segments are non-contiguous, no tombstones.
     // needs_repair_fwd must NOT be set.
     try testing.expect(!staging_adj.flags.needs_repair_fwd);
 }
@@ -752,20 +752,20 @@ test "repair debt: globally sorted bit gates conclusive lookup" {
 
     // Ascending hot-path appends preserve the sorted bit; an out-of-order
     // insert (a destination below every prior one) clears it conservatively.
-    const ascending_published = page_ops.nodePublishedAtConst(&graph.graph, source);
-    const ascending_meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
-    try testing.expect(ascending_published.publishedFwdSortedFromMeta(ascending_meta));
+    const ascending_buffers = page_ops.nodeAdjacencyBuffersAtConst(&graph.graph, source);
+    const ascending_state = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+    try testing.expect(ascending_buffers.publishedFwdSortedFromState(ascending_state));
 
     try graph.addEdge(source, .{ .index = 0 }, 0, 0);
-    const node_published_before = page_ops.nodePublishedAtConst(&graph.graph, source);
-    const meta_before = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
-    try testing.expect(!node_published_before.publishedFwdSortedFromMeta(meta_before));
+    const node_buffers_before = page_ops.nodeAdjacencyBuffersAtConst(&graph.graph, source);
+    const state_before = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+    try testing.expect(!node_buffers_before.publishedFwdSortedFromState(state_before));
 
     // Explicit repair rebuilds sorted and publishes the bit.
     _ = try graph.repairNode(source);
-    const node_published_after = page_ops.nodePublishedAtConst(&graph.graph, source);
-    const meta_after = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
-    try testing.expect(node_published_after.publishedFwdSortedFromMeta(meta_after));
+    const node_buffers_after = page_ops.nodeAdjacencyBuffersAtConst(&graph.graph, source);
+    const state_after = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+    try testing.expect(node_buffers_after.publishedFwdSortedFromState(state_after));
 
     // Lookups still behave identically: hits found, misses conclusive.
     try testing.expectError(error.EdgeAlreadyExists, graph.addEdge(source, .{ .index = 5 }, 0, 0));

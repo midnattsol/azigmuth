@@ -18,7 +18,7 @@ test "cloneForwardBlock copies payload and alive-count sidecar" {
     defer graph.deinit();
 
     var nodes: [6]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk = try graph.allocBlockFwd();
     const source_block = page_ops.edgeBlockAt(&graph.graph, blk, .fwd);
@@ -48,7 +48,7 @@ test "cloneReverseBlock copies payload and alive-count sidecar" {
     defer graph.deinit();
 
     var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk = try graph.allocBlockRev();
     const source_block = page_ops.edgeBlockAt(&graph.graph, blk, .rev);
@@ -72,14 +72,14 @@ test "ensureForwardFastPathAllowedIfBlock: tiny sides always pass" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    const ref = try graph.nodeAt(a);
-    const fwd = ref.publishedFwd();
+    const source_ref = try graph.nodeAt(source);
+    const source_fwd = source_ref.publishedFwd();
     // Tiny storage never needs the block fast-path check, even without a hit.
-    try fast_path.ensureForwardFastPathAllowedIfBlock(&graph.graph, &fwd, null);
+    try fast_path.ensureForwardFastPathAllowedIfBlock(&graph.graph, &source_fwd, null);
 }
 
 test "ensureForwardFastPathAllowedIfBlock: block sides demand a located slot and tail locality" {
@@ -87,7 +87,7 @@ test "ensureForwardFastPathAllowedIfBlock: block sides demand a located slot and
     defer graph.deinit();
 
     var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk0 = try graph.allocBlockFwd();
     const b0 = page_ops.edgeBlockAt(&graph.graph, blk0, .fwd);
@@ -103,13 +103,13 @@ test "ensureForwardFastPathAllowedIfBlock: block sides demand a located slot and
     b1.flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, blk1, .fwd, 1);
 
-    const single = types.SideAdj{ .first_block = blk0, .block_count = 1, .group_count = 0, .first_group = 0 };
+    const single = types.SideAdj{ .first_block = blk0, .block_count = 1, .segment_count = 0, .first_segment = 0 };
     // A block side without a located slot is corruption.
     try testing.expectError(error.CorruptGraph, fast_path.ensureForwardFastPathAllowedIfBlock(&graph.graph, &single, null));
     // Single-block sides allow removal anywhere.
     try fast_path.ensureForwardFastPathAllowedIfBlock(&graph.graph, &single, .{ .block_idx = blk0, .slot = 0 });
 
-    const double = types.SideAdj{ .first_block = blk0, .block_count = 2, .group_count = 0, .first_group = 0 };
+    const double = types.SideAdj{ .first_block = blk0, .block_count = 2, .segment_count = 0, .first_segment = 0 };
     // Multi-block sides only allow the fast path in the tail block.
     try testing.expectError(error.RepairRequired, fast_path.ensureForwardFastPathAllowedIfBlock(&graph.graph, &double, .{ .block_idx = blk0, .slot = 0 }));
     try fast_path.ensureForwardFastPathAllowedIfBlock(&graph.graph, &double, .{ .block_idx = blk1, .slot = 0 });

@@ -3,7 +3,7 @@ const constants = @import("../../../../core/constants.zig");
 const graph_core = @import("../../../../core/graph_core.zig");
 const types = @import("../../../../core/types.zig");
 const page_ops = @import("../../../../storage/page_ops.zig");
-const node_published = @import("../../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../../storage/node/adjacency_buffers.zig");
 const common = @import("../../../common.zig");
 const rebuild_common = @import("common.zig");
 const rebuild_tiny = @import("tiny.zig");
@@ -134,7 +134,7 @@ pub fn rebuildForwardRemoveAll(
     destination_idx: u32,
     scratch: *common.MutationScratch,
 ) !rebuild_common.ForwardRemovalResult {
-    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveAll(graph, published_side, destination_idx, scratch);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveAll(graph, published_side, destination_idx, scratch);
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);
@@ -150,7 +150,7 @@ pub fn rebuildForwardRemoveOneById(
     edge_id: u32,
     scratch: *common.MutationScratch,
 ) !?types.SideAdj {
-    if (node_published.NodePublished.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveOneById(graph, published_side, destination_idx, edge_id, scratch);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(published_side)) return rebuild_tiny.rebuildTinyForwardRemoveOneById(graph, published_side, destination_idx, edge_id, scratch);
 
     var block_list = try std.ArrayList(u32).initCapacity(graph.allocator, published_side.block_count);
     defer block_list.deinit(graph.allocator);

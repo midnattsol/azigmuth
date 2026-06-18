@@ -7,11 +7,11 @@ const azigmuth = @import("azigmuth");
 
 const testing = std.testing;
 
-fn buildChain(graph: *azigmuth.Graph, len: usize) ![]azigmuth.NodeId {
-    const nodes = try testing.allocator.alloc(azigmuth.NodeId, len);
+fn buildChain(graph: *azigmuth.Graph, node_count: usize) ![]azigmuth.NodeId {
+    const nodes = try testing.allocator.alloc(azigmuth.NodeId, node_count);
     errdefer testing.allocator.free(nodes);
     for (nodes) |*node| node.* = try graph.addNode();
-    for (0..len - 1) |i| try graph.addEdge(nodes[i], nodes[i + 1], 0, .{});
+    for (0..node_count - 1) |node_idx| try graph.addEdge(nodes[node_idx], nodes[node_idx + 1], 0, .{});
     return nodes;
 }
 

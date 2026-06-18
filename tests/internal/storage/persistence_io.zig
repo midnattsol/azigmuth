@@ -24,7 +24,7 @@ test "persistence: skeletons compile" {
 
 // ── writer ───────────────────────────────────────────────────────────────
 // Build a small but representative graph for all of these: a few nodes with
-// block adjacency, one tiny node, grouped runs if cheap, some removeEdge
+// block adjacency, one tiny node, segmented segments if cheap, some removeEdge
 // churn so the free stacks are non-empty, then reclaim + save into
 // std.testing.tmpDir.
 
@@ -115,7 +115,7 @@ test "load: rejects hostile indices that pass checksums" {
 test "frozen: open serves counts, degrees and neighbors equal to the live graph" {
     // TODO: save → FrozenGraph.open → nodeCount/edgeCount/degrees and
     // neighbor iteration match the source graph for every node (tiny,
-    // contiguous and grouped sides all covered).
+    // contiguous and segmented sides all covered).
     return error.SkipZigTest;
 }
 

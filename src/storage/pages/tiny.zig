@@ -13,32 +13,32 @@ const index_stack = @import("index_stack.zig");
 const EMPTY_INDEX = index_stack.EMPTY_INDEX;
 const StackKind = index_stack.StackKind;
 
-fn ensureTinyFwdPage(graph: *graph_core.GraphCore, page_idx: u32) ![]node_tiny.TinyFwdBlock {
-    _ = try common.ensureMetaPageSized(graph, &graph.tiny_block_fwd_meta_pages, page_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE);
-    return common.ensurePage(graph, node_tiny.TinyFwdBlock, &graph.tiny_block_fwd_pages, page_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE);
+fn ensureTinyFwdPage(graph: *graph_core.GraphCore, page_idx: u32) ![]node_tiny.TinyFwdSlot {
+    _ = try common.ensureReclamationPageSized(graph, &graph.tiny_fwd_slot_reclamation_pages, page_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
+    return common.ensurePage(graph, node_tiny.TinyFwdSlot, &graph.tiny_fwd_slot_pages, page_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
 }
 
-fn ensureTinyRevPage(graph: *graph_core.GraphCore, page_idx: u32) ![]node_tiny.TinyRevBlock {
-    _ = try common.ensureMetaPageSized(graph, &graph.tiny_block_rev_meta_pages, page_idx, node_tiny.TINY_BLOCKS_REV_PER_PAGE);
-    return common.ensurePage(graph, node_tiny.TinyRevBlock, &graph.tiny_block_rev_pages, page_idx, node_tiny.TINY_BLOCKS_REV_PER_PAGE);
+fn ensureTinyRevPage(graph: *graph_core.GraphCore, page_idx: u32) ![]node_tiny.TinyRevSlot {
+    _ = try common.ensureReclamationPageSized(graph, &graph.tiny_rev_slot_reclamation_pages, page_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
+    return common.ensurePage(graph, node_tiny.TinyRevSlot, &graph.tiny_rev_slot_pages, page_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
 }
 
-fn tinyMetaAt(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) *types.BlockMeta {
+fn tinyReclamationAt(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) *types.ReclamationEntry {
     return switch (side) {
-        .fwd => common.metaEntryAt(&graph.tiny_block_fwd_meta_pages, slot_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE),
-        .rev => common.metaEntryAt(&graph.tiny_block_rev_meta_pages, slot_idx, node_tiny.TINY_BLOCKS_REV_PER_PAGE),
+        .fwd => common.reclamationEntryAt(&graph.tiny_fwd_slot_reclamation_pages, slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE),
+        .rev => common.reclamationEntryAt(&graph.tiny_rev_slot_reclamation_pages, slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE),
     };
 }
 
 fn tinyStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) *std.atomic.Value(u64) {
     return switch (kind) {
         .free => switch (side) {
-            .fwd => &graph.free_tiny_block_fwd_head,
-            .rev => &graph.free_tiny_block_rev_head,
+            .fwd => &graph.free_tiny_fwd_slot_head,
+            .rev => &graph.free_tiny_rev_slot_head,
         },
         .retired => switch (side) {
-            .fwd => &graph.retired_tiny_block_fwd_head,
-            .rev => &graph.retired_tiny_block_rev_head,
+            .fwd => &graph.retired_tiny_fwd_slot_head,
+            .rev => &graph.retired_tiny_rev_slot_head,
         },
     };
 }
@@ -48,18 +48,18 @@ fn tinyStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime si
 }
 
 fn pushTinyStack(graph: *graph_core.GraphCore, slot_idx: u32, comptime kind: StackKind, comptime side: adjacency.AdjSide) void {
-    tinyStack(graph, kind, side).push(tinyMetaAt(graph, slot_idx, side), slot_idx);
+    tinyStack(graph, kind, side).push(tinyReclamationAt(graph, slot_idx, side), slot_idx);
 }
 
 fn popTinyStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) ?u32 {
-    const MetaContext = struct {
+    const EntryContext = struct {
         graph: *graph_core.GraphCore,
 
-        pub fn metaAt(self: @This(), slot_idx: u32) *types.BlockMeta {
-            return tinyMetaAt(self.graph, slot_idx, side);
+        pub fn entryAt(self: @This(), slot_idx: u32) *types.ReclamationEntry {
+            return tinyReclamationAt(self.graph, slot_idx, side);
         }
     };
-    return tinyStack(graph, kind, side).pop(MetaContext{ .graph = graph });
+    return tinyStack(graph, kind, side).pop(EntryContext{ .graph = graph });
 }
 
 /// Returns one tiny slot to the per-side free stack.
@@ -68,15 +68,15 @@ pub fn freeTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: 
 }
 
 /// Moves one tiny slot to the retired stack with its retirement epoch recorded.
-pub fn retireTinyBlock(graph: *graph_core.GraphCore, slot_idx: u32, epoch: u64, comptime side: adjacency.AdjSide) void {
-    const meta = tinyMetaAt(graph, slot_idx, side);
-    meta.epoch.store(epoch, .release);
+pub fn retireTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, epoch: u64, comptime side: adjacency.AdjSide) void {
+    const entry = tinyReclamationAt(graph, slot_idx, side);
+    entry.retired_epoch.store(epoch, .release);
     pushTinyStack(graph, slot_idx, .retired, side);
 }
 
 fn requeueOrFreeRetiredTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
-    const meta = tinyMetaAt(graph, slot_idx, side);
-    const retired_epoch = meta.epoch.load(.acquire);
+    const entry = tinyReclamationAt(graph, slot_idx, side);
+    const retired_epoch = entry.retired_epoch.load(.acquire);
     if (retired_epoch < safe_epoch) {
         freeTinySlot(graph, slot_idx, side);
     } else {
@@ -85,54 +85,54 @@ fn requeueOrFreeRetiredTinySlot(graph: *graph_core.GraphCore, slot_idx: u32, saf
 }
 
 /// Reclaims retired tiny slots whose epoch is now safe for reuse.
-pub fn reclaimRetiredTinyBlocks(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
+pub fn reclaimRetiredTinySlots(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
     var slot_idx = tinyStack(graph, .retired, side).detach();
     while (slot_idx != EMPTY_INDEX) {
-        const meta = tinyMetaAt(graph, slot_idx, side);
-        const next = meta.next.load(.acquire);
+        const entry = tinyReclamationAt(graph, slot_idx, side);
+        const next = entry.next.load(.acquire);
         requeueOrFreeRetiredTinySlot(graph, slot_idx, safe_epoch, side);
         slot_idx = next;
     }
 }
 
-pub fn tinyBlockAt(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) *switch (side) {
-    .fwd => node_tiny.TinyFwdBlock,
-    .rev => node_tiny.TinyRevBlock,
+pub fn tinySlotAt(graph: *graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) *switch (side) {
+    .fwd => node_tiny.TinyFwdSlot,
+    .rev => node_tiny.TinyRevSlot,
 } {
     return switch (side) {
-        .fwd => common.pageEntryAt(node_tiny.TinyFwdBlock, &graph.tiny_block_fwd_pages, slot_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE),
-        .rev => common.pageEntryAt(node_tiny.TinyRevBlock, &graph.tiny_block_rev_pages, slot_idx, node_tiny.TINY_BLOCKS_REV_PER_PAGE),
+        .fwd => common.pageEntryAt(node_tiny.TinyFwdSlot, &graph.tiny_fwd_slot_pages, slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE),
+        .rev => common.pageEntryAt(node_tiny.TinyRevSlot, &graph.tiny_rev_slot_pages, slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE),
     };
 }
 
-pub fn tinyBlockAtConst(graph: *const graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) *const switch (side) {
-    .fwd => node_tiny.TinyFwdBlock,
-    .rev => node_tiny.TinyRevBlock,
+pub fn tinySlotAtConst(graph: *const graph_core.GraphCore, slot_idx: u32, comptime side: adjacency.AdjSide) *const switch (side) {
+    .fwd => node_tiny.TinyFwdSlot,
+    .rev => node_tiny.TinyRevSlot,
 } {
     return switch (side) {
-        .fwd => common.pageEntryAtConst(node_tiny.TinyFwdBlock, &graph.tiny_block_fwd_pages, slot_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE),
-        .rev => common.pageEntryAtConst(node_tiny.TinyRevBlock, &graph.tiny_block_rev_pages, slot_idx, node_tiny.TINY_BLOCKS_REV_PER_PAGE),
+        .fwd => common.pageEntryAtConst(node_tiny.TinyFwdSlot, &graph.tiny_fwd_slot_pages, slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE),
+        .rev => common.pageEntryAtConst(node_tiny.TinyRevSlot, &graph.tiny_rev_slot_pages, slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE),
     };
 }
 
-pub fn allocTinyBlock(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
-    const slot_idx = try allocTinyBlockRaw(graph, side);
-    tinyBlockAt(graph, slot_idx, side).* = switch (side) {
-        .fwd => std.mem.zeroes(node_tiny.TinyFwdBlock),
-        .rev => std.mem.zeroes(node_tiny.TinyRevBlock),
+pub fn allocTinySlot(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+    const slot_idx = try allocTinySlotRaw(graph, side);
+    tinySlotAt(graph, slot_idx, side).* = switch (side) {
+        .fwd => std.mem.zeroes(node_tiny.TinyFwdSlot),
+        .rev => std.mem.zeroes(node_tiny.TinyRevSlot),
     };
     return slot_idx;
 }
 
-/// Like allocTinyBlock but skips zero-initialization. Safe when the caller
+/// Like allocTinySlot but skips zero-initialization. Safe when the caller
 /// fully overwrites the slot (clone) or only entries [0, count) are ever
 /// read by the published descriptor.
-pub fn allocTinyBlockRaw(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+pub fn allocTinySlotRaw(graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
     if (popTinyStack(graph, .free, side)) |slot_idx| return slot_idx;
 
     return switch (side) {
-        .fwd => allocFreshTinyFwdBlock(graph),
-        .rev => allocFreshTinyRevBlock(graph),
+        .fwd => allocFreshTinyFwdSlot(graph),
+        .rev => allocFreshTinyRevSlot(graph),
     } catch |err| switch (err) {
         error.OutOfMemory => {
             rcu.reclaimRetired(graph);
@@ -141,24 +141,24 @@ pub fn allocTinyBlockRaw(graph: *graph_core.GraphCore, comptime side: adjacency.
     };
 }
 
-fn allocFreshTinyFwdBlock(graph: *graph_core.GraphCore) !u32 {
+fn allocFreshTinyFwdSlot(graph: *graph_core.GraphCore) !u32 {
     while (true) {
-        const slot_idx = @atomicLoad(u32, &graph.tiny_block_fwd_count, .acquire);
-        const page_idx = common.pageOf(slot_idx, node_tiny.TINY_BLOCKS_FWD_PER_PAGE);
+        const slot_idx = @atomicLoad(u32, &graph.tiny_fwd_slot_count, .acquire);
+        const page_idx = common.pageOf(slot_idx, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
         _ = try ensureTinyFwdPage(graph, page_idx);
-        if (@cmpxchgWeak(u32, &graph.tiny_block_fwd_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
+        if (@cmpxchgWeak(u32, &graph.tiny_fwd_slot_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
             return slot_idx;
         }
     }
 }
 
-/// See allocTinyBlockRaw.
-fn allocFreshTinyRevBlock(graph: *graph_core.GraphCore) !u32 {
+/// See allocTinySlotRaw.
+fn allocFreshTinyRevSlot(graph: *graph_core.GraphCore) !u32 {
     while (true) {
-        const slot_idx = @atomicLoad(u32, &graph.tiny_block_rev_count, .acquire);
-        const page_idx = common.pageOf(slot_idx, node_tiny.TINY_BLOCKS_REV_PER_PAGE);
+        const slot_idx = @atomicLoad(u32, &graph.tiny_rev_slot_count, .acquire);
+        const page_idx = common.pageOf(slot_idx, node_tiny.TINY_REV_SLOTS_PER_PAGE);
         _ = try ensureTinyRevPage(graph, page_idx);
-        if (@cmpxchgWeak(u32, &graph.tiny_block_rev_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
+        if (@cmpxchgWeak(u32, &graph.tiny_rev_slot_count, slot_idx, slot_idx + 1, .acq_rel, .acquire) == null) {
             return slot_idx;
         }
     }
@@ -171,8 +171,8 @@ pub fn ensureTinyCapacity(graph: *graph_core.GraphCore, required_slot_count: u32
     if (required_slot_count == 0) return;
 
     const per_page = switch (side) {
-        .fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
-        .rev => node_tiny.TINY_BLOCKS_REV_PER_PAGE,
+        .fwd => node_tiny.TINY_FWD_SLOTS_PER_PAGE,
+        .rev => node_tiny.TINY_REV_SLOTS_PER_PAGE,
     };
     const last_page_idx = common.pageOf(required_slot_count - 1, per_page);
     const frontier = switch (side) {

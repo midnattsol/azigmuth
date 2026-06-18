@@ -1,6 +1,6 @@
 //! OutEdgeIterator — forward-only edge iterator that exposes EdgeRef (id,
 //! destination, relation, flags). Returned by value; creation does not
-//! allocate. Shares the same RCU snapshot + group traversal machinery as
+//! allocate. Shares the same RCU snapshot + segment traversal machinery as
 //! NeighborIterator and is likewise a logically single-owner value.
 
 const std = @import("std");
@@ -11,8 +11,8 @@ const side_traversal = @import("side_traversal.zig");
 const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const node_published = @import("../storage/node/published.zig");
-const node_meta_mod = @import("../storage/node/meta.zig");
+const node_adjacency_buffers = @import("../storage/node/adjacency_buffers.zig");
+const node_publication_mod = @import("../storage/node/publication.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
@@ -24,36 +24,36 @@ pub const OutEdgeIterator = struct {
     contiguous_mode: bool,
     current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_idx: u32,
+    current_segment_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_block: u32 = 0,
+    tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     /// Cached so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_fwd_ids: ?*const types.EdgeBlockFwdIds = null,
     cached_fwd_props: ?*const types.EdgeBlockFwdProps = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_alive_raw: usize = 0,
     cached_node_page_idx: u32 = constants.END_OF_CHAIN,
-    cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
+    cached_node_page: ?[]const node_publication_mod.NodePublicationCell = null,
     check_removed_destinations: bool,
 
     reader_active: bool,
     reader_token: rcu.ReaderToken,
     reader_token_retained: bool = false,
 
-    /// Safeguard against corrupt cyclic group chains.
-    groups_visited: u16 = 0,
-    group_count_bound: u16 = 0,
+    /// Safeguard against corrupt cyclic segment chains.
+    segments_visited: u16 = 0,
+    segment_count_bound: u16 = 0,
 
-    fn advanceToNextGroup(self: *OutEdgeIterator) bool {
-        return side_traversal.advanceToNextGroup(self, self.core);
+    fn advanceToNextSegment(self: *OutEdgeIterator) bool {
+        return side_traversal.advanceToNextSegment(self, self.core);
     }
 
     fn destinationRemoved(self: *OutEdgeIterator, destination_idx: u32) bool {
@@ -142,21 +142,21 @@ pub fn outEdges(graph: *const graph_core.GraphCore, node: types.NodeId) types.Gr
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
         .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_idx = cursor_init.traversal.current_group_idx,
+        .current_segment_idx = cursor_init.traversal.current_segment_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_block = cursor_init.tiny.tiny_block,
+        .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
         .check_removed_destinations = capture.node_adj_snapshot.flags.needs_repair_fwd,
         .reader_active = true,
         .reader_token = capture.reader_token,
-        .groups_visited = 0,
-        .group_count_bound = cursor_init.group_count_bound,
+        .segments_visited = 0,
+        .segment_count_bound = cursor_init.segment_count_bound,
     };
 
     if (iterator.tiny_mode) {
-        iterator.cached_tiny_fwd = page_ops.tinyBlockAtConst(graph, iterator.tiny_block, .fwd);
+        iterator.cached_tiny_fwd = page_ops.tinySlotAtConst(graph, iterator.tiny_slot, .fwd);
     }
-    side_traversal.primeGroupedTraversal(&iterator, graph);
+    side_traversal.primeSegmentedTraversal(&iterator, graph);
 
     return iterator;
 }

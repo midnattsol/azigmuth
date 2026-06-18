@@ -53,14 +53,14 @@ fn InlineList(comptime T: type, comptime inline_capacity: usize) type {
 }
 
 pub const MutationScratch = struct {
-    const GroupSpan = struct {
-        first_group_idx: u32,
-        group_count: u16,
+    const SegmentSlots = struct {
+        first_segment_idx: u32,
+        segment_count: u16,
     };
 
     fwd_blocks: InlineList(u32, 8) = .{},
     rev_blocks: InlineList(u32, 8) = .{},
-    groups: InlineList(GroupSpan, 4) = .{},
+    segments: InlineList(SegmentSlots, 4) = .{},
     tiny_fwd_slots: InlineList(u32, 4) = .{},
     tiny_rev_slots: InlineList(u32, 4) = .{},
 
@@ -128,8 +128,8 @@ pub const MutationScratch = struct {
     /// stack on cleanup — no epoch wait is needed.
     pub fn allocTinySlot(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
         const slot_idx = switch (side) {
-            .fwd => try page_ops.allocTinyBlock(graph, .fwd),
-            .rev => try page_ops.allocTinyBlock(graph, .rev),
+            .fwd => try page_ops.allocTinySlot(graph, .fwd),
+            .rev => try page_ops.allocTinySlot(graph, .rev),
         };
         const list = switch (side) {
             .fwd => &self.tiny_fwd_slots,
@@ -144,10 +144,10 @@ pub const MutationScratch = struct {
 
     /// Tracked tiny-slot allocation without zero-init, for callers that
     /// fully overwrite the slot (clone-and-mutate paths).
-    pub fn allocTinyBlockRaw(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
+    pub fn allocTinySlotRaw(self: *MutationScratch, graph: *graph_core.GraphCore, comptime side: adjacency.AdjSide) !u32 {
         const slot_idx = switch (side) {
-            .fwd => try page_ops.allocTinyBlockRaw(graph, .fwd),
-            .rev => try page_ops.allocTinyBlockRaw(graph, .rev),
+            .fwd => try page_ops.allocTinySlotRaw(graph, .fwd),
+            .rev => try page_ops.allocTinySlotRaw(graph, .rev),
         };
         const list = switch (side) {
             .fwd => &self.tiny_fwd_slots,
@@ -204,17 +204,17 @@ pub const MutationScratch = struct {
         return first_block_idx;
     }
 
-    pub fn allocGroup(self: *MutationScratch, graph: *graph_core.GraphCore) !u32 {
-        return self.allocGroupSpan(graph, 1);
+    pub fn allocSegment(self: *MutationScratch, graph: *graph_core.GraphCore) !u32 {
+        return self.allocSegmentSlots(graph, 1);
     }
 
-    pub fn allocGroupSpan(self: *MutationScratch, graph: *graph_core.GraphCore, group_count: u16) !u32 {
-        const first_group_idx = try page_ops.allocGroupSpan(graph, group_count);
-        self.groups.append(graph.allocator, .{ .first_group_idx = first_group_idx, .group_count = group_count }) catch |err| {
-            page_ops.freeGroupSpan(graph, first_group_idx, group_count);
+    pub fn allocSegmentSlots(self: *MutationScratch, graph: *graph_core.GraphCore, segment_count: u16) !u32 {
+        const first_segment_idx = try page_ops.allocSegmentSlots(graph, segment_count);
+        self.segments.append(graph.allocator, .{ .first_segment_idx = first_segment_idx, .segment_count = segment_count }) catch |err| {
+            page_ops.freeSegmentSlots(graph, first_segment_idx, segment_count);
             return err;
         };
-        return first_group_idx;
+        return first_segment_idx;
     }
 
     pub fn adoptBlocks(self: *MutationScratch, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide, blocks: []const u32) !void {
@@ -231,9 +231,9 @@ pub const MutationScratch = struct {
 
     pub fn cleanup(self: *MutationScratch, graph: *graph_core.GraphCore) void {
         if (!self.active) return;
-        for (self.fwd_blocks.items()) |b| page_ops.freeBlock(graph, b, .fwd);
-        for (self.rev_blocks.items()) |b| page_ops.freeBlock(graph, b, .rev);
-        for (self.groups.items()) |group_span| page_ops.freeGroupSpan(graph, group_span.first_group_idx, group_span.group_count);
+        for (self.fwd_blocks.items()) |block_idx| page_ops.freeBlock(graph, block_idx, .fwd);
+        for (self.rev_blocks.items()) |block_idx| page_ops.freeBlock(graph, block_idx, .rev);
+        for (self.segments.items()) |segment_descriptors| page_ops.freeSegmentSlots(graph, segment_descriptors.first_segment_idx, segment_descriptors.segment_count);
         for (self.tiny_fwd_slots.items()) |slot_idx| page_ops.freeTinySlot(graph, slot_idx, .fwd);
         for (self.tiny_rev_slots.items()) |slot_idx| page_ops.freeTinySlot(graph, slot_idx, .rev);
         // Never-published rows go straight back to the free stack.
@@ -243,7 +243,7 @@ pub const MutationScratch = struct {
     pub fn deinit(self: *MutationScratch, allocator: std.mem.Allocator) void {
         self.fwd_blocks.deinit(allocator);
         self.rev_blocks.deinit(allocator);
-        self.groups.deinit(allocator);
+        self.segments.deinit(allocator);
         self.tiny_fwd_slots.deinit(allocator);
         self.tiny_rev_slots.deinit(allocator);
         self.retire_fwd_blocks.deinit(allocator);
@@ -268,18 +268,18 @@ pub const MutationScratch = struct {
         page_ops.freeBlock(graph, block_idx, side);
     }
 
-    pub fn freeGroup(self: *MutationScratch, graph: *graph_core.GraphCore, group: u32) void {
-        self.freeGroupSpan(graph, group, 1);
+    pub fn freeSegment(self: *MutationScratch, graph: *graph_core.GraphCore, segment: u32) void {
+        self.freeSegmentSlots(graph, segment, 1);
     }
 
-    pub fn freeGroupSpan(self: *MutationScratch, graph: *graph_core.GraphCore, first_group_idx: u32, group_count: u16) void {
-        for (self.groups.items(), 0..) |group_span, i| {
-            if (group_span.first_group_idx == first_group_idx and group_span.group_count == group_count) {
-                _ = self.groups.swapRemove(i);
-                page_ops.freeGroupSpan(graph, first_group_idx, group_count);
+    pub fn freeSegmentSlots(self: *MutationScratch, graph: *graph_core.GraphCore, first_segment_idx: u32, segment_count: u16) void {
+        for (self.segments.items(), 0..) |segment_descriptors, segment_list_idx| {
+            if (segment_descriptors.first_segment_idx == first_segment_idx and segment_descriptors.segment_count == segment_count) {
+                _ = self.segments.swapRemove(segment_list_idx);
+                page_ops.freeSegmentSlots(graph, first_segment_idx, segment_count);
                 return;
             }
         }
-        page_ops.freeGroupSpan(graph, first_group_idx, group_count);
+        page_ops.freeSegmentSlots(graph, first_segment_idx, segment_count);
     }
 };

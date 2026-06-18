@@ -91,8 +91,8 @@ pub const GraphBuilder = struct {
     fn setContiguousSide(side: *types.SideAdj, first_block: u32, block_count: u16) void {
         side.first_block = first_block;
         side.block_count = block_count;
-        side.group_count = 0;
-        side.first_group = 0;
+        side.segment_count = 0;
+        side.first_segment = 0;
     }
 
     pub fn init(allocator: std.mem.Allocator) !GraphBuilder {
@@ -147,8 +147,8 @@ pub const GraphBuilder = struct {
         for (0..self.graph.nodeCount()) |node_idx| {
             const node = graph_mod.NodeId{ .index = @intCast(node_idx) };
             node_access.resetPublishedSides(&self.graph.graph, node);
-            page_ops.nodeHotAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storeNextLocalEdgeId(1);
-            page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storePublishedMeta(.{});
+            page_ops.nodeMutationControlAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storeNextLocalEdgeId(1);
+            page_ops.nodePublicationAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storePublicationState(.{});
         }
     }
 
@@ -198,8 +198,8 @@ pub const GraphBuilder = struct {
         return .{ .base_fwd = base_fwd, .base_rev = base_rev };
     }
 
-    fn publishForwardRun(self: *GraphBuilder, source_idx: u32, run: []const BuilderEdge, first_block: u32, block_count: u16, next_prop_row: *u32) void {
-        if (run.len == 0) return;
+    fn publishForwardRun(self: *GraphBuilder, source_idx: u32, segment: []const BuilderEdge, first_block: u32, block_count: u16, next_prop_row: *u32) void {
+        if (segment.len == 0) return;
 
         var edge_idx: usize = 0;
         var next_edge_id: u32 = 1;
@@ -222,10 +222,10 @@ pub const GraphBuilder = struct {
                 null;
             if (prop_block) |fwd_props| fwd_props.* = std.mem.zeroes(types.EdgeBlockFwdProps);
 
-            const remaining = run.len - edge_idx;
+            const remaining = segment.len - edge_idx;
             const alive = @min(remaining, constants.EDGES_PER_BLOCK);
             for (0..alive) |slot| {
-                const edge = run[edge_idx + slot];
+                const edge = segment[edge_idx + slot];
                 block.destinations[slot] = edge.destination;
                 block.relations[slot] = edge.relation;
                 block.flags[slot] = edge.flags;
@@ -244,7 +244,7 @@ pub const GraphBuilder = struct {
 
         const node = graph_mod.NodeId{ .index = source_idx };
         if (self.graph.graph.multigraph_enabled) {
-            page_ops.nodeHotAt(&self.graph.graph, .{ .index = source_idx }).storeNextLocalEdgeId(next_edge_id);
+            page_ops.nodeMutationControlAt(&self.graph.graph, .{ .index = source_idx }).storeNextLocalEdgeId(next_edge_id);
         }
         var side_adj = std.mem.zeroes(types.SideAdj);
         setContiguousSide(&side_adj, first_block, block_count);
@@ -341,9 +341,9 @@ pub const GraphBuilder = struct {
 
     fn publishExactDegrees(self: *GraphBuilder, plan: *const FreezePlan) void {
         for (0..self.graph.nodeCount()) |node_idx| {
-            const meta = (types.PublishedMeta{}).withFwdDegree(@intCast(plan.degrees_fwd[node_idx])).withRevDegree(@intCast(plan.degrees_rev[node_idx]));
-            node_access.setPublishedDegrees(&self.graph.graph, .{ .index = @intCast(node_idx) }, meta, @intCast(plan.degrees_fwd[node_idx]), @intCast(plan.degrees_rev[node_idx]));
-            page_ops.nodeMetaAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storePublishedMeta(meta);
+            const state = (types.NodePublicationState{}).withFwdDegree(@intCast(plan.degrees_fwd[node_idx])).withRevDegree(@intCast(plan.degrees_rev[node_idx]));
+            node_access.setPublishedDegrees(&self.graph.graph, .{ .index = @intCast(node_idx) }, state, @intCast(plan.degrees_fwd[node_idx]), @intCast(plan.degrees_rev[node_idx]));
+            page_ops.nodePublicationAt(&self.graph.graph, .{ .index = @intCast(node_idx) }).storePublicationState(state);
         }
     }
 

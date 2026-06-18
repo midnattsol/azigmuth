@@ -4,12 +4,12 @@
 //!
 //!   - `common`    — page arithmetic and lazy page publication
 //!   - `index_stack` — intrusive tagged-head stacks for recycled indices
-//!   - `nodes`     — NodeMeta / NodePublished / NodeHot pages
+//!   - `nodes`     — NodePublicationCell / NodeAdjacencyBuffers / NodeMutationControl pages
 //!   - `tiny`      — tiny slots and their free/retired stacks
 //!   - `prop_rows` — property-row lifecycle (edge_properties mode)
 //!   - `blocks`    — edge blocks, sidecars, live counts, span allocation,
 //!     frontier rollback
-//!   - `groups`    — grouped-run descriptors and per-span-length stacks
+//!   - `segments`    — edge-block segment descriptors and per-span-length stacks
 //!
 //! Every symbol below re-exports flat so call sites keep reading
 //! `page_ops.<fn>` regardless of which pool owns it.
@@ -20,7 +20,7 @@ const nodes = @import("pages/nodes.zig");
 const tiny = @import("pages/tiny.zig");
 const prop_rows = @import("pages/prop_rows.zig");
 const blocks = @import("pages/blocks.zig");
-const groups = @import("pages/groups.zig");
+const segments = @import("pages/segments.zig");
 
 // ── common ───────────────────────────────────────────────────────────
 pub const pageOf = common.pageOf;
@@ -32,32 +32,32 @@ pub const EMPTY_INDEX = index_stack.EMPTY_INDEX;
 pub const StackKind = index_stack.StackKind;
 pub const LockFreeIndexStack = index_stack.LockFreeIndexStack;
 pub const stackHeadIndex = index_stack.headIndex;
-pub const stackMetaNext = index_stack.metaNext;
+pub const reclamationNext = index_stack.reclamationNext;
 pub const walkDetachedIndexStack = index_stack.walkDetached;
 
 // ── nodes ────────────────────────────────────────────────────────────
-pub const nodeMetaAt = nodes.nodeMetaAt;
-pub const ensureNodeMetaPage = nodes.ensureNodeMetaPage;
-pub const nodeMetaAtConst = nodes.nodeMetaAtConst;
-pub const ensureNodePublishedPage = nodes.ensureNodePublishedPage;
-pub const ensureNodePublishedAt = nodes.ensureNodePublishedAt;
-pub const nodePublishedAt = nodes.nodePublishedAt;
-pub const nodePublishedAtConst = nodes.nodePublishedAtConst;
-pub const ensureNodeHotPage = nodes.ensureNodeHotPage;
-pub const ensureNodeHotAt = nodes.ensureNodeHotAt;
-pub const nodeHotAt = nodes.nodeHotAt;
-pub const nodeHotAtConst = nodes.nodeHotAtConst;
-pub const nodeMetaPageAtConst = nodes.nodeMetaPageAtConst;
-pub const nodePublishedPageAtConst = nodes.nodePublishedPageAtConst;
+pub const nodePublicationAt = nodes.nodePublicationAt;
+pub const ensureNodePublicationPage = nodes.ensureNodePublicationPage;
+pub const nodePublicationAtConst = nodes.nodePublicationAtConst;
+pub const ensureNodeAdjacencyBufferPage = nodes.ensureNodeAdjacencyBufferPage;
+pub const ensureNodeAdjacencyBuffersAt = nodes.ensureNodeAdjacencyBuffersAt;
+pub const nodeAdjacencyBuffersAt = nodes.nodeAdjacencyBuffersAt;
+pub const nodeAdjacencyBuffersAtConst = nodes.nodeAdjacencyBuffersAtConst;
+pub const ensureNodeMutationControlPage = nodes.ensureNodeMutationControlPage;
+pub const ensureNodeMutationControlAt = nodes.ensureNodeMutationControlAt;
+pub const nodeMutationControlAt = nodes.nodeMutationControlAt;
+pub const nodeMutationControlAtConst = nodes.nodeMutationControlAtConst;
+pub const nodePublicationPageAtConst = nodes.nodePublicationPageAtConst;
+pub const nodeAdjacencyBufferPageAtConst = nodes.nodeAdjacencyBufferPageAtConst;
 
 // ── tiny blocks ──────────────────────────────────────────────────────
 pub const freeTinySlot = tiny.freeTinySlot;
-pub const retireTinyBlock = tiny.retireTinyBlock;
-pub const reclaimRetiredTinyBlocks = tiny.reclaimRetiredTinyBlocks;
-pub const tinyBlockAt = tiny.tinyBlockAt;
-pub const tinyBlockAtConst = tiny.tinyBlockAtConst;
-pub const allocTinyBlock = tiny.allocTinyBlock;
-pub const allocTinyBlockRaw = tiny.allocTinyBlockRaw;
+pub const retireTinySlot = tiny.retireTinySlot;
+pub const reclaimRetiredTinySlots = tiny.reclaimRetiredTinySlots;
+pub const tinySlotAt = tiny.tinySlotAt;
+pub const tinySlotAtConst = tiny.tinySlotAtConst;
+pub const allocTinySlot = tiny.allocTinySlot;
+pub const allocTinySlotRaw = tiny.allocTinySlotRaw;
 pub const ensureTinyCapacity = tiny.ensureTinyCapacity;
 
 // ── property rows ────────────────────────────────────────────────────
@@ -93,14 +93,14 @@ pub const freeBlock = blocks.freeBlock;
 pub const retireBlock = blocks.retireBlock;
 pub const reclaimRetired = blocks.reclaimRetired;
 
-// ── grouped runs ─────────────────────────────────────────────────────
-pub const edgeBlockGroupAt = groups.edgeBlockGroupAt;
-pub const edgeBlockGroupAtConst = groups.edgeBlockGroupAtConst;
-pub const ensureGroupCapacity = groups.ensureGroupCapacity;
-pub const allocGroupSpan = groups.allocGroupSpan;
-pub const allocGroup = groups.allocGroup;
-pub const freeGroupSpan = groups.freeGroupSpan;
-pub const freeGroup = groups.freeGroup;
-pub const retireGroupSpan = groups.retireGroupSpan;
-pub const retireGroup = groups.retireGroup;
-pub const reclaimRetiredGroups = groups.reclaimRetiredGroups;
+// ── segmented segments ─────────────────────────────────────────────────────
+pub const edgeBlockSegmentAt = segments.edgeBlockSegmentAt;
+pub const edgeBlockSegmentAtConst = segments.edgeBlockSegmentAtConst;
+pub const ensureSegmentCapacity = segments.ensureSegmentCapacity;
+pub const allocSegmentSlots = segments.allocSegmentSlots;
+pub const allocSegment = segments.allocSegment;
+pub const freeSegmentSlots = segments.freeSegmentSlots;
+pub const freeSegment = segments.freeSegment;
+pub const retireSegmentSlots = segments.retireSegmentSlots;
+pub const retireSegment = segments.retireSegment;
+pub const reclaimRetiredSegments = segments.reclaimRetiredSegments;

@@ -162,13 +162,12 @@ test "rcu: reclaimRetired scans reader epoch slots even before active_readers in
 
     const block = try graph.allocBlockFwd();
     try graph.retireBlockFwd(block);
-            // Simulate the critical window in readerEnter: the reader published its
+    // Simulate the critical window in readerEnter: the reader published its
     // epoch slot but has not yet incremented active_readers.
     graph.graph.reader_epochs[0].store(1, .release);
     graph.reclaimRetired();
 
-            graph.graph.reader_epochs[0].store(0, .release);
+    graph.graph.reader_epochs[0].store(0, .release);
     graph.bumpEpoch();
     graph.reclaimRetired();
-
-        }
+}

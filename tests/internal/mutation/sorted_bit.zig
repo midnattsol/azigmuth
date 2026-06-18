@@ -9,13 +9,13 @@ const node_access = graph_mod.node_access_mod;
 const testing = std.testing;
 
 fn fwdSorted(graph: *graph_mod.Graph, node: graph_mod.NodeId) bool {
-    const meta = node_access.loadPublishedMetaAtConst(&graph.graph, node);
-    return node_access.nodePublishedAtConst(&graph.graph, node).publishedFwdSortedFromMeta(meta);
+    const state = node_access.loadPublicationStateAtConst(&graph.graph, node);
+    return node_access.nodeAdjacencyBuffersAtConst(&graph.graph, node).publishedFwdSortedFromState(state);
 }
 
 fn revSorted(graph: *graph_mod.Graph, node: graph_mod.NodeId) bool {
-    const meta = node_access.loadPublishedMetaAtConst(&graph.graph, node);
-    return node_access.nodePublishedAtConst(&graph.graph, node).publishedRevSortedFromMeta(meta);
+    const state = node_access.loadPublicationStateAtConst(&graph.graph, node);
+    return node_access.nodeAdjacencyBuffersAtConst(&graph.graph, node).publishedRevSortedFromState(state);
 }
 
 test "sorted bit: ascending fan-out keeps the forward side globally sorted" {
@@ -25,7 +25,7 @@ test "sorted bit: ascending fan-out keeps the forward side globally sorted" {
     const source = try graph.addNode();
     // 200 edges: tiny → promotion → several blocks, all ascending.
     var destinations: [200]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
     for (destinations) |destination| {
         try graph.addEdge(source, destination, 0, 0);
         try testing.expect(fwdSorted(&graph, source));
@@ -42,7 +42,7 @@ test "sorted bit: out-of-order insert clears the flag and lookups stay correct" 
 
     const source = try graph.addNode();
     var destinations: [80]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
     const low = try graph.addNode(); // higher index than all of the above
 
     // Ascending block-mode fan-out, skipping destinations[0] for later.
@@ -66,7 +66,7 @@ test "sorted bit: ascending fan-in keeps the reverse side globally sorted" {
     defer graph.deinit();
 
     var sources: [100]graph_mod.NodeId = undefined;
-    for (0..sources.len) |i| sources[i] = try graph.addNode();
+    for (0..sources.len) |source_idx| sources[source_idx] = try graph.addNode();
     const hub = try graph.addNode();
 
     for (sources) |source| try graph.addEdge(source, hub, 0, 0);

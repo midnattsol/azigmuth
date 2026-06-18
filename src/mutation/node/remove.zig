@@ -44,9 +44,9 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // view across endpoints while removeNode is in flight; the operation only
     // guarantees logical consistency after it returns.
     //
-    // Forward-degree decrements use the meta-only CAS helper
-    // (`publishMetaFwdDeltaUpdated`) which does NOT require `claim_fwd` on the
-    // predecessor — the 64-bit CAS on `published_meta` provides the atomicity
+    // Forward-degree decrements use the state-only CAS helper
+    // (`publishStateFwdDeltaUpdated`) which does NOT require `claim_fwd` on the
+    // predecessor — the 64-bit CAS on `publication_state` provides the atomicity
     // on its own.
     const counts = remove_publish.publishRelatedNodeUpdates(graph, related.nodes.items);
 
@@ -54,18 +54,18 @@ pub fn removeNode(graph: *graph_core.GraphCore, node: types.NodeId) !types.NodeR
     // concurrently removed after the scan already paid for the shared edge.
     const removed_visible_edge_count = counts.applied_edge_removals + scan.self_edge_count;
 
-    common.publishBothAdj(graph, node, page_ops.nodeMetaAt(graph, node), page_ops.nodePublishedAt(graph, node), source_staging_adj, 0, 0, true, true);
+    common.publishBothAdj(graph, node, page_ops.nodePublicationAt(graph, node), page_ops.nodeAdjacencyBuffersAt(graph, node), source_staging_adj, 0, 0, true, true);
 
     try remove_publish.retireRemovedNodeStorage(graph, source_adj_before);
     // Every forward edge of the removed node dies with it: its property rows
     // recycle once no reader can still observe the retired blocks.
     if (graph.edge_properties_enabled) {
         try side_ops.forEachForwardEntryInSide(graph, side_ops.sideAdjOfNode(source_adj_before, .fwd), graph, struct {
-            fn run(inner_graph: *const graph_core.GraphCore, mut_graph: *graph_core.GraphCore, entry: side_ops.ForwardEntryView) !void {
+            fn segment(inner_graph: *const graph_core.GraphCore, mut_graph: *graph_core.GraphCore, entry: side_ops.ForwardEntryView) !void {
                 _ = inner_graph;
                 rcu.retirePropRow(mut_graph, entry.prop_row);
             }
-        }.run);
+        }.segment);
     }
     _ = graph.edge_count.fetchSub(@as(u64, @intCast(removed_visible_edge_count)), .release);
     rcu.bumpEpoch(graph);

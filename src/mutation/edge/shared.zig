@@ -1,12 +1,12 @@
 const std = @import("std");
 const graph_core = @import("../../core/graph_core.zig");
 const node_access = @import("../../core/node_access.zig");
-const node_meta_mod = @import("../../storage/node/meta.zig");
-const node_published_mod = @import("../../storage/node/published.zig");
+const node_publication_mod = @import("../../storage/node/publication.zig");
+const node_adjacency_buffers_mod = @import("../../storage/node/adjacency_buffers.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const types = @import("../../core/types.zig");
 const rcu = @import("../../concurrency/rcu.zig");
-const side_runs = @import("../../adjacency/runs.zig");
+const side_segments = @import("../../adjacency/segments.zig");
 const common = @import("../common.zig");
 const node_validity = @import("../../core/node_validity.zig");
 
@@ -19,43 +19,43 @@ pub const PreparedAppendBlock = struct {
 pub const AppliedAppend = struct {
     block_idx: u32,
     retire_prepared_old_block: bool = true,
-    retired_runs: [2]side_runs.RunDesc = undefined,
-    retired_run_count: u2 = 0,
+    retired_segments: [2]side_segments.SegmentDesc = undefined,
+    retired_segment_count: u2 = 0,
 };
 
-pub const OldGroupChain = struct {
-    first_group: ?u32 = null,
-    group_count: u16 = 0,
+pub const OldSegmentSlots = struct {
+    first_segment: ?u32 = null,
+    segment_count: u16 = 0,
 
-    /// Captures the current grouped run metadata so it can be retired after publish.
-    pub fn captureSide(side_adj: *const types.SideAdj) OldGroupChain {
+    /// Captures the current segmented segment descriptor chain so it can be retired after publish.
+    pub fn captureSide(side_adj: *const types.SideAdj) OldSegmentSlots {
         return .{
-            .first_group = if (side_adj.group_count > 0) side_adj.first_group else null,
-            .group_count = side_adj.group_count,
+            .first_segment = if (side_adj.segment_count > 0) side_adj.first_segment else null,
+            .segment_count = side_adj.segment_count,
         };
     }
 
-    /// Retires the previously captured grouped run metadata, if any.
-    pub fn retire(self: OldGroupChain, graph: *graph_core.GraphCore) void {
-        if (self.first_group) |first_group| {
-            common.retireGroupChain(graph, first_group, self.group_count);
+    /// Retires the previously captured segmented segment descriptor chain, if any.
+    pub fn retire(self: OldSegmentSlots, graph: *graph_core.GraphCore) void {
+        if (self.first_segment) |first_segment| {
+            common.retireSegmentSlots(graph, first_segment, self.segment_count);
         }
     }
 };
 
 pub const EndpointState = struct {
-    source_node_meta: *node_meta_mod.NodeMeta,
-    destination_node_meta: *node_meta_mod.NodeMeta,
-    source_published: *node_published_mod.NodePublished,
-    destination_published: *node_published_mod.NodePublished,
+    source_publication_cell: *node_publication_mod.NodePublicationCell,
+    destination_publication_cell: *node_publication_mod.NodePublicationCell,
+    source_buffers: *node_adjacency_buffers_mod.NodeAdjacencyBuffers,
+    destination_buffers: *node_adjacency_buffers_mod.NodeAdjacencyBuffers,
     claims: common.ClaimedAdjacencies,
-    source_meta: types.PublishedMeta,
-    destination_meta: types.PublishedMeta,
+    source_state: types.NodePublicationState,
+    destination_state: types.NodePublicationState,
     source_flags: types.NodeFlags,
     destination_flags: types.NodeFlags,
 };
 
-/// Claims both endpoint adjacencies for an edge mutation and snapshots their meta.
+/// Claims both endpoint adjacencies for an edge mutation and snapshots their publication state.
 /// Fails with error.InvalidNode when either endpoint is absent or already removed.
 pub fn claimEndpoints(
     graph: *graph_core.GraphCore,
@@ -66,28 +66,28 @@ pub fn claimEndpoints(
         return error.InvalidNode;
     }
 
-    const source_node_meta = page_ops.nodeMetaAt(graph, source);
-    const destination_node_meta = page_ops.nodeMetaAt(graph, destination);
+    const source_publication_cell = page_ops.nodePublicationAt(graph, source);
+    const destination_publication_cell = page_ops.nodePublicationAt(graph, destination);
     // addNode guarantees published pages for every published node.
-    const source_published = page_ops.nodePublishedAt(graph, source);
-    const destination_published = if (source.index == destination.index) source_published else page_ops.nodePublishedAt(graph, destination);
+    const source_buffers = page_ops.nodeAdjacencyBuffersAt(graph, source);
+    const destination_buffers = if (source.index == destination.index) source_buffers else page_ops.nodeAdjacencyBuffersAt(graph, destination);
     var claims = try common.tryClaimAdjacencies(graph, source.index, destination.index);
     errdefer claims.release();
 
-    const source_meta = node_access.loadPublishedMetaAtConst(graph, source);
-    const destination_meta = node_access.loadPublishedMetaAtConst(graph, destination);
-    if (source_meta.removed or destination_meta.removed) return error.InvalidNode;
+    const source_state = node_access.loadPublicationStateAtConst(graph, source);
+    const destination_state = node_access.loadPublicationStateAtConst(graph, destination);
+    if (source_state.removed or destination_state.removed) return error.InvalidNode;
 
     return .{
-        .source_node_meta = source_node_meta,
-        .source_published = source_published,
-        .destination_node_meta = destination_node_meta,
-        .destination_published = destination_published,
+        .source_publication_cell = source_publication_cell,
+        .source_buffers = source_buffers,
+        .destination_publication_cell = destination_publication_cell,
+        .destination_buffers = destination_buffers,
         .claims = claims,
-        .source_meta = source_meta,
-        .destination_meta = destination_meta,
-        .source_flags = source_meta.flags(),
-        .destination_flags = destination_meta.flags(),
+        .source_state = source_state,
+        .destination_state = destination_state,
+        .source_flags = source_state.flags(),
+        .destination_flags = destination_state.flags(),
     };
 }
 
@@ -104,27 +104,27 @@ pub fn publishAdded(
     sorted_rev: bool,
 ) void {
     if (source.index == destination.index) {
-        std.debug.assert(@as(u64, @bitCast(endpoints.source_meta)) == @as(u64, @bitCast(endpoints.destination_meta)));
+        std.debug.assert(@as(u64, @bitCast(endpoints.source_state)) == @as(u64, @bitCast(endpoints.destination_state)));
         var merged_flags = source_publish_adj.flags;
         merged_flags.needs_repair_rev = destination_publish_adj.flags.needs_repair_rev;
         merged_flags.removed = source_publish_adj.flags.removed or destination_publish_adj.flags.removed;
-        _ = common.publishBothDelta(endpoints.source_node_meta, endpoints.source_published, endpoints.source_meta, merged_flags, 1, 1, sorted_fwd, sorted_rev);
+        _ = common.publishBothDelta(endpoints.source_publication_cell, endpoints.source_buffers, endpoints.source_state, merged_flags, 1, 1, sorted_fwd, sorted_rev);
         return;
     }
 
-    _ = common.publishStagedRev(endpoints.destination_node_meta, endpoints.destination_published, endpoints.destination_meta, destination_publish_adj.flags.needs_repair_rev, 1, sorted_rev);
-    _ = common.publishStagedFwd(endpoints.source_node_meta, endpoints.source_published, endpoints.source_meta, source_publish_adj.flags.needs_repair_fwd, 1, sorted_fwd);
+    _ = common.publishStagedRev(endpoints.destination_publication_cell, endpoints.destination_buffers, endpoints.destination_state, destination_publish_adj.flags.needs_repair_rev, 1, sorted_rev);
+    _ = common.publishStagedFwd(endpoints.source_publication_cell, endpoints.source_buffers, endpoints.source_state, source_publish_adj.flags.needs_repair_fwd, 1, sorted_fwd);
 }
 
-/// Retires superseded blocks, runs, and group chains after addEdge publication.
+/// Retires superseded blocks, segments, and segment chains after addEdge publication.
 pub fn retireAdded(
     graph: *graph_core.GraphCore,
     forward_prepared: PreparedAppendBlock,
     forward_applied: AppliedAppend,
     reverse_prepared: PreparedAppendBlock,
     reverse_applied: AppliedAppend,
-    old_source_groups: OldGroupChain,
-    old_destination_groups: OldGroupChain,
+    old_source_segments: OldSegmentSlots,
+    old_destination_segments: OldSegmentSlots,
 ) !void {
     if (forward_applied.retire_prepared_old_block) {
         if (forward_prepared.old_block) |old_block| try rcu.retireBlockFwd(graph, old_block);
@@ -133,16 +133,16 @@ pub fn retireAdded(
         if (reverse_prepared.old_block) |old_block| try rcu.retireBlockRev(graph, old_block);
     }
 
-    var run_idx: u2 = 0;
-    while (run_idx < forward_applied.retired_run_count) : (run_idx += 1) {
-        try side_runs.retireRun(graph, forward_applied.retired_runs[run_idx], .fwd);
+    var segment_idx: u2 = 0;
+    while (segment_idx < forward_applied.retired_segment_count) : (segment_idx += 1) {
+        try side_segments.retireSegment(graph, forward_applied.retired_segments[segment_idx], .fwd);
     }
 
-    run_idx = 0;
-    while (run_idx < reverse_applied.retired_run_count) : (run_idx += 1) {
-        try side_runs.retireRun(graph, reverse_applied.retired_runs[run_idx], .rev);
+    segment_idx = 0;
+    while (segment_idx < reverse_applied.retired_segment_count) : (segment_idx += 1) {
+        try side_segments.retireSegment(graph, reverse_applied.retired_segments[segment_idx], .rev);
     }
 
-    old_source_groups.retire(graph);
-    old_destination_groups.retire(graph);
+    old_source_segments.retire(graph);
+    old_destination_segments.retire(graph);
 }

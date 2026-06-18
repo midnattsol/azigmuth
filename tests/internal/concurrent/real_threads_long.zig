@@ -70,7 +70,7 @@ test "concurrent: many writers to a single destination serialize via reverse-cla
         threads[thread_idx] = try std.Thread.spawn(.{}, spokeWriterLoop, .{&ctxs[thread_idx]});
     }
 
-    // Let the storm run briefly, then signal stop and join. The start-gate
+    // Let the storm segment briefly, then signal stop and join. The start-gate
     // ensures all threads begin at once so contention is deterministic.
     var spin_warmup: usize = 0;
     while (spin_warmup < 5_000_000) : (spin_warmup += 1) {
@@ -229,9 +229,9 @@ test "concurrent: reader sees a sorted, valid snapshot under a continuous write 
     var final_neighbors = try graph.neighbors(source);
     const final_list = try graph_mod.materializeConsuming(&final_neighbors, allocator);
     defer allocator.free(final_list);
-    var i: usize = 1;
-    while (i < final_list.len) : (i += 1) {
-        try testing.expect(final_list[i - 1].index < final_list[i].index);
+    var neighbor_idx: usize = 1;
+    while (neighbor_idx < final_list.len) : (neighbor_idx += 1) {
+        try testing.expect(final_list[neighbor_idx - 1].index < final_list[neighbor_idx].index);
     }
 }
 
@@ -259,8 +259,8 @@ fn reclaimReaderLoop(ctx: *ReclaimReaderCtx) void {
         var ok = true;
         while (iterator.next()) |neighbor| {
             count += 1;
-            const is_target = for (ctx.targets) |t| {
-                if (t.index == neighbor.index) break true;
+            const is_target = for (ctx.targets) |target| {
+                if (target.index == neighbor.index) break true;
             } else false;
             if (!is_target) ok = false;
         }

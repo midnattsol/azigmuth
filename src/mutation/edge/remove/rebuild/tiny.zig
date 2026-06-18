@@ -2,7 +2,7 @@ const std = @import("std");
 const graph_core = @import("../../../../core/graph_core.zig");
 const types = @import("../../../../core/types.zig");
 const page_ops = @import("../../../../storage/page_ops.zig");
-const node_published = @import("../../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../../storage/node/adjacency_buffers.zig");
 const adjacency = @import("../../../../adjacency/mod.zig");
 const common = @import("common.zig");
 const mutation_scratch = @import("../../../scratch.zig");
@@ -13,8 +13,8 @@ pub fn rebuildTinyForwardRemoveAll(
     destination_idx: u32,
     scratch: *mutation_scratch.MutationScratch,
 ) !common.ForwardRemovalResult {
-    const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .fwd);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(published_side);
+    const slot = page_ops.tinySlotAtConst(graph, published_side.first_block, .fwd);
     var removed: u32 = 0;
     for (0..count) |entry_idx| {
         if (slot.entries[entry_idx].destination == destination_idx) removed += 1;
@@ -30,8 +30,8 @@ pub fn rebuildTinyForwardRemoveAll(
     const remaining = count - @as(u16, @intCast(removed));
     if (remaining == 0) return .{ .new_side = std.mem.zeroes(types.SideAdj), .removed = removed };
 
-    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
-    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
+    const new_block = page_ops.tinySlotAt(graph, new_slot_idx, .fwd);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
@@ -39,7 +39,7 @@ pub fn rebuildTinyForwardRemoveAll(
         new_block.entries[write_idx] = entry;
         write_idx += 1;
     }
-    return .{ .new_side = node_published.NodePublished.makeTiny(new_slot_idx, remaining), .removed = removed };
+    return .{ .new_side = node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(new_slot_idx, remaining), .removed = removed };
 }
 
 pub fn rebuildTinyReverseRemoveCount(
@@ -49,8 +49,8 @@ pub fn rebuildTinyReverseRemoveCount(
     remove_count: u32,
     scratch: *mutation_scratch.MutationScratch,
 ) !types.SideAdj {
-    const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .rev);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(published_side);
+    const slot = page_ops.tinySlotAtConst(graph, published_side.first_block, .rev);
     var matches: u32 = 0;
     for (0..count) |entry_idx| {
         if (slot.sources[entry_idx] == source_idx) matches += 1;
@@ -59,8 +59,8 @@ pub fn rebuildTinyReverseRemoveCount(
     const remaining = count - @as(u16, @intCast(remove_count));
     if (remaining == 0) return std.mem.zeroes(types.SideAdj);
 
-    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .rev);
-    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .rev);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .rev);
+    const new_block = page_ops.tinySlotAt(graph, new_slot_idx, .rev);
     var skipped: u32 = 0;
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
@@ -72,7 +72,7 @@ pub fn rebuildTinyReverseRemoveCount(
         new_block.sources[write_idx] = value;
         write_idx += 1;
     }
-    return node_published.NodePublished.makeTiny(new_slot_idx, remaining);
+    return node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(new_slot_idx, remaining);
 }
 
 pub fn rebuildTinyForwardRemoveOneById(
@@ -82,21 +82,21 @@ pub fn rebuildTinyForwardRemoveOneById(
     edge_id: u32,
     scratch: *mutation_scratch.MutationScratch,
 ) !?types.SideAdj {
-    const count = node_published.NodePublished.tinyCount(published_side);
-    const slot = page_ops.tinyBlockAtConst(graph, published_side.first_block, .fwd);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(published_side);
+    const slot = page_ops.tinySlotAtConst(graph, published_side.first_block, .fwd);
     const removal_idx = adjacency.findTinyForwardSlotById(graph, published_side.*, destination_idx, edge_id) orelse return null;
     if (graph.edge_properties_enabled) {
         try scratch.markRetirePropRow(graph.allocator, slot.entries[removal_idx].prop_row);
     }
     if (count == 1) return std.mem.zeroes(types.SideAdj);
 
-    const new_slot_idx = try scratch.allocTinyBlockRaw(graph, .fwd);
-    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
+    const new_slot_idx = try scratch.allocTinySlotRaw(graph, .fwd);
+    const new_block = page_ops.tinySlotAt(graph, new_slot_idx, .fwd);
     var write_idx: u16 = 0;
     for (0..count) |entry_idx| {
         if (entry_idx == removal_idx) continue;
         new_block.entries[write_idx] = slot.entries[entry_idx];
         write_idx += 1;
     }
-    return node_published.NodePublished.makeTiny(new_slot_idx, count - 1);
+    return node_adjacency_buffers.NodeAdjacencyBuffers.makeTiny(new_slot_idx, count - 1);
 }

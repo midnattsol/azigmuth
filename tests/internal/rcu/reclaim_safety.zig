@@ -12,17 +12,17 @@ test "rcu safety: reclaimed block is not owned by any node" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     var targets: [3]graph_mod.NodeId = undefined;
-    for (0..targets.len) |i| {
-        targets[i] = try graph.addNode();
-        try graph.addEdge(src, targets[i], 0, 0);
+    for (0..targets.len) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
     try graph.validate();
 
-    for (targets[0..]) |t| {
-        _ = try graph.removeEdge(src, t);
+    for (targets[0..]) |target| {
+        _ = try graph.removeEdge(source, target);
     }
 
     graph.bumpEpoch();
@@ -42,11 +42,11 @@ test "rcu safety: reclamation advances after overflow reader exits" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    _ = try graph.removeEdge(src, dst);
+    _ = try graph.removeEdge(source, destination);
 
     const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
@@ -61,15 +61,15 @@ test "rcu safety: last_reclaim_epoch optimization does not block reclamation" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     var targets: [4]graph_mod.NodeId = undefined;
-    for (0..targets.len) |i| {
-        targets[i] = try graph.addNode();
-        try graph.addEdge(src, targets[i], 0, 0);
+    for (0..targets.len) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
-    _ = try graph.removeEdge(src, targets[0]);
-    _ = try graph.removeEdge(src, targets[1]);
+    _ = try graph.removeEdge(source, targets[0]);
+    _ = try graph.removeEdge(source, targets[1]);
 
     graph.bumpEpoch();
     graph.reclaimRetired();
@@ -77,8 +77,8 @@ test "rcu safety: last_reclaim_epoch optimization does not block reclamation" {
     const token = graph.readerEnter() catch unreachable;
     defer graph.readerExit(token);
 
-    _ = try graph.removeEdge(src, targets[2]);
-    _ = try graph.removeEdge(src, targets[3]);
+    _ = try graph.removeEdge(source, targets[2]);
+    _ = try graph.removeEdge(source, targets[3]);
     graph.bumpEpoch();
     graph.reclaimRetired();
 
@@ -89,19 +89,19 @@ test "rcu safety: last_reclaim_epoch optimization does not block reclamation" {
     _ = graph.validate() catch {};
 }
 
-test "rcu safety: group retire/reclaim/alloc full cycle" {
+test "rcu safety: segment retire/reclaim/alloc full cycle" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const group = try graph.allocGroup();
+    const segment = try graph.allocSegment();
 
     const epoch = graph.graph.epoch.load(.acquire);
-    page_ops.retireGroup(&graph.graph, group, epoch);
+    page_ops.retireSegment(&graph.graph, segment, epoch);
 
     graph.bumpEpoch();
     graph.bumpEpoch();
     graph.reclaimRetired();
 
-    _ = try graph.allocGroup();
+    _ = try graph.allocSegment();
     _ = graph.validate() catch {};
 }

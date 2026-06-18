@@ -4,19 +4,19 @@
 //!
 //! Usage with Graph:
 //!   const azigmuth = @import("azigmuth");
-//!   var g = try azigmuth.Graph.init(allocator);
-//!   defer g.deinit();
-//!   const n = try g.addNode();
-//!   const m = try g.addNode();
-//!   try g.addEdge(n, m, 0, .{});
+//!   var graph_handle = try azigmuth.Graph.init(allocator);
+//!   defer graph_handle.deinit();
+//!   const source = try graph_handle.addNode();
+//!   const destination = try graph_handle.addNode();
+//!   try graph_handle.addEdge(source, destination, 0, .{});
 //!
 //!   const ctx = azigmuth.Context.init(allocator);
-//!   var snapshot = try g.snapshot(ctx);
+//!   var snapshot = try graph_handle.snapshot(ctx);
 //!   defer snapshot.deinit();
-//!   var neighbors = try snapshot.neighbors(n);
+//!   var neighbors = try snapshot.neighbors(source);
 //!   const all = try neighbors.materialize(allocator);
 //!   defer allocator.free(all);
-//!   const order = try snapshot.bfs(n, ctx);
+//!   const order = try snapshot.bfs(source, ctx);
 //!   defer allocator.free(order);
 //!   const has_cycle = try snapshot.hasCycle(ctx);
 //!   _ = has_cycle;
@@ -24,11 +24,11 @@
 //! Usage with GraphBuilder:
 //!   var builder = try azigmuth.GraphBuilder.init(allocator);
 //!   defer builder.deinit();  // required even after freeze()
-//!   const a = try builder.addNode();
-//!   const b = try builder.addNode();
-//!   try builder.addEdge(a, b, 0, .{});
-//!   var g2 = try builder.freeze();  // builder becomes inert
-//!   defer g2.deinit();              // graph lifetime independent of builder
+//!   const source = try builder.addNode();
+//!   const destination = try builder.addNode();
+//!   try builder.addEdge(source, destination, 0, .{});
+//!   var graph_handle = try builder.freeze();  // builder becomes inert
+//!   defer graph_handle.deinit();              // graph lifetime independent of builder
 
 const graph = @import("graph.zig");
 const public_graph = @import("api/public_graph.zig");

@@ -9,18 +9,18 @@ test "removeNode regression: reverse-only publish does not flip forward index of
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(c, b, 0, 0);
+    const removed_source = try graph.addNode();
+    const target = try graph.addNode();
+    const other_source = try graph.addNode();
+    try graph.addEdge(removed_source, target, 0, 0);
+    try graph.addEdge(other_source, target, 0, 0);
 
-    const b_node = try graph.nodeAt(b);
-    const fwd_idx_before = b_node.loadPublishedMeta().idx_fwd;
+    const target_node = try graph.nodeAt(target);
+    const fwd_idx_before = target_node.loadPublicationState().idx_fwd;
 
-    _ = try graph.removeNode(a);
+    _ = try graph.removeNode(removed_source);
 
-    const fwd_idx_after = b_node.loadPublishedMeta().idx_fwd;
+    const fwd_idx_after = target_node.loadPublicationState().idx_fwd;
     try testing.expectEqual(fwd_idx_before, fwd_idx_after);
     try graph.validate();
 }
@@ -50,27 +50,27 @@ test "removeNode regression: validate and debugValidate agree on removed node wi
         if (spoke_idx % 2 == 0) {
             const removed_adj = graph.nodeRefAny(spokes[spoke_idx]).publishedAdj();
             try testing.expectEqual(@as(u16, 0), removed_adj.block_count_rev);
-            try testing.expectEqual(@as(u16, 0), removed_adj.group_count_rev);
+            try testing.expectEqual(@as(u16, 0), removed_adj.segment_count_rev);
         }
     }
 }
 
-test "removeNode regression: validate and debugValidate agree on grouped chain shorter than declared group count" {
+test "removeNode regression: validate and debugValidate agree on segmented chain shorter than declared segment count" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
 
     const block = try graph.allocBlockFwd();
-    const group = try graph.allocGroup();
+    const segment = try graph.allocSegment();
     page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
-    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment).* = .{ .start = block, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = 2;
-    publish.publishedFwdSide(node_buffer).group_count = 2;
-    publish.publishedFwdSide(node_buffer).first_group = group;
+    publish.publishedFwdSide(node_buffer).segment_count = 2;
+    publish.publishedFwdSide(node_buffer).first_segment = segment;
     publish.setPublishedFwdDegree(node_buffer, 2);
     try publish.syncToPublished(&graph, node.index);
 

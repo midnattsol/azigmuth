@@ -1,5 +1,5 @@
 const common = @import("common.zig");
-const run_search = @import("run_search.zig");
+const segment_search = @import("segment_search.zig");
 const edge_ids = @import("edge_ids.zig");
 const std = @import("std");
 const constants = @import("../../core/constants.zig");
@@ -9,9 +9,9 @@ const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const node_validity = @import("../../core/node_validity.zig");
 
-pub const runContainsTarget = run_search.runContainsTarget;
-pub const findSlotInRun = run_search.findSlotInRun;
-pub const adjacencyContains = run_search.adjacencyContains;
+pub const runContainsTarget = segment_search.runContainsTarget;
+pub const findSlotInRun = segment_search.findSlotInRun;
+pub const adjacencyContains = segment_search.adjacencyContains;
 pub const appendForwardEdgeIdViolations = edge_ids.appendForwardEdgeIdViolations;
 pub const appendForwardEdgeIdViolationsSnapshot = edge_ids.appendForwardEdgeIdViolationsSnapshot;
 pub const validateForwardEdgeIdsFast = edge_ids.validateForwardEdgeIdsFast;
@@ -30,12 +30,12 @@ fn checkForwardPair(graph: *const graph_core.GraphCore, source_node: u32, source
     const destination_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = destination_node });
     if (destination_adjacency.flags.removed) return;
     if (graph.multigraph_enabled) {
-        const forward_count = run_search.countTargetMatches(graph, source_adjacency, destination_node, .fwd);
-        const reverse_count = run_search.countTargetMatches(graph, destination_adjacency, source_node, .rev);
+        const forward_count = segment_search.countTargetMatches(graph, source_adjacency, destination_node, .fwd);
+        const reverse_count = segment_search.countTargetMatches(graph, destination_adjacency, source_node, .rev);
         if (forward_count != reverse_count) return error.CorruptGraph;
         return;
     }
-    if (!run_search.adjacencyContains(graph, destination_adjacency, source_node, .rev)) return error.CorruptGraph;
+    if (!segment_search.adjacencyContains(graph, destination_adjacency, source_node, .rev)) return error.CorruptGraph;
 }
 
 fn appendForwardPairViolations(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator, violations: *std.ArrayList(types.Violation), source_node: u32, source_adjacency: types.NodeAdj, destination_node: u32) !void {
@@ -43,14 +43,14 @@ fn appendForwardPairViolations(graph: *const graph_core.GraphCore, allocator: st
     const destination_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = destination_node });
     if (destination_adjacency.flags.removed) return;
     if (graph.multigraph_enabled) {
-        const forward_count = run_search.countTargetMatches(graph, source_adjacency, destination_node, .fwd);
-        const reverse_count = run_search.countTargetMatches(graph, destination_adjacency, source_node, .rev);
+        const forward_count = segment_search.countTargetMatches(graph, source_adjacency, destination_node, .fwd);
+        const reverse_count = segment_search.countTargetMatches(graph, destination_adjacency, source_node, .rev);
         if (forward_count != reverse_count) {
             try violations.append(allocator, .{ .forward_reverse_multiplicity_mismatch = .{ .node = source_node, .destination = destination_node, .forward_count = forward_count, .reverse_count = reverse_count } });
         }
         return;
     }
-    if (!run_search.adjacencyContains(graph, destination_adjacency, source_node, .rev)) {
+    if (!segment_search.adjacencyContains(graph, destination_adjacency, source_node, .rev)) {
         try appendForwardMismatch(allocator, violations, source_node, destination_node);
     }
 }
@@ -59,14 +59,14 @@ fn checkReversePair(graph: *const graph_core.GraphCore, source_node: u32, destin
     if (source_node >= graph.publishedNodeCount()) return error.CorruptGraph;
     const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     if (source_adjacency.flags.removed) return;
-    if (!run_search.adjacencyContains(graph, source_adjacency, destination_node, .fwd)) return error.CorruptGraph;
+    if (!segment_search.adjacencyContains(graph, source_adjacency, destination_node, .fwd)) return error.CorruptGraph;
 }
 
 fn appendReversePairViolations(graph: *const graph_core.GraphCore, allocator: std.mem.Allocator, violations: *std.ArrayList(types.Violation), source_node: u32, destination_node: u32) !void {
     if (source_node >= graph.publishedNodeCount()) return;
     const source_adjacency = node_access.publishedAdjAtConst(graph, .{ .index = source_node });
     if (source_adjacency.flags.removed) return;
-    if (!run_search.adjacencyContains(graph, source_adjacency, destination_node, .fwd)) {
+    if (!segment_search.adjacencyContains(graph, source_adjacency, destination_node, .fwd)) {
         try appendForwardMismatch(allocator, violations, source_node, destination_node);
     }
 }

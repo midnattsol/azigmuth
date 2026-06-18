@@ -12,10 +12,10 @@ pub fn addNode(graph: *graph_core.GraphCore) !types.NodeId {
         // Node ids are u32; the directory ceiling may exceed the index space.
         if (node_idx == std.math.maxInt(u32)) return error.OutOfMemory;
         const page_idx = page_ops.pageOf(node_idx, constants.NODES_PER_PAGE);
-        _ = try page_ops.ensureNodeMetaPage(graph, page_idx);
-        _ = try page_ops.ensureNodeHotPage(graph, page_idx);
-        _ = try page_ops.ensureNodePublishedPage(graph, page_idx);
-        page_ops.nodeHotAt(graph, .{ .index = node_idx }).storeNextLocalEdgeId(1);
+        _ = try page_ops.ensureNodePublicationPage(graph, page_idx);
+        _ = try page_ops.ensureNodeMutationControlPage(graph, page_idx);
+        _ = try page_ops.ensureNodeAdjacencyBufferPage(graph, page_idx);
+        page_ops.nodeMutationControlAt(graph, .{ .index = node_idx }).storeNextLocalEdgeId(1);
 
         if (graph.node_count.cmpxchgWeak(node_idx, node_idx + 1, .acq_rel, .acquire) == null) {
             return .{ .index = node_idx };

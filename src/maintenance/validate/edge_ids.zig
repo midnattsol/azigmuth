@@ -5,7 +5,7 @@ const graph_core = @import("../../core/graph_core.zig");
 const node_access = @import("../../core/node_access.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 
 const EdgeIdScan = struct {
     adjacency: types.NodeAdj,
@@ -72,7 +72,7 @@ fn scanForwardEdgeIds(
     }.callback);
 
     if (check_edge_id_counter) {
-        const next_id = page_ops.nodeHotAtConst(graph, .{ .index = node_id }).loadNextLocalEdgeId();
+        const next_id = page_ops.nodeMutationControlAtConst(graph, .{ .index = node_id }).loadNextLocalEdgeId();
         if (scan.max_seen >= next_id) try appendCounterRegression(&scan, next_id);
     }
 }
@@ -84,11 +84,11 @@ fn edgeIdAppearsLater(
     current_slot: usize,
     edge_id: u32,
 ) bool {
-    if (common.groupCount(adjacency, .fwd) == 0) {
+    if (common.segmentCount(adjacency, .fwd) == 0) {
         const side_adj = common.sideAdjOf(adjacency, .fwd);
-        if (node_published.NodePublished.isTiny(&side_adj)) {
-            const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-            const count = node_published.NodePublished.tinyCount(&side_adj);
+        if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+            const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
+            const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
             for (current_slot + 1..count) |slot_idx| {
                 if (slot.entries[slot_idx].edge_id == edge_id) return true;
             }
@@ -106,13 +106,13 @@ fn edgeIdAppearsLater(
         return false;
     }
 
-    const first_group_idx = common.firstGroup(adjacency, .fwd);
-    const end_group = first_group_idx + common.groupCount(adjacency, .fwd);
-    if (end_group > graph.loadGroupCount()) return false;
-    for (first_group_idx..end_group) |group_idx_usize| {
-        const group_idx: u32 = @intCast(group_idx_usize);
-        const group = page_ops.edgeBlockGroupAtConst(graph, group_idx);
-        for (group.start..group.start + group.count) |block_idx_usize| {
+    const first_segment_idx = common.firstSegment(adjacency, .fwd);
+    const end_segment = first_segment_idx + common.segmentCount(adjacency, .fwd);
+    if (end_segment > graph.loadSegmentCount()) return false;
+    for (first_segment_idx..end_segment) |segment_idx_usize| {
+        const segment_idx: u32 = @intCast(segment_idx_usize);
+        const segment = page_ops.edgeBlockSegmentAtConst(graph, segment_idx);
+        for (segment.start..segment.start + segment.count) |block_idx_usize| {
             const block_idx: u32 = @intCast(block_idx_usize);
             const id_block = page_ops.edgeBlockFwdIdsAtConst(graph, block_idx);
             const alive_count = @min(page_ops.blockAliveCount(graph, block_idx, .fwd), constants.EDGES_PER_BLOCK);

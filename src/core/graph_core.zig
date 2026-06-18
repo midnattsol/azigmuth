@@ -21,7 +21,7 @@ pub const MAX_TOKEN_LIVENESS_SLOTS: usize = constants.MAX_READER_SLOTS + MAX_TRA
 pub const GraphCore = struct {
     pub const NodePageDirectory = radix_directory.RadixDirectory(constants.NODE_DIR.inline_pages, constants.NODE_DIR.l1, constants.NODE_DIR.l2);
     pub const EdgeBlockPageDirectory = radix_directory.RadixDirectory(constants.EDGE_BLOCK_DIR.inline_pages, constants.EDGE_BLOCK_DIR.l1, constants.EDGE_BLOCK_DIR.l2);
-    pub const EdgeGroupPageDirectory = radix_directory.RadixDirectory(constants.EDGE_GROUP_DIR.inline_pages, constants.EDGE_GROUP_DIR.l1, constants.EDGE_GROUP_DIR.l2);
+    pub const EdgeSegmentPageDirectory = radix_directory.RadixDirectory(constants.EDGE_SEGMENT_DIR.inline_pages, constants.EDGE_SEGMENT_DIR.l1, constants.EDGE_SEGMENT_DIR.l2);
 
     allocator: std.mem.Allocator,
 
@@ -32,27 +32,27 @@ pub const GraphCore = struct {
     /// Enables stable per-edge property rows (see GraphOptions.edge_properties).
     edge_properties_enabled: bool = false,
 
-    /// Atomically-published node metadata pages for lock-free node lookup
-    /// during concurrent reads and `addNode` growth.
-    node_meta_pages: NodePageDirectory = .{},
-    node_published_pages: NodePageDirectory = .{},
-    node_hot_pages: NodePageDirectory = .{},
-    tiny_block_fwd_pages: NodePageDirectory = .{},
-    tiny_block_rev_pages: NodePageDirectory = .{},
+    /// Per-node publication cells: one atomic state word that selects the
+    /// visible adjacency buffers, flags, degree inline fields, and version.
+    node_publication_pages: NodePageDirectory = .{},
+    node_adjacency_buffer_pages: NodePageDirectory = .{},
+    node_mutation_control_pages: NodePageDirectory = .{},
+    tiny_fwd_slot_pages: NodePageDirectory = .{},
+    tiny_rev_slot_pages: NodePageDirectory = .{},
 
-    /// Per-tiny-slot metadata pages for lock-free retired/free stacks.
-    tiny_block_fwd_meta_pages: NodePageDirectory = .{},
-    tiny_block_rev_meta_pages: NodePageDirectory = .{},
+    /// Per-tiny-slot reclamation entries for lock-free retired/free stacks.
+    tiny_fwd_slot_reclamation_pages: NodePageDirectory = .{},
+    tiny_rev_slot_reclamation_pages: NodePageDirectory = .{},
 
     /// Per-node repair queue membership bitmaps to avoid duplicate queue entries.
     repair_queued_fwd_pages: NodePageDirectory = .{},
     repair_queued_rev_pages: NodePageDirectory = .{},
 
-    /// Atomically-published page directories for lock-free block/group lookup.
+    /// Atomically-published page directories for lock-free block/segment lookup.
     /// Values are `@intFromPtr(page.ptr)` or 0 when the page is absent.
     edge_blocks_fwd_pages: EdgeBlockPageDirectory = .{},
     edge_blocks_rev_pages: EdgeBlockPageDirectory = .{},
-    edge_block_group_pages: EdgeGroupPageDirectory = .{},
+    edge_block_segment_pages: EdgeSegmentPageDirectory = .{},
 
     /// Per-forward-block edge ID sidecar pages. Same block_idx and lifecycle
     /// as edge_blocks_fwd_pages.
@@ -62,16 +62,16 @@ pub const GraphCore = struct {
     /// Same block_idx and lifecycle as edge_blocks_fwd_pages.
     edge_blocks_fwd_prop_pages: EdgeBlockPageDirectory = .{},
 
-    /// Per-property-row lifecycle metadata for the lock-free free/retired
-    /// row stacks (edge_properties mode). 256 rows per page.
-    prop_row_meta_pages: NodePageDirectory = .{},
+    /// Per-property-row reclamation entries for the lock-free free/retired
+    /// row stacks (edge_properties mode).
+    prop_row_reclamation_pages: NodePageDirectory = .{},
 
-    /// Per-group metadata pages for lock-free retired/free stacks.
-    edge_block_group_meta_pages: EdgeGroupPageDirectory = .{},
+    /// Per-segment reclamation entries for lock-free retired/free stacks.
+    edge_block_segment_reclamation_pages: EdgeSegmentPageDirectory = .{},
 
-    /// Per-block metadata pages for lock-free retired/free stacks.
-    edge_blocks_fwd_meta_pages: EdgeBlockPageDirectory = .{},
-    edge_blocks_rev_meta_pages: EdgeBlockPageDirectory = .{},
+    /// Per-block reclamation entries for lock-free retired/free stacks.
+    edge_blocks_fwd_reclamation_pages: EdgeBlockPageDirectory = .{},
+    edge_blocks_rev_reclamation_pages: EdgeBlockPageDirectory = .{},
 
     /// Per-block alive-count sidecar pages (u8 each): one 64-byte page covers
     /// a whole block page, keeping counts dense in cache during scans.
@@ -91,18 +91,18 @@ pub const GraphCore = struct {
 
     /// Tagged stack heads for tiny-slot reuse — same retire/reclaim discipline
     /// as edge blocks so superseded tiny slots return to circulation.
-    free_tiny_block_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
-    free_tiny_block_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
-    retired_tiny_block_fwd_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
-    retired_tiny_block_rev_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    free_tiny_fwd_slot_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    free_tiny_rev_slot_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    retired_tiny_fwd_slot_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
+    retired_tiny_rev_slot_head: std.atomic.Value(u64) = std.atomic.Value(u64).init(constants.END_OF_CHAIN),
 
-    /// Tagged stack heads for grouped-run retirement/reuse, indexed by
-    /// (span_len - 1). Published grouped sides own a contiguous span of up to
-    /// MAX_GROUPS_PER_NODE run descriptors.
-    free_group_spans_head: [constants.MAX_GROUPS_PER_NODE]std.atomic.Value(u64) =
-        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_GROUPS_PER_NODE,
-    retired_group_spans_head: [constants.MAX_GROUPS_PER_NODE]std.atomic.Value(u64) =
-        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_GROUPS_PER_NODE,
+    /// Tagged stack heads for segment descriptor retirement/reuse, indexed by
+    /// (slot_count - 1). Published segmented sides own a contiguous set of up to
+    /// MAX_SEGMENTS_PER_NODE segment descriptors.
+    free_segment_slots_head: [constants.MAX_SEGMENTS_PER_NODE]std.atomic.Value(u64) =
+        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_SEGMENTS_PER_NODE,
+    retired_segment_slots_head: [constants.MAX_SEGMENTS_PER_NODE]std.atomic.Value(u64) =
+        [_]std.atomic.Value(u64){std.atomic.Value(u64).init(constants.END_OF_CHAIN)} ** constants.MAX_SEGMENTS_PER_NODE,
 
     /// Repair debt queues — node indices below occupancy threshold.
     /// These are best-effort single-writer queues.  Concurrent writers
@@ -116,12 +116,12 @@ pub const GraphCore = struct {
     /// Readers load this atomically before dereferencing a node page.
     node_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    /// Monotonic counters — total blocks/groups ever allocated.
+    /// Monotonic counters — total blocks/segments ever allocated.
     block_fwd_count: u32 = 0,
     block_rev_count: u32 = 0,
-    group_count: u32 = 0,
-    tiny_block_fwd_count: u32 = 0,
-    tiny_block_rev_count: u32 = 0,
+    segment_count: u32 = 0,
+    tiny_fwd_slot_count: u32 = 0,
+    tiny_rev_slot_count: u32 = 0,
 
     /// Monotonic property-row counter. Row 0 is reserved as invalid/unset.
     prop_row_count: u32 = 1,
@@ -200,8 +200,8 @@ pub const GraphCore = struct {
     // Written with atomic RMW during allocation; every cross-thread read
     // must go through these acquire loads (a plain read is a data race).
 
-    pub inline fn loadGroupCount(self: *const GraphCore) u32 {
-        return @atomicLoad(u32, @constCast(&self.group_count), .acquire);
+    pub inline fn loadSegmentCount(self: *const GraphCore) u32 {
+        return @atomicLoad(u32, @constCast(&self.segment_count), .acquire);
     }
 
     pub inline fn loadBlockFwdCount(self: *const GraphCore) u32 {
@@ -213,11 +213,11 @@ pub const GraphCore = struct {
     }
 
     pub inline fn loadTinyFwdCount(self: *const GraphCore) u32 {
-        return @atomicLoad(u32, @constCast(&self.tiny_block_fwd_count), .acquire);
+        return @atomicLoad(u32, @constCast(&self.tiny_fwd_slot_count), .acquire);
     }
 
     pub inline fn loadTinyRevCount(self: *const GraphCore) u32 {
-        return @atomicLoad(u32, @constCast(&self.tiny_block_rev_count), .acquire);
+        return @atomicLoad(u32, @constCast(&self.tiny_rev_slot_count), .acquire);
     }
 
     pub inline fn loadPropRowCount(self: *const GraphCore) u32 {

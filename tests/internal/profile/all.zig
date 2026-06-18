@@ -29,13 +29,13 @@ test "embedded profile: multi-block adjacency works end to end on 16-edge blocks
 
     const source = try graph.addNode();
     var destinations: [100]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
     // ~7 blocks of 16 after tiny promotion.
     for (destinations) |destination| try graph.addEdge(source, destination, 0, 0);
     try testing.expectEqual(@as(usize, destinations.len), try graph.outDegree(source));
 
     // Tail removals + repair keep the 12/16 occupancy floor honest. With
-    // 16-edge blocks the run-fragmentation bound trips sooner, so follow the
+    // 16-edge blocks the segment-fragmentation bound trips sooner, so follow the
     // documented contract: repair the node and retry on RepairRequired.
     var removed: usize = 0;
     for (destinations[destinations.len - 10 ..]) |destination| {
@@ -59,7 +59,7 @@ test "embedded profile: graph operations work end to end" {
     defer graph.deinit();
 
     var nodes: [300]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     // Fan-out past the tiny cap and across block boundaries.
     for (nodes[1..]) |destination| {
@@ -76,9 +76,9 @@ test "embedded profile: readers beyond the slot pool fall back or fail closed" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
     // 8 precise slots + 8 tracked overflow tokens: 16 concurrent iterators
     // must be accepted; the 17th must fail closed with GraphBusy.
@@ -87,9 +87,9 @@ test "embedded profile: readers beyond the slot pool fall back or fail closed" {
     defer for (iterators[0..opened]) |*it| it.deinit();
 
     while (opened < iterators.len) : (opened += 1) {
-        iterators[opened] = try graph.neighbors(a);
+        iterators[opened] = try graph.neighbors(source);
     }
-    try testing.expectError(error.GraphBusy, graph.neighbors(a));
+    try testing.expectError(error.GraphBusy, graph.neighbors(source));
 }
 
 test "embedded profile: GraphCore fixed footprint stays small" {

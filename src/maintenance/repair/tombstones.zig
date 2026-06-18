@@ -83,8 +83,8 @@ pub fn hasAnyTombstone(
     graph: *const graph_core.GraphCore,
     first_block: u32,
     block_count: u32,
-    group_count: u16,
-    first_group: u32,
+    segment_count: u16,
+    first_segment: u32,
     comptime side: adjacency.AdjSide,
 ) bool {
     var probe = TombstoneProbe{};
@@ -93,8 +93,8 @@ pub fn hasAnyTombstone(
         .{
             .first_block = first_block,
             .block_count = block_count,
-            .group_count = group_count,
-            .first_group = first_group,
+            .segment_count = segment_count,
+            .first_segment = first_segment,
         },
         side,
         &probe,

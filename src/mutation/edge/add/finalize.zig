@@ -40,13 +40,13 @@ pub fn finalizeAdded(
     forward_applied: shared.AppliedAppend,
     reverse_prepared: shared.PreparedAppendBlock,
     reverse_applied: shared.AppliedAppend,
-    old_source_groups: shared.OldGroupChain,
-    old_destination_groups: shared.OldGroupChain,
+    old_source_segments: shared.OldSegmentSlots,
+    old_destination_segments: shared.OldSegmentSlots,
     sorted_fwd: bool,
     sorted_rev: bool,
 ) !void {
     scratch.disarm();
     shared.publishAdded(endpoints, source, destination, publish_adj.source_publish_adj, publish_adj.destination_publish_adj, sorted_fwd, sorted_rev);
-    try shared.retireAdded(graph, forward_prepared, forward_applied, reverse_prepared, reverse_applied, old_source_groups, old_destination_groups);
+    try shared.retireAdded(graph, forward_prepared, forward_applied, reverse_prepared, reverse_applied, old_source_segments, old_destination_segments);
     _ = graph.edge_count.fetchAdd(1, .release);
 }

@@ -12,9 +12,9 @@ test "iterator: materializeExact with capacity larger than snapshotDegree uses s
 
     const source = try graph.addNode();
     var targets: [5]graph_mod.NodeId = undefined;
-    for (0..5) |i| {
-        targets[i] = try graph.addNode();
-        try graph.addEdge(source, targets[i], 0, 0);
+    for (0..5) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
     var it = try graph.neighbors(source);
@@ -46,9 +46,9 @@ test "iterator: snapshotDegree matches materialize length for forward neighbors"
 
     const source = try graph.addNode();
     var targets: [10]graph_mod.NodeId = undefined;
-    for (0..10) |i| {
-        targets[i] = try graph.addNode();
-        try graph.addEdge(source, targets[i], 0, 0);
+    for (0..10) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
     var it = try graph.neighbors(source);
@@ -66,9 +66,9 @@ test "iterator: snapshotDegree matches materialize length for inNeighbors" {
 
     const hub = try graph.addNode();
     var sources: [10]graph_mod.NodeId = undefined;
-    for (0..10) |i| {
-        sources[i] = try graph.addNode();
-        try graph.addEdge(sources[i], hub, 0, 0);
+    for (0..10) |source_idx| {
+        sources[source_idx] = try graph.addNode();
+        try graph.addEdge(sources[source_idx], hub, 0, 0);
     }
 
     var it = try graph.inNeighbors(hub);
@@ -80,7 +80,7 @@ test "iterator: snapshotDegree matches materialize length for inNeighbors" {
     try testing.expectEqual(@as(usize, 10), materialized.len);
 }
 
-test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency returns correct count" {
+test "iterator: snapshotDegree for inNeighbors with segmented reverse adjacency returns correct count" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -90,36 +90,36 @@ test "iterator: snapshotDegree for inNeighbors with grouped reverse adjacency re
 
     const block0 = try graph.allocBlockRev();
     var blk0 = page_ops.edgeBlockAt(&graph.graph, block0, .rev);
-    for (0..64) |i| {
-        blk0.sources[i] = @intCast(i + 1);
+    for (0..64) |slot_idx| {
+        blk0.sources[slot_idx] = @intCast(slot_idx + 1);
     }
     page_ops.setBlockAliveCount(&graph.graph, block0, .rev, 64);
 
     const block1 = try graph.allocBlockRev();
     var blk1 = page_ops.edgeBlockAt(&graph.graph, block1, .rev);
-    for (0..64) |i| {
-        blk1.sources[i] = @intCast(i + 65);
+    for (0..64) |slot_idx| {
+        blk1.sources[slot_idx] = @intCast(slot_idx + 65);
     }
     page_ops.setBlockAliveCount(&graph.graph, block1, .rev, 64);
 
     const block2 = try graph.allocBlockRev();
     var blk2 = page_ops.edgeBlockAt(&graph.graph, block2, .rev);
-    for (0..2) |i| {
-        blk2.sources[i] = @intCast(i + 129);
+    for (0..2) |slot_idx| {
+        blk2.sources[slot_idx] = @intCast(slot_idx + 129);
     }
     page_ops.setBlockAliveCount(&graph.graph, block2, .rev, @intCast(2));
 
-    const group0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, group0).* = .{ .start = block0, .count = 1 };
-    const group1 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, group1).* = .{ .start = block1, .count = 1 };
-    const group2 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, group2).* = .{ .start = block2, .count = 1 };
+    const segment0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment0).* = .{ .start = block0, .count = 1 };
+    const segment1 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment1).* = .{ .start = block1, .count = 1 };
+    const segment2 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment2).* = .{ .start = block2, .count = 1 };
 
     const node = try graph.nodeAt(hub);
     publish.publishedRevSide(node).block_count = 3;
-    publish.publishedRevSide(node).group_count = 3;
-    publish.publishedRevSide(node).first_group = group0;
+    publish.publishedRevSide(node).segment_count = 3;
+    publish.publishedRevSide(node).first_segment = segment0;
     publish.setPublishedRevDegree(node, @as(u22, @intCast(130)));
     try publish.syncToPublished(&graph, hub.index);
 

@@ -22,21 +22,21 @@
 //!  - one canonical `NodeRecord` per node (published sides normalized out of
 //!    the RCU double-buffers: only the active slot survives a save),
 //!  - the raw storage pages for edge blocks, alive-count sidecars, edge-id /
-//!    property-row sidecars (when enabled), grouped-run descriptors, and
+//!    property-row sidecars (when enabled), edge-block segment descriptors, and
 //!    tiny slots — exactly the engine's in-memory page layout,
 //!  - the free lists (cheap u32 index sections), so the loader does not need
 //!    an O(E) ownership sweep to rediscover reusable storage.
 //!
-//! Reconstructed at load (never persisted): page directories, BlockMeta
-//! stack metadata, retired stacks (must be empty — see save contract),
+//! Reconstructed at load (never persisted): page directories, ReclamationEntry
+//! stack links, retired stacks (must be empty — see save contract),
 //! reader/epoch state, repair queues (the authoritative debt source is the
 //! `needs_repair_*` bits inside each NodeRecord).
 //!
 //! ## Save contract (for the writer)
 //!
 //! The graph must be quiesced: no concurrent readers, writers, or repairers
-//! (same precondition as `deinitChecked`). The writer MUST run
-//! `reclaimRetired()` first so every retired block/group/tiny-slot/row has
+//! (same precondition as `deinitChecked`). The writer MUST segment
+//! `reclaimRetired()` first so every retired block/segment/tiny-slot/row has
 //! drained into the free structures (and frontier rollback has trimmed the
 //! pool); retired state is not representable in the file. Sides are written
 //! normalized: per node, the published `SideAdj`, degree, and sorted bit of
@@ -53,15 +53,15 @@
 //!    verify per-section checksums (eagerly, or lazily per section).
 //! 3. Materialize storage: copy (or, later, map) the page sections; rebuild
 //!    the page directories pointing at them; replay each NodeRecord into
-//!    `NodeMeta`/`NodePublished`/`NodeHot`; push the free-list sections onto
-//!    the lock-free stacks; restore the header counters.
+//!    `NodePublicationCell`/`NodeAdjacencyBuffers`/`NodeMutationControl`; push the free-list
+//!    sections onto the lock-free stacks; restore the header counters.
 //!
 //! Zero-copy note for the frozen mmap reader: the page sections (blocks,
-//! sidecars, groups, tiny) are the bulk of the file and keep the engine's
+//! sidecars, segments, tiny) are the bulk of the file and keep the engine's
 //! exact page layout, so a read-only graph can point its directories
 //! straight into the mapping. NodeRecords are intentionally NOT the
 //! in-memory node layout — they expand at load (O(node_count), tiny next to
-//! edge storage) into the mutable node pools, because `NodeMeta` words are
+//! edge storage) into the mutable node pools, because publication cells are
 //! mutated through atomics and must live in private memory anyway.
 
 const std = @import("std");
@@ -71,7 +71,7 @@ const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../page_ops.zig");
 const node_tiny = @import("../node/tiny.zig");
-const node_hot_layout = @import("../node/hot_layout.zig");
+const node_mutation_control_layout = @import("../node/mutation_control_layout.zig");
 const tiny_config = @import("../../core/tiny_config.zig");
 
 /// "AZMTHRB1" — RB-CSR graph file, format major 1.
@@ -107,18 +107,18 @@ pub const SectionId = enum(u16) {
     edge_ids_fwd = 5,
     /// `EdgeBlockFwdProps` pages (present iff `edge_properties`).
     prop_rows_fwd = 6,
-    /// `EdgeBlockGroup` pages.
-    groups = 7,
-    /// `TinyFwdBlock` pages.
+    /// `EdgeBlockSegment` pages.
+    segments = 7,
+    /// `TinyFwdSlot` pages.
     tiny_fwd = 8,
-    /// `TinyRevBlock` pages.
+    /// `TinyRevSlot` pages.
     tiny_rev = 9,
     /// Free forward block indices (u32 each; drain order is irrelevant).
     free_blocks_fwd = 10,
     /// Free reverse block indices.
     free_blocks_rev = 11,
-    /// Free grouped-run spans: `FreeGroupSpan` entries.
-    free_group_spans = 12,
+    /// Free edge-block segment segment_descriptors: `FreeSegmentSlots` entries.
+    free_segment_slots = 12,
     /// Free tiny forward slot indices (u32 each).
     free_tiny_fwd = 13,
     /// Free tiny reverse slot indices.
@@ -143,7 +143,7 @@ pub const FormatParams = extern struct {
     edges_per_block: u16,
     nodes_per_page: u16,
     edge_blocks_per_page: u16,
-    edge_groups_per_page: u16,
+    edge_segments_per_page: u16,
     tiny_fwd_cap_simple: u8,
     tiny_fwd_cap_multi: u8,
     tiny_rev_cap: u8,
@@ -154,7 +154,7 @@ pub const FormatParams = extern struct {
             .edges_per_block = constants.EDGES_PER_BLOCK,
             .nodes_per_page = @intCast(constants.NODES_PER_PAGE),
             .edge_blocks_per_page = @intCast(constants.EDGE_BLOCKS_PER_PAGE),
-            .edge_groups_per_page = @intCast(constants.EDGE_GROUPS_PER_PAGE),
+            .edge_segments_per_page = @intCast(constants.EDGE_SEGMENTS_PER_PAGE),
             .tiny_fwd_cap_simple = tiny_config.TINY_FWD_CAP_SIMPLE,
             .tiny_fwd_cap_multi = tiny_config.TINY_FWD_CAP_MULTI,
             .tiny_rev_cap = tiny_config.TINY_REV_CAP,
@@ -190,9 +190,9 @@ pub const FileHeader = extern struct {
     edge_count: u64,
     block_fwd_count: u32,
     block_rev_count: u32,
-    group_count: u32,
-    tiny_block_fwd_count: u32,
-    tiny_block_rev_count: u32,
+    segment_count: u32,
+    tiny_fwd_slot_count: u32,
+    tiny_rev_slot_count: u32,
     prop_row_count: u32,
 
     header_checksum: u64,
@@ -212,9 +212,9 @@ pub const FileHeader = extern struct {
             .edge_count = core.edge_count.load(.acquire),
             .block_fwd_count = core.loadBlockFwdCount(),
             .block_rev_count = core.loadBlockRevCount(),
-            .group_count = core.loadGroupCount(),
-            .tiny_block_fwd_count = core.loadTinyFwdCount(),
-            .tiny_block_rev_count = core.loadTinyRevCount(),
+            .segment_count = core.loadSegmentCount(),
+            .tiny_fwd_slot_count = core.loadTinyFwdCount(),
+            .tiny_rev_slot_count = core.loadTinyRevCount(),
             .prop_row_count = core.loadPropRowCount(),
             .header_checksum = 0,
         };
@@ -253,9 +253,9 @@ pub const SectionDescriptor = extern struct {
 };
 
 /// Canonical persisted node state: the published view, normalized out of the
-/// RCU double-buffers. 48 bytes. On load this expands into `NodeMeta`
-/// (degrees/flags, indexes 0, version 0), `NodePublished` (slot 0 = the
-/// persisted side, sorted bits as stored) and `NodeHot`
+/// RCU double-buffers. 48 bytes. On load this expands into `NodePublicationCell`
+/// (degrees/flags, indexes 0, version 0), `NodeAdjacencyBuffers` (slot 0 = the
+/// persisted side, sorted bits as stored) and `NodeMutationControl`
 /// (`next_local_edge_id`; claims start released).
 pub const NodeRecord = extern struct {
     fwd: types.SideAdj,
@@ -276,11 +276,11 @@ pub const NodeRecord = extern struct {
     };
 };
 
-/// Free grouped-run span entry (`free_group_spans` section): the engine
-/// keeps one free stack per span length, so the length must round-trip.
-pub const FreeGroupSpan = extern struct {
-    first_group: u32,
-    span_count: u16,
+/// Free edge-block segment slot_entry entry (`free_segment_slots` section): the engine
+/// keeps one free stack per slot count, so the length must round-trip.
+pub const FreeSegmentSlots = extern struct {
+    first_segment: u32,
+    slot_count: u16,
     _reserved: u16 = 0,
 };
 
@@ -301,16 +301,16 @@ pub fn blockPages(block_count: u32) u64 {
     return pagesFor(block_count, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
-pub fn groupPages(group_count: u32) u64 {
-    return pagesFor(group_count, constants.EDGE_GROUPS_PER_PAGE);
+pub fn segmentPages(segment_count: u32) u64 {
+    return pagesFor(segment_count, constants.EDGE_SEGMENTS_PER_PAGE);
 }
 
 pub fn tinyFwdPages(tiny_count: u32) u64 {
-    return pagesFor(tiny_count, node_tiny.TINY_BLOCKS_FWD_PER_PAGE);
+    return pagesFor(tiny_count, node_tiny.TINY_FWD_SLOTS_PER_PAGE);
 }
 
 pub fn tinyRevPages(tiny_count: u32) u64 {
-    return pagesFor(tiny_count, node_tiny.TINY_BLOCKS_REV_PER_PAGE);
+    return pagesFor(tiny_count, node_tiny.TINY_REV_SLOTS_PER_PAGE);
 }
 
 /// Expected payload byte length of a fixed-shape section given the header,
@@ -331,11 +331,11 @@ pub fn expectedSectionBytes(header: FileHeader, id: SectionId) ?u64 {
             blockPages(header.block_fwd_count) * constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockFwdProps)
         else
             0,
-        .groups => groupPages(header.group_count) * constants.EDGE_GROUPS_PER_PAGE * @sizeOf(types.EdgeBlockGroup),
-        .tiny_fwd => tinyFwdPages(header.tiny_block_fwd_count) * node_tiny.TINY_BLOCKS_FWD_PER_PAGE * @sizeOf(node_tiny.TinyFwdBlock),
-        .tiny_rev => tinyRevPages(header.tiny_block_rev_count) * node_tiny.TINY_BLOCKS_REV_PER_PAGE * @sizeOf(node_tiny.TinyRevBlock),
+        .segments => segmentPages(header.segment_count) * constants.EDGE_SEGMENTS_PER_PAGE * @sizeOf(types.EdgeBlockSegment),
+        .tiny_fwd => tinyFwdPages(header.tiny_fwd_slot_count) * node_tiny.TINY_FWD_SLOTS_PER_PAGE * @sizeOf(node_tiny.TinyFwdSlot),
+        .tiny_rev => tinyRevPages(header.tiny_rev_slot_count) * node_tiny.TINY_REV_SLOTS_PER_PAGE * @sizeOf(node_tiny.TinyRevSlot),
         .free_blocks_fwd, .free_blocks_rev, .free_tiny_fwd, .free_tiny_rev, .free_prop_rows => null,
-        .free_group_spans => null,
+        .free_segment_slots => null,
     };
 }
 
@@ -359,7 +359,7 @@ pub fn validateSectionTable(header: FileHeader, table: []const SectionDescriptor
         if (expectedSectionBytes(header, id)) |expected_bytes| {
             if (descriptor.byte_len != expected_bytes) return error.CorruptSectionTable;
         } else {
-            const entry_bytes: u64 = if (id == .free_group_spans) @sizeOf(FreeGroupSpan) else @sizeOf(u32);
+            const entry_bytes: u64 = if (id == .free_segment_slots) @sizeOf(FreeSegmentSlots) else @sizeOf(u32);
             if (descriptor.byte_len != descriptor.entry_count * entry_bytes) return error.CorruptSectionTable;
         }
 
@@ -401,7 +401,7 @@ comptime {
     std.debug.assert(@sizeOf(NodeRecord) == 48);
     std.debug.assert(@sizeOf(SectionDescriptor) == 32);
     std.debug.assert(@sizeOf(FormatParams) == 12);
-    std.debug.assert(@sizeOf(FreeGroupSpan) == 8);
+    std.debug.assert(@sizeOf(FreeSegmentSlots) == 8);
     std.debug.assert(@sizeOf(FileHeader) <= HEADER_BYTES);
     std.debug.assert(SECTION_TABLE_OFFSET % SECTION_ALIGN == 0);
     std.debug.assert(PAYLOAD_BASE_OFFSET % SECTION_ALIGN == 0);
@@ -409,10 +409,10 @@ comptime {
     // Page payloads must keep their in-memory shapes: zero-copy depends on it.
     std.debug.assert(@sizeOf(types.EdgeBlockFwd) == 8 * @as(usize, constants.EDGES_PER_BLOCK));
     std.debug.assert(@sizeOf(types.EdgeBlockRev) == 4 * @as(usize, constants.EDGES_PER_BLOCK));
-    std.debug.assert(@sizeOf(types.EdgeBlockGroup) == 8);
+    std.debug.assert(@sizeOf(types.EdgeBlockSegment) == 8);
 
     // Intentional anchors: writer/loader will need these modules,
     // and referencing them here documents the dependency.
     _ = page_ops;
-    _ = node_hot_layout;
+    _ = node_mutation_control_layout;
 }

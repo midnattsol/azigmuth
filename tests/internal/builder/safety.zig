@@ -48,8 +48,8 @@ test "builder: multiple invalid addEdge calls do not leak keys" {
     try testing.expectEqual(@as(u32, 0), @as(u32, @intCast(builder.edge_keys.count())));
 
     // Valid edges still work.
-    const dst = try builder.addNode();
-    try builder.addEdge(valid, dst, 0, 0);
+    const destination = try builder.addNode();
+    try builder.addEdge(valid, destination, 0, 0);
 
     var frozen = try builder.freeze();
     defer frozen.deinit();
@@ -63,15 +63,15 @@ test "builder: freeze with many nodes and edges produces consistent graph" {
 
     const node_count: usize = 50;
     var nodes: [50]graph_mod.NodeId = undefined;
-    for (0..node_count) |i| {
-        nodes[i] = try builder.addNode();
+    for (0..node_count) |node_idx| {
+        nodes[node_idx] = try builder.addNode();
     }
 
     var edge_count: usize = 0;
-    for (0..node_count) |i| {
-        for (0..@min(i, 5)) |j| {
-            if (i != j) {
-                try builder.addEdge(nodes[i], nodes[j], 0, 0);
+    for (0..node_count) |source_idx| {
+        for (0..@min(source_idx, 5)) |destination_idx| {
+            if (source_idx != destination_idx) {
+                try builder.addEdge(nodes[source_idx], nodes[destination_idx], 0, 0);
                 edge_count += 1;
             }
         }
@@ -84,9 +84,9 @@ test "builder: freeze with many nodes and edges produces consistent graph" {
     try testing.expectEqual(@as(u64, @intCast(edge_count)), frozen.edgeCount());
 
     // Every node should have correct outDegree.
-    for (0..node_count) |i| {
-        const expected: usize = @min(i, 5);
-        try testing.expectEqual(expected, try frozen.outDegree(nodes[i]));
+    for (0..node_count) |node_idx| {
+        const expected: usize = @min(node_idx, 5);
+        try testing.expectEqual(expected, try frozen.outDegree(nodes[node_idx]));
     }
 
     try frozen.validate();
@@ -104,9 +104,9 @@ test "builder: freeze with nodes but zero edges produces clean graph" {
     try testing.expectEqual(@as(usize, 20), frozen.nodeCount());
     try testing.expectEqual(@as(u64, 0), frozen.edgeCount());
 
-    for (0..20) |i| {
-        try testing.expectEqual(@as(usize, 0), try frozen.outDegree(.{ .index = @intCast(i) }));
-        try testing.expectEqual(@as(usize, 0), try frozen.inDegree(.{ .index = @intCast(i) }));
+    for (0..20) |node_idx| {
+        try testing.expectEqual(@as(usize, 0), try frozen.outDegree(.{ .index = @intCast(node_idx) }));
+        try testing.expectEqual(@as(usize, 0), try frozen.inDegree(.{ .index = @intCast(node_idx) }));
     }
 
     try frozen.validate();
@@ -118,10 +118,10 @@ test "builder: freeze produces zero-violation debugValidate" {
 
     for (0..40) |_| _ = try builder.addNode();
 
-    for (0..40) |i| {
-        // Each node i has edges to nodes [0 .. i-1].
-        for (0..i) |j| {
-            try builder.addEdge(.{ .index = @intCast(i) }, .{ .index = @intCast(j) }, 0, 0);
+    for (0..40) |source_idx| {
+        // Each node source_idx has edges to nodes [0 .. source_idx-1].
+        for (0..source_idx) |destination_idx| {
+            try builder.addEdge(.{ .index = @intCast(source_idx) }, .{ .index = @intCast(destination_idx) }, 0, 0);
         }
     }
 

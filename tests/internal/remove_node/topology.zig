@@ -77,7 +77,7 @@ test "block capacity: 64th edge keeps a single block, 65th triggers a second blo
 
     const after_64 = try graph.publishedNodeAdj(source);
     try testing.expectEqual(@as(u16, 1), after_64.block_count_fwd);
-    try testing.expectEqual(@as(u16, 0), after_64.group_count_fwd);
+    try testing.expectEqual(@as(u16, 0), after_64.segment_count_fwd);
     try testing.expectEqual(@as(usize, 64), try graph.outDegree(source));
 
     const sixty_fifth = try graph.addNode();
@@ -91,8 +91,8 @@ test "block capacity: 64th edge keeps a single block, 65th triggers a second blo
     const neighbor_list = try graph_mod.materializeConsuming(&iterator, testing.allocator);
     defer testing.allocator.free(neighbor_list);
     try testing.expectEqual(@as(usize, 65), neighbor_list.len);
-    var i: usize = 1;
-    while (i < neighbor_list.len) : (i += 1) {
-        try testing.expect(neighbor_list[i - 1].index < neighbor_list[i].index);
+    var neighbor_idx: usize = 1;
+    while (neighbor_idx < neighbor_list.len) : (neighbor_idx += 1) {
+        try testing.expect(neighbor_list[neighbor_idx - 1].index < neighbor_list[neighbor_idx].index);
     }
 }

@@ -22,9 +22,9 @@ test "mixed sequence: add, remove, repair, removeNode, add leaves a clean graph"
     for (0..10) |idx| {
         nodes[idx] = try graph.addNode();
     }
-    for (0..10) |i| {
-        for (0..10) |j| {
-            if (i != j) try graph.addEdge(nodes[i], nodes[j], 0, .{});
+    for (0..10) |source_idx| {
+        for (0..10) |destination_idx| {
+            if (source_idx != destination_idx) try graph.addEdge(nodes[source_idx], nodes[destination_idx], 0, .{});
         }
     }
     try expectNoViolations(graph, allocator);
@@ -61,12 +61,12 @@ test "mixed sequence: alternating addNode and addEdge with periodic repair stays
     var state: u64 = 12345;
     var round: usize = 0;
     while (round < 5) : (round += 1) {
-        for (0..6) |i| {
-            for (0..6) |j| {
-                if (i == j) continue;
+        for (0..6) |source_idx| {
+            for (0..6) |destination_idx| {
+                if (source_idx == destination_idx) continue;
                 state = state *% 6364136223846793005 +% 1442695040888963407;
                 const relation: u16 = @intCast(state & 0xFFFF);
-                _ = graph.addEdge(nodes[i], nodes[j], relation, .{}) catch {};
+                _ = graph.addEdge(nodes[source_idx], nodes[destination_idx], relation, .{}) catch {};
             }
         }
         for (0..6) |node_idx| {
@@ -87,28 +87,28 @@ test "mixed sequence: addEdge, removeEdge, removeNode, addNode with the recycled
     var graph = try azigmuth.Graph.init(allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
+    const source = try graph.addNode();
+    const removed = try graph.addNode();
+    const destination = try graph.addNode();
 
-    try graph.addEdge(a, b, 0, .{});
-    try graph.addEdge(a, c, 0, .{});
-    try graph.addEdge(b, c, 0, .{});
+    try graph.addEdge(source, removed, 0, .{});
+    try graph.addEdge(source, destination, 0, .{});
+    try graph.addEdge(removed, destination, 0, .{});
     try expectNoViolations(graph, allocator);
 
-    _ = try graph.removeEdge(b, c);
+    _ = try graph.removeEdge(removed, destination);
     try expectNoViolations(graph, allocator);
 
-    _ = try graph.removeNode(b);
+    _ = try graph.removeNode(removed);
     try expectNoViolations(graph, allocator);
 
     const fresh = try graph.addNode();
-    try graph.addEdge(fresh, c, 0, .{});
+    try graph.addEdge(fresh, destination, 0, .{});
     try expectNoViolations(graph, allocator);
 
-    const d = try graph.addNode();
-    try graph.addEdge(a, d, 0, .{});
-    try graph.addEdge(d, fresh, 0, .{});
+    const extra_destination = try graph.addNode();
+    try graph.addEdge(source, extra_destination, 0, .{});
+    try graph.addEdge(extra_destination, fresh, 0, .{});
     try expectNoViolations(graph, allocator);
 
     var snapshot = try graph.snapshot(.{ .allocator = allocator });

@@ -81,28 +81,28 @@ test "addNode: parallel producers with concurrent edge insertion keep forward/re
     };
     var adder_ctx: AdderCtx = .{ .graph = &graph };
     threads[producer_count] = try std.Thread.spawn(.{}, struct {
-        fn run(ctx: *AdderCtx) void {
+        fn segment(ctx: *AdderCtx) void {
             var state: u64 = 0xCAFEBABE_DEADBEEF;
             var iterations: usize = 0;
             while (iterations < 300) {
-                const n = ctx.graph.graph.publishedNodeCount();
-                if (n < 2) {
+                const node_count = ctx.graph.graph.publishedNodeCount();
+                if (node_count < 2) {
                     std.atomic.spinLoopHint();
                     continue;
                 }
                 iterations += 1;
                 state = state *% 6364136223846793005 +% 1442695040888963407;
-                const src_idx: u32 = @intCast(state % n);
+                const source_idx: u32 = @intCast(state % node_count);
                 state = state *% 6364136223846793005 +% 1442695040888963407;
-                const dst_idx: u32 = @intCast(state % n);
-                if (src_idx != dst_idx) {
-                    if (ctx.graph.addEdge(.{ .index = src_idx }, .{ .index = dst_idx }, 0, 0)) {
+                const destination_idx: u32 = @intCast(state % node_count);
+                if (source_idx != destination_idx) {
+                    if (ctx.graph.addEdge(.{ .index = source_idx }, .{ .index = destination_idx }, 0, 0)) {
                         _ = ctx.successful_adds.fetchAdd(1, .monotonic);
                     } else |_| {}
                 }
             }
         }
-    }.run, .{&adder_ctx});
+    }.segment, .{&adder_ctx});
 
     for (threads[0..producer_count]) |thread| thread.join();
     threads[producer_count].join();

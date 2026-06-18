@@ -12,7 +12,7 @@ test "csr: materialized view matches the snapshot and survives its deinit" {
     defer graph.deinit();
 
     var nodes: [5]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     try graph.addEdge(nodes[0], nodes[1], 0, 0);
     try graph.addEdge(nodes[0], nodes[3], 0, 0);
@@ -47,7 +47,7 @@ test "csr: removed nodes are excluded as sources and destinations" {
     defer graph.deinit();
 
     var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     try graph.addEdge(nodes[0], nodes[1], 0, 0);
     try graph.addEdge(nodes[0], nodes[2], 0, 0);

@@ -15,7 +15,7 @@ test "edge metadata: distinct relation values coexist in the same forward adjace
     }
 
     const adj = try graph.publishedNodeAdj(source);
-    var seen_relations: [5]bool = .{ false } ** 5;
+    var seen_relations: [5]bool = .{false} ** 5;
     const alive = try publish.forwardLiveCount(&graph, adj);
     for (0..alive) |entry_idx| {
         const relation: usize = (try publish.readForwardEntry(&graph, adj, entry_idx)).relation;
@@ -57,11 +57,11 @@ test "edge metadata: edge presence is preserved when only a subset is removed" {
     var seen_count: usize = 0;
     for (0..@intCast(alive)) |entry_idx| {
         const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
-        const dest_idx: u32 = entry.destination;
+        const destination_idx: u32 = entry.destination;
         const relation: u16 = entry.relation;
         var matched = false;
         for (peers, 0..) |peer, peer_idx| {
-            if (peer.index == dest_idx) {
+            if (peer.index == destination_idx) {
                 try testing.expect(expected_relation_by_dest[peer_idx] != null);
                 try testing.expectEqual(expected_relation_by_dest[peer_idx].?, relation);
                 expected_relation_by_dest[peer_idx] = null;
@@ -117,14 +117,14 @@ test "edge metadata: non-zero flags survive a chain of mutations that force copy
 
     for (0..@intCast(alive)) |entry_idx| {
         const entry = try publish.readForwardEntry(&graph, adj, entry_idx);
-        const dest = entry.destination;
+        const destination = entry.destination;
         const raw_flags = @as(u16, @bitCast(entry.flags));
-        const expected_flags = expected.get(dest) orelse {
+        const expected_flags = expected.get(destination) orelse {
             try testing.expect(false); // destination not in expected set
             unreachable;
         };
         try testing.expectEqual(expected_flags, raw_flags);
-        _ = expected.remove(dest); // mark matched
+        _ = expected.remove(destination); // mark matched
     }
     try testing.expectEqual(@as(u32, 0), expected.count());
 

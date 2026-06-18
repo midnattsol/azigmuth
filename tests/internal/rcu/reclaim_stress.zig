@@ -63,7 +63,7 @@ fn churnLoop(task: *ChurnTask) void {
     }
 }
 
-test "stress rcu: multiple readers and writers run concurrently without corrupting graph state" {
+test "stress rcu: multiple readers and writers segment concurrently without corrupting graph state" {
     var graph = try graph_mod.Graph.init(std.heap.page_allocator);
 
     const reader_source = try graph.addNode();
@@ -158,8 +158,8 @@ test "stress rcu: flushRepairs drains explicit debt safely under concurrent chur
     // while the repair thread traverses published blocks.
     const churn_source = try graph.addNode();
     var churn_targets: [8]graph_mod.NodeId = undefined;
-    for (0..churn_targets.len) |i| {
-        churn_targets[i] = try graph.addNode();
+    for (0..churn_targets.len) |target_idx| {
+        churn_targets[target_idx] = try graph.addNode();
     }
 
     var stop = std.atomic.Value(bool).init(false);
@@ -177,7 +177,7 @@ test "stress rcu: flushRepairs drains explicit debt safely under concurrent chur
     graph.graph.repair_scan_cursor_fwd = 0;
     graph.graph.repair_scan_cursor_rev = 0;
 
-    // Let the churn thread build up traffic, then run flushRepairs
+    // Let the churn thread build up traffic, then segment flushRepairs
     // while blocks are being retired and reclaimed concurrently.
     var spin_warmup: usize = 0;
     while (spin_warmup < 5_000_000) : (spin_warmup += 1) {

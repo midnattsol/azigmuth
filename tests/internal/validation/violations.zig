@@ -14,10 +14,10 @@ fn hasViolationTag(violations: []const types.Violation, comptime tag: std.meta.T
     return false;
 }
 
-fn publishForwardSingleGroup(
+fn publishForwardSingleSegment(
     graph: *graph_mod.Graph,
     node: graph_mod.NodeId,
-    first_group: u32,
+    first_segment: u32,
     block_count: u16,
 ) !void {
     const node_buffer = try graph.nodeAt(node);
@@ -25,31 +25,31 @@ fn publishForwardSingleGroup(
     publish.publishedFwdSide(node_buffer).* = .{
         .first_block = undefined,
         .block_count = block_count,
-        .group_count = 1,
-        .first_group = first_group,
+        .segment_count = 1,
+        .first_segment = first_segment,
     };
-    node_buffer.storePublishedMeta(.{ .needs_repair_fwd = true });
+    node_buffer.storePublicationState(.{ .needs_repair_fwd = true });
     try publish.syncToPublished(&graph, node.index);
 }
 
-test "validation: debugValidate accepts short non-tail runs as valid layout" {
+test "validation: debugValidate accepts short non-tail segments as valid layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const node = try graph.addNode();
     const head_block = try graph.allocBlockFwd();
     const tail_block = try graph.allocBlockFwd();
-    const short_run_group = try graph.allocGroup();
-    const tail_group = try graph.allocGroup();
+    const short_segment = try graph.allocSegment();
+    const tail_segment = try graph.allocSegment();
 
     page_ops.setBlockAliveCount(&graph.graph, head_block, .fwd, 0);
     page_ops.setBlockAliveCount(&graph.graph, tail_block, .fwd, 0);
 
-    page_ops.edgeBlockGroupAt(&graph.graph, short_run_group).* = .{
+    page_ops.edgeBlockSegmentAt(&graph.graph, short_segment).* = .{
         .start = head_block,
         .count = 2,
     };
-    page_ops.edgeBlockGroupAt(&graph.graph, tail_group).* = .{
+    page_ops.edgeBlockSegmentAt(&graph.graph, tail_segment).* = .{
         .start = tail_block,
         .count = 1,
     };
@@ -59,17 +59,17 @@ test "validation: debugValidate accepts short non-tail runs as valid layout" {
     publish.publishedFwdSide(node_buffer).* = .{
         .first_block = head_block,
         .block_count = 3,
-        .group_count = 2,
-        .first_group = short_run_group,
+        .segment_count = 2,
+        .first_segment = short_segment,
     };
     try publish.syncToPublished(&graph, node.index);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(!hasViolationTag(violations, .run_fragmentation_requires_repair));
+    try testing.expect(!hasViolationTag(violations, .segment_fragmentation_requires_repair));
 }
 
-test "validation: debugValidate accepts grouped contiguous single run layout" {
+test "validation: debugValidate accepts segmented contiguous single segment layout" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -77,13 +77,13 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
     const block0 = try graph.allocBlockFwd();
     const block1 = try graph.allocBlockFwd();
     const block2 = try graph.allocBlockFwd();
-    const group = try graph.allocGroup();
+    const segment = try graph.allocSegment();
 
     page_ops.setBlockAliveCount(&graph.graph, block0, .fwd, 0);
     page_ops.setBlockAliveCount(&graph.graph, block1, .fwd, 0);
     page_ops.setBlockAliveCount(&graph.graph, block2, .fwd, 0);
 
-    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment).* = .{
         .start = block0,
         .count = 3,
     };
@@ -93,14 +93,14 @@ test "validation: debugValidate accepts grouped contiguous single run layout" {
     publish.publishedFwdSide(node_buffer).* = .{
         .first_block = block0,
         .block_count = 3,
-        .group_count = 1,
-        .first_group = group,
+        .segment_count = 1,
+        .first_segment = segment,
     };
     try publish.syncToPublished(&graph, node.index);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
-    try testing.expect(!hasViolationTag(violations, .grouped_layout_needs_canonicalization));
+    try testing.expect(!hasViolationTag(violations, .segmented_layout_needs_canonicalization));
 }
 
 test "validation: debugValidate emits degree_mismatch when cached degree diverges from alive edges" {
@@ -114,10 +114,10 @@ test "validation: debugValidate emits degree_mismatch when cached degree diverge
     try graph.addEdge(source, target_a, 0, 0);
     try graph.addEdge(source, target_b, 0, 0);
 
-    var meta = page_ops.nodeMetaAtConst(&graph.graph, source).loadPublishedMeta();
-    meta.degree_fwd = 0;
-    meta.degree_rev = 99;
-    publish.storePublishedMeta(&graph, source.index, meta);
+    var state = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+    state.degree_fwd = 0;
+    state.degree_rev = 99;
+    publish.storePublicationState(&graph, source.index, state);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
@@ -125,12 +125,12 @@ test "validation: debugValidate emits degree_mismatch when cached degree diverge
 
     var saw_fwd = false;
     var saw_rev = false;
-    for (violations) |v| {
-        if (v == .degree_mismatch) {
-            if (v.degree_mismatch.expected == 2 and v.degree_mismatch.actual == 0) {
-                try testing.expectEqual(source.index, v.degree_mismatch.node);
+    for (violations) |violation| {
+        if (violation == .degree_mismatch) {
+            if (violation.degree_mismatch.expected == 2 and violation.degree_mismatch.actual == 0) {
+                try testing.expectEqual(source.index, violation.degree_mismatch.node);
                 saw_fwd = true;
-            } else if (v.degree_mismatch.expected == 0 and v.degree_mismatch.actual == 99) {
+            } else if (violation.degree_mismatch.expected == 0 and violation.degree_mismatch.actual == 99) {
                 saw_rev = true;
             }
         }
@@ -143,26 +143,26 @@ test "validation: debugValidate detects forward/reverse visible count mismatch" 
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
+    const source_one = try graph.addNode();
+    const destination = try graph.addNode();
+    const source_two = try graph.addNode();
 
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(c, b, 0, 0);
+    try graph.addEdge(source_one, destination, 0, 0);
+    try graph.addEdge(source_two, destination, 0, 0);
     try graph.validate();
 
-    const b_adj = try graph.publishedNodeAdj(b);
-    if (publish.reverseIsTiny(b_adj)) {
-        try publish.appendReverseSource(&graph, b, b_adj, try publish.readReverseSource(&graph, b_adj, 0));
+    const destination_adj = try graph.publishedNodeAdj(destination);
+    if (publish.reverseIsTiny(destination_adj)) {
+        try publish.appendReverseSource(&graph, destination, destination_adj, try publish.readReverseSource(&graph, destination_adj, 0));
     } else {
-        const rev_block = page_ops.edgeBlockAt(&graph.graph, b_adj.first_block_rev, .rev);
-        const alive: u7 = @intCast(page_ops.blockAliveCount(&graph.graph, b_adj.first_block_rev, .rev));
+        const rev_block = page_ops.edgeBlockAt(&graph.graph, destination_adj.first_block_rev, .rev);
+        const alive: u7 = @intCast(page_ops.blockAliveCount(&graph.graph, destination_adj.first_block_rev, .rev));
 
         // Duplicate the first source entry to create 3 reverse but only 2 forward.
         if (alive < 64) {
             const dup_source = rev_block.sources[0];
             rev_block.sources[alive] = dup_source;
-            page_ops.setBlockAliveCount(&graph.graph, b_adj.first_block_rev, .rev, @intCast(alive + 1));
+            page_ops.setBlockAliveCount(&graph.graph, destination_adj.first_block_rev, .rev, @intCast(alive + 1));
         }
     }
 
@@ -170,10 +170,10 @@ test "validation: debugValidate detects forward/reverse visible count mismatch" 
     defer testing.allocator.free(violations);
     try testing.expect(hasViolationTag(violations, .forward_reverse_count_mismatch));
 
-    for (violations) |v| {
-        if (v == .forward_reverse_count_mismatch) {
-            try testing.expectEqual(@as(u64, 2), v.forward_reverse_count_mismatch.forward_total);
-            try testing.expectEqual(@as(u64, 3), v.forward_reverse_count_mismatch.reverse_total);
+    for (violations) |violation| {
+        if (violation == .forward_reverse_count_mismatch) {
+            try testing.expectEqual(@as(u64, 2), violation.forward_reverse_count_mismatch.forward_total);
+            try testing.expectEqual(@as(u64, 3), violation.forward_reverse_count_mismatch.reverse_total);
         }
     }
 }
@@ -182,29 +182,29 @@ test "validation: debugValidate emits forward_tombstone_missing_repair_flag when
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const removed_destination = try graph.addNode();
+    try graph.addEdge(source, removed_destination, 0, 0);
 
-    _ = try graph.removeNode(b);
+    _ = try graph.removeNode(removed_destination);
     try graph.validate();
 
-    var meta = page_ops.nodeMetaAtConst(&graph.graph, a).loadPublishedMeta();
-    meta.needs_repair_fwd = false;
-    publish.storePublishedMeta(&graph, a.index, meta);
+    var state = page_ops.nodePublicationAtConst(&graph.graph, source).loadPublicationState();
+    state.needs_repair_fwd = false;
+    publish.storePublicationState(&graph, source.index, state);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
     try testing.expect(hasViolationTag(violations, .forward_tombstone_missing_repair_flag));
 
-    for (violations) |v| {
-        if (v == .forward_tombstone_missing_repair_flag) {
-            try testing.expectEqual(a.index, v.forward_tombstone_missing_repair_flag.node);
+    for (violations) |violation| {
+        if (violation == .forward_tombstone_missing_repair_flag) {
+            try testing.expectEqual(source.index, violation.forward_tombstone_missing_repair_flag.node);
         }
     }
 }
 
-test "validation: debugValidate catches group_count longer than actual chain even when block_count matches" {
+test "validation: debugValidate catches segment_count longer than actual chain even when block_count matches" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -213,18 +213,18 @@ test "validation: debugValidate catches group_count longer than actual chain eve
     page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, @intCast(1));
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = 0;
 
-    const g0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    const g0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = 1;
-    publish.publishedFwdSide(node_buffer).group_count = 2;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 2;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
     publish.setPublishedFwdDegree(node_buffer, 1);
     try publish.syncToPublished(&graph, node.index);
 
-    // Fast validator: chain length (1) != declared group_count (2) → CorruptGraph
+    // Fast validator: chain length (1) != declared segment_count (2) → CorruptGraph
     try testing.expectError(error.CorruptGraph, graph.validate());
 
     // Debug validator must also catch this.

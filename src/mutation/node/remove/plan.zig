@@ -26,7 +26,7 @@ fn markRelatedNode(
     const claims = try common.tryClaimNodeSides(graph, node_idx, false, rev_degree_delta > 0);
     try related_nodes.append(graph.allocator, .{
         .node_idx = node_idx,
-        .node_meta = page_ops.nodeMetaAt(graph, .{ .index = node_idx }),
+        .node_publication = page_ops.nodePublicationAt(graph, .{ .index = node_idx }),
         .claims = claims,
         .fwd_degree_delta = fwd_degree_delta,
         .rev_degree_delta = rev_degree_delta,

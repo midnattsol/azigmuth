@@ -3,7 +3,7 @@ const constants = @import("../../core/constants.zig");
 const types = @import("../../core/types.zig");
 
 pub fn validateRemovedNodeState(adjacency: types.NodeAdj, degree_fwd: u64, degree_rev: u64) !void {
-    if (adjacency.block_count_fwd != 0 or adjacency.group_count_fwd != 0 or degree_fwd != 0) {
+    if (adjacency.block_count_fwd != 0 or adjacency.segment_count_fwd != 0 or degree_fwd != 0) {
         return error.CorruptGraph;
     }
     if (degree_rev != 0) {
@@ -12,7 +12,7 @@ pub fn validateRemovedNodeState(adjacency: types.NodeAdj, degree_fwd: u64, degre
     // removeNode clears both adjacency descriptors synchronously:
     // a removed node with structural reverse storage is corruption even when
     // its published degree is already zero.
-    if (adjacency.block_count_rev != 0 or adjacency.group_count_rev != 0) {
+    if (adjacency.block_count_rev != 0 or adjacency.segment_count_rev != 0) {
         return error.CorruptGraph;
     }
     if (adjacency.flags.needs_repair_fwd or adjacency.flags.needs_repair_rev) {
@@ -28,7 +28,7 @@ pub fn validateLiveNodeState(
     visible_rev: u64,
     has_forward_tombstone: bool,
     has_reverse_tombstone: bool,
-    check_group_limits: bool,
+    check_segment_limits: bool,
 ) !void {
     if (adjacency.flags.removed) {
         return validateRemovedNodeState(adjacency, degree_fwd, degree_rev);
@@ -46,11 +46,11 @@ pub fn validateLiveNodeState(
     if (!adjacency.flags.needs_repair_rev and has_reverse_tombstone) {
         return error.CorruptGraph;
     }
-    if (check_group_limits) {
-        if (adjacency.group_count_fwd > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_fwd) {
+    if (check_segment_limits) {
+        if (adjacency.segment_count_fwd > constants.MAX_SEGMENTS_PER_NODE and !adjacency.flags.needs_repair_fwd) {
             return error.CorruptGraph;
         }
-        if (adjacency.group_count_rev > constants.MAX_GROUPS_PER_NODE and !adjacency.flags.needs_repair_rev) {
+        if (adjacency.segment_count_rev > constants.MAX_SEGMENTS_PER_NODE and !adjacency.flags.needs_repair_rev) {
             return error.CorruptGraph;
         }
     }

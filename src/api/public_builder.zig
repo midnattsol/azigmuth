@@ -29,18 +29,18 @@ pub const GraphBuilder = opaque {
     /// returned `*GraphBuilder` and must call `deinit()` when done, regardless
     /// of whether `freeze()` was called.
     pub fn init(allocator: std.mem.Allocator) internal.GraphError!*GraphBuilder {
-        const b = try allocator.create(internal_builder.GraphBuilder);
-        errdefer allocator.destroy(b);
-        b.* = try internal_builder.GraphBuilder.init(allocator);
-        return @ptrCast(b);
+        const builder_handle = try allocator.create(internal_builder.GraphBuilder);
+        errdefer allocator.destroy(builder_handle);
+        builder_handle.* = try internal_builder.GraphBuilder.init(allocator);
+        return @ptrCast(builder_handle);
     }
 
     /// Creates a new builder with the given options.
     pub fn initWithOptions(allocator: std.mem.Allocator, options: internal.GraphOptions) internal.GraphError!*GraphBuilder {
-        const b = try allocator.create(internal_builder.GraphBuilder);
-        errdefer allocator.destroy(b);
-        b.* = try internal_builder.GraphBuilder.initWithOptions(allocator, options);
-        return @ptrCast(b);
+        const builder_handle = try allocator.create(internal_builder.GraphBuilder);
+        errdefer allocator.destroy(builder_handle);
+        builder_handle.* = try internal_builder.GraphBuilder.initWithOptions(allocator, options);
+        return @ptrCast(builder_handle);
     }
 
     /// Frees builder scratch resources and the heap handle.  If `freeze()` was
@@ -48,10 +48,10 @@ pub const GraphBuilder = opaque {
     /// even after a successful `freeze()` — the builder handle is always owned
     /// by the caller.
     pub fn deinit(self: *GraphBuilder) void {
-        const b = self.inner();
-        const alloc = b.graph.graph.allocator;
-        b.deinit();
-        alloc.destroy(b);
+        const builder_handle = self.inner();
+        const allocator = builder_handle.graph.graph.allocator;
+        builder_handle.deinit();
+        allocator.destroy(builder_handle);
     }
 
     pub fn addNode(self: *GraphBuilder) internal.GraphError!internal.NodeId {
@@ -68,12 +68,12 @@ pub const GraphBuilder = opaque {
     /// `deinit()` remains valid.  The returned `*Graph` is a normal mutable
     /// `Graph` with its own independent lifetime.
     pub fn freeze(self: *GraphBuilder) internal.GraphError!*public_graph.Graph {
-        const b = self.inner();
-        const alloc = b.graph.graph.allocator;
-        const g = try alloc.create(internal.Graph);
-        errdefer alloc.destroy(g);
-        const frozen = try b.freeze();
-        g.* = frozen;
-        return @ptrCast(g);
+        const builder_handle = self.inner();
+        const allocator = builder_handle.graph.graph.allocator;
+        const graph_handle = try allocator.create(internal.Graph);
+        errdefer allocator.destroy(graph_handle);
+        const frozen = try builder_handle.freeze();
+        graph_handle.* = frozen;
+        return @ptrCast(graph_handle);
     }
 };

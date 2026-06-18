@@ -5,12 +5,12 @@ const testing = std.testing;
 
 fn xoshiro256StarStar(state: *[4]u64) u64 {
     const result = state[1] *% 5;
-    const t = state[1] << 17;
+    const state_shift = state[1] << 17;
     state[2] ^= state[0];
     state[3] ^= state[1];
     state[1] ^= state[2];
     state[0] ^= state[3];
-    state[2] ^= t;
+    state[2] ^= state_shift;
     state[3] = ((state[3] << 45) | (state[3] >> 19));
     return ((result << 7) | (result >> 57));
 }

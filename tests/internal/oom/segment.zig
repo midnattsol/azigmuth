@@ -9,9 +9,9 @@ fn expectNoDebugViolations(graph: *const graph_mod.Graph) !void {
     try testing.expectEqual(@as(usize, 0), violations.len);
 }
 
-test "oom: addEdge failure during group allocation does not publish partial state" {
+test "oom: addEdge failure during segment allocation does not publish partial state" {
     // Fill the forward block (64 edges) so the next addEdge must allocate
-    // a new block and a group for non-contiguous block layout.
+    // a new block and a segment for non-contiguous block layout.
     for (0..12) |failure_offset| {
         var failing_allocator = std.testing.FailingAllocator.init(testing.allocator, .{});
         var graph = try graph_mod.Graph.init(failing_allocator.allocator());
@@ -20,12 +20,12 @@ test "oom: addEdge failure during group allocation does not publish partial stat
         const source = try graph.addNode();
         const destination = try graph.addNode();
         var targets: [64]graph_mod.NodeId = undefined;
-        for (0..64) |i| {
-            targets[i] = try graph.addNode();
+        for (0..64) |target_idx| {
+            targets[target_idx] = try graph.addNode();
         }
 
-        for (0..64) |i| {
-            try graph.addEdge(source, targets[i], 0, 0);
+        for (0..64) |target_idx| {
+            try graph.addEdge(source, targets[target_idx], 0, 0);
         }
         // Forward block is full (64/64); destination has 0 reverse edges.
 
@@ -63,15 +63,15 @@ test "oom: addEdge with full tail block fails gracefully under OOM at varying al
         const source = try graph.addNode();
         const hub = try graph.addNode();
         var targets: [64]graph_mod.NodeId = undefined;
-        for (0..64) |i| {
-            targets[i] = try graph.addNode();
-            try graph.addEdge(source, targets[i], 0, 0);
+        for (0..64) |target_idx| {
+            targets[target_idx] = try graph.addNode();
+            try graph.addEdge(source, targets[target_idx], 0, 0);
         }
         // source forward block full.
         // Add edges to hub's reverse to fill one side.
         for (0..64) |_| {
-            const s = try graph.addNode();
-            try graph.addEdge(s, hub, 0, 0);
+            const source_node = try graph.addNode();
+            try graph.addEdge(source_node, hub, 0, 0);
         }
         // hub reverse block full.
 

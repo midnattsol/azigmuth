@@ -12,6 +12,6 @@ pub const buildSideFromBlocks = side_adj_ops.buildSideFromBlocks;
 pub const retireSide = side_adj_ops.retireSide;
 pub const publishBothAdj = side_adj_ops.publishBothAdj;
 pub const publishRevAdj = side_adj_ops.publishRevAdj;
-pub const retireGroupChain = side_adj_ops.retireGroupChain;
+pub const retireSegmentSlots = side_adj_ops.retireSegmentSlots;
 pub const findSlotInAdjById = side_adj_ops.findSlotInAdjById;
 pub const findSlotInAdj = side_adj_ops.findSlotInAdj;

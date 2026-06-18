@@ -95,7 +95,7 @@ test "repair: merges two underfull forward blocks into one block" {
     try testing.expectEqual(@as(usize, 1), compacted);
     try testing.expectEqual(@as(usize, 40), try graph.outDegree(.{ .index = 0 }));
     try testing.expectEqual(@as(u16, 1), (try graph.publishedNodeAdj(.{ .index = 0 })).block_count_fwd);
-        try graph.validate();
+    try graph.validate();
 }
 
 test "repair: fill-and-shift keeps two blocks when merged total exceeds capacity" {
@@ -159,7 +159,7 @@ test "repair: repairNode consolidates a fragmented reverse adjacency into a vali
     }
 
     const before_repair_adj = try graph.publishedNodeAdj(target);
-    try testing.expect(before_repair_adj.group_count_rev > 0 or before_repair_adj.block_count_rev > 1);
+    try testing.expect(before_repair_adj.segment_count_rev > 0 or before_repair_adj.block_count_rev > 1);
 
     _ = try graph.repairNode(target);
 
@@ -339,7 +339,7 @@ test "repair: updateRepairDebt does not enqueue duplicates" {
     try testing.expectEqual(@as(usize, 1), graph.graph.repair_fwd.items.len);
 }
 
-test "repair: grouped adjacency can compact across group boundary" {
+test "repair: segmented adjacency can compact across segment boundary" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -347,21 +347,21 @@ test "repair: grouped adjacency can compact across group boundary" {
     const node = graph_mod.NodeId{ .index = 0 };
     const first_block = try graph.allocBlockFwd();
     const second_block = try graph.allocBlockFwd();
-    const first_group = try graph.allocGroup();
-    const second_group = try graph.allocGroup();
+    const first_segment = try graph.allocSegment();
+    const second_segment = try graph.allocSegment();
 
     fillForwardBlock(&graph, first_block, 1, 20);
     fillForwardBlock(&graph, second_block, 21, 20);
     try publishReverseSourcesForForwardRange(&graph, node.index, 1, 20);
     try publishReverseSourcesForForwardRange(&graph, node.index, 21, 20);
-    page_ops.edgeBlockGroupAt(&graph.graph, first_group).* = .{ .start = first_block, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, second_group).* = .{ .start = second_block, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, first_segment).* = .{ .start = first_block, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, second_segment).* = .{ .start = second_block, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).block_count = 2;
-    publish.publishedFwdSide(node_buffer).group_count = 2;
-    publish.publishedFwdSide(node_buffer).first_group = first_group;
+    publish.publishedFwdSide(node_buffer).segment_count = 2;
+    publish.publishedFwdSide(node_buffer).first_segment = first_segment;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(40)));
     try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(40, .release);
@@ -413,7 +413,7 @@ test "repair: already meets occupancy returns zero" {
     try testing.expectEqual(@as(u16, 2), (try graph.publishedNodeAdj(.{ .index = 0 })).block_count_fwd);
 }
 
-test "repair: grouped adjacency becomes contiguous after repair" {
+test "repair: segmented adjacency becomes contiguous after repair" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -426,19 +426,19 @@ test "repair: grouped adjacency becomes contiguous after repair" {
     fillForwardBlock(&graph, b1, 21, 20);
     fillForwardBlock(&graph, b2, 41, 20);
 
-    const g0 = try graph.allocGroup();
-    const g1 = try graph.allocGroup();
-    const g2 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
-    page_ops.edgeBlockGroupAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
+    const g0 = try graph.allocSegment();
+    const g1 = try graph.allocSegment();
+    const g2 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g1).* = .{ .start = b1, .count = 1 };
+    page_ops.edgeBlockSegmentAt(&graph.graph, g2).* = .{ .start = b2, .count = 1 };
 
     const node_buffer = try graph.nodeAt(node);
     publish.clearPublishedSides(node_buffer);
     publish.publishedFwdSide(node_buffer).first_block = b0;
     publish.publishedFwdSide(node_buffer).block_count = 3;
-    publish.publishedFwdSide(node_buffer).group_count = 3;
-    publish.publishedFwdSide(node_buffer).first_group = g0;
+    publish.publishedFwdSide(node_buffer).segment_count = 3;
+    publish.publishedFwdSide(node_buffer).first_segment = g0;
     publish.setPublishedFwdDegree(node_buffer, @as(u22, @intCast(60)));
     try publish.syncToPublished(&graph, node.index);
     graph.graph.edge_count.store(60, .release);
@@ -447,7 +447,7 @@ test "repair: grouped adjacency becomes contiguous after repair" {
     try testing.expectEqual(@as(usize, 1), compacted);
 
     const adj = try graph.publishedNodeAdj(node);
-    try testing.expectEqual(@as(u16, 0), adj.group_count_fwd);
+    try testing.expectEqual(@as(u16, 0), adj.segment_count_fwd);
     try testing.expectEqual(@as(u16, 1), adj.block_count_fwd);
     try testing.expectEqual(@as(usize, 60), try graph.outDegree(node));
 }
@@ -457,29 +457,29 @@ test "repair: valid forward blocks produce valid reverse after repair" {
     defer graph.deinit();
 
     try addNodeCount(&graph, 90);
-    const src = graph_mod.NodeId{ .index = 0 };
+    const source = graph_mod.NodeId{ .index = 0 };
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
     fillForwardBlock(&graph, b0, 1, 40);
     fillForwardBlock(&graph, b1, 41, 20);
 
     // Set up matching reverse edges for each destination
-    for (1..61) |dst| {
-        const r = try graph.allocBlockRev();
-        var rev = page_ops.edgeBlockAt(&graph.graph, r, .rev);
-        rev.sources[0] = src.index;
-        page_ops.setBlockAliveCount(&graph.graph, r, .rev, @intCast(1));
-        const dn = try graph.nodeAt(.{ .index = @intCast(dst) });
-        publish.publishedRevSide(dn).first_block = r;
-        publish.publishedRevSide(dn).block_count = 1;
-        publish.setPublishedRevDegree(dn, @as(u22, @intCast(1)));
-        try publish.syncToPublished(&graph, @intCast(dst));
+    for (1..61) |destination| {
+        const rev_block_idx = try graph.allocBlockRev();
+        var rev = page_ops.edgeBlockAt(&graph.graph, rev_block_idx, .rev);
+        rev.sources[0] = source.index;
+        page_ops.setBlockAliveCount(&graph.graph, rev_block_idx, .rev, @intCast(1));
+        const destination_node = try graph.nodeAt(.{ .index = @intCast(destination) });
+        publish.publishedRevSide(destination_node).first_block = rev_block_idx;
+        publish.publishedRevSide(destination_node).block_count = 1;
+        publish.setPublishedRevDegree(destination_node, @as(u22, @intCast(1)));
+        try publish.syncToPublished(&graph, @intCast(destination));
     }
 
-    try publishForwardBlocks(&graph, src, b0, 2);
+    try publishForwardBlocks(&graph, source, b0, 2);
     graph.graph.edge_count.store(60, .release);
 
-    const compacted = try repair.repairNodeSide(&graph.graph, src, .fwd);
+    const compacted = try repair.repairNodeSide(&graph.graph, source, .fwd);
     try testing.expectEqual(@as(usize, 1), compacted);
     try graph.validate();
 }

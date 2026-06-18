@@ -10,32 +10,32 @@ const types = graph_mod.types_mod;
 const common = graph_mod.validate_common_mod;
 const sums = graph_mod.validate_sums_mod;
 const shape = graph_mod.validate_shape_mod;
-const run_search = graph_mod.validate_run_search_mod;
+const segment_search = graph_mod.validate_segment_search_mod;
 const publish = @import("publish");
 
 const testing = std.testing;
 
 const SlotCounter = struct { total: usize = 0 };
 
-test "alive-count validator paths: sums, shape, and run search (fwd and rev)" {
+test "alive-count validator paths: sums, shape, and segment search (fwd and rev)" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     var nodes: [8]graph_mod.NodeId = undefined;
-    for (0..8) |i| nodes[i] = try graph.addNode();
+    for (0..8) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk_f = try graph.allocBlockFwd();
     const bf = page_ops.edgeBlockAt(&graph.graph, blk_f, .fwd);
-    for (0..4) |i| {
-        bf.destinations[i] = nodes[i].index;
-        bf.relations[i] = 0;
-        bf.flags[i] = 0;
+    for (0..4) |slot_idx| {
+        bf.destinations[slot_idx] = nodes[slot_idx].index;
+        bf.relations[slot_idx] = 0;
+        bf.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, blk_f, .fwd, 4);
 
     const blk_r = try graph.allocBlockRev();
     const br = page_ops.edgeBlockAt(&graph.graph, blk_r, .rev);
-    for (0..4) |i| br.sources[i] = nodes[i].index;
+    for (0..4) |slot_idx| br.sources[slot_idx] = nodes[slot_idx].index;
     page_ops.setBlockAliveCount(&graph.graph, blk_r, .rev, 4);
 
     try testing.expectEqual(@as(u64, 4), sums.sumBlockAlive(&graph.graph, blk_f, .fwd));
@@ -46,11 +46,11 @@ test "alive-count validator paths: sums, shape, and run search (fwd and rev)" {
     try shape.validateBlockDense(&graph.graph, blk_f, .fwd);
     try shape.validateBlockDense(&graph.graph, blk_r, .rev);
 
-    try testing.expectEqual(@as(?u7, 2), run_search.findSlotInRun(&graph.graph, blk_f, 1, nodes[2].index, types.EdgeBlockFwd, .fwd));
-    try testing.expectEqual(@as(?u7, 2), run_search.findSlotInRun(&graph.graph, blk_r, 1, nodes[2].index, types.EdgeBlockRev, .rev));
-    try testing.expect(run_search.runContainsTarget(&graph.graph, blk_f, 1, nodes[3].index, .fwd));
-    try testing.expect(run_search.runContainsTarget(&graph.graph, blk_r, 1, nodes[3].index, .rev));
-    try testing.expect(!run_search.runContainsTarget(&graph.graph, blk_f, 1, 999_999, .fwd));
+    try testing.expectEqual(@as(?u7, 2), segment_search.findSlotInRun(&graph.graph, blk_f, 1, nodes[2].index, types.EdgeBlockFwd, .fwd));
+    try testing.expectEqual(@as(?u7, 2), segment_search.findSlotInRun(&graph.graph, blk_r, 1, nodes[2].index, types.EdgeBlockRev, .rev));
+    try testing.expect(segment_search.runContainsTarget(&graph.graph, blk_f, 1, nodes[3].index, .fwd));
+    try testing.expect(segment_search.runContainsTarget(&graph.graph, blk_r, 1, nodes[3].index, .rev));
+    try testing.expect(!segment_search.runContainsTarget(&graph.graph, blk_f, 1, 999_999, .fwd));
 }
 
 test "alive-count validator paths: tombstones are visible to sums but not counted as visible entries" {
@@ -58,14 +58,14 @@ test "alive-count validator paths: tombstones are visible to sums but not counte
     defer graph.deinit();
 
     var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..4) |i| nodes[i] = try graph.addNode();
+    for (0..4) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk = try graph.allocBlockFwd();
     const bf = page_ops.edgeBlockAt(&graph.graph, blk, .fwd);
-    for (0..4) |i| {
-        bf.destinations[i] = nodes[i].index;
-        bf.relations[i] = 0;
-        bf.flags[i] = 0;
+    for (0..4) |slot_idx| {
+        bf.destinations[slot_idx] = nodes[slot_idx].index;
+        bf.relations[slot_idx] = 0;
+        bf.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, blk, .fwd, 4);
 
@@ -80,20 +80,20 @@ test "alive-count validator paths: forEachAliveSlotInAdj walks live slots of pub
     defer graph.deinit();
 
     var nodes: [8]graph_mod.NodeId = undefined;
-    for (0..8) |i| nodes[i] = try graph.addNode();
+    for (0..8) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk_f = try graph.allocBlockFwd();
     const bf = page_ops.edgeBlockAt(&graph.graph, blk_f, .fwd);
-    for (0..4) |i| {
-        bf.destinations[i] = nodes[i].index;
-        bf.relations[i] = 0;
-        bf.flags[i] = 0;
+    for (0..4) |slot_idx| {
+        bf.destinations[slot_idx] = nodes[slot_idx].index;
+        bf.relations[slot_idx] = 0;
+        bf.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, blk_f, .fwd, 4);
 
     const blk_r = try graph.allocBlockRev();
     const br = page_ops.edgeBlockAt(&graph.graph, blk_r, .rev);
-    for (0..3) |i| br.sources[i] = nodes[i].index;
+    for (0..3) |slot_idx| br.sources[slot_idx] = nodes[slot_idx].index;
     page_ops.setBlockAliveCount(&graph.graph, blk_r, .rev, 3);
 
     const ref = try graph.nodeAt(nodes[7]);

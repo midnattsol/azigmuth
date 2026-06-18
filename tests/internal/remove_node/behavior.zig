@@ -16,110 +16,110 @@ test "removeNode: public API invalidates removed node and hides tombstoned incom
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    const c = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
-    try graph.addEdge(a, c, 0, 0);
-    try graph.addEdge(b, a, 0, 0);
+    const removed_node = try graph.addNode();
+    const predecessor = try graph.addNode();
+    const other_destination = try graph.addNode();
+    try graph.addEdge(removed_node, predecessor, 0, 0);
+    try graph.addEdge(removed_node, other_destination, 0, 0);
+    try graph.addEdge(predecessor, removed_node, 0, 0);
 
-    _ = try graph.removeNode(a);
+    _ = try graph.removeNode(removed_node);
     try graph.validate();
 
-    try expectRemovedNodeInvalid(&graph, a);
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
-    try testing.expectEqual(@as(usize, 0), try graph.inDegree(c));
-    try testing.expectEqual(@as(u22, 0), (try graph.nodeAt(b)).loadPublishedMeta().degree_fwd);
-    // Tombstone b -> a may remain structural until repair compaction,
+    try expectRemovedNodeInvalid(&graph, removed_node);
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(predecessor));
+    try testing.expectEqual(@as(usize, 0), try graph.inDegree(other_destination));
+    try testing.expectEqual(@as(u22, 0), (try graph.nodeAt(predecessor)).loadPublicationState().degree_fwd);
+    // Tombstone predecessor -> removed_node may remain structural until repair compaction,
     // but it is no longer part of the visible logical edge count.
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    var neighbors_b = try graph.neighbors(b);
-    const b_slice = try graph_mod.materializeConsuming(&neighbors_b, testing.allocator);
-    defer testing.allocator.free(b_slice);
-    try testing.expectEqual(@as(usize, 0), b_slice.len);
+    var predecessor_neighbors = try graph.neighbors(predecessor);
+    const predecessor_slice = try graph_mod.materializeConsuming(&predecessor_neighbors, testing.allocator);
+    defer testing.allocator.free(predecessor_slice);
+    try testing.expectEqual(@as(usize, 0), predecessor_slice.len);
 }
 
 test "removeNode: repairNode compacts tombstoned incoming edges" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(b, a, 0, 0);
+    const removed_node = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, removed_node, 0, 0);
 
-    _ = try graph.removeNode(a);
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
+    _ = try graph.removeNode(removed_node);
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(predecessor));
 
-    _ = try graph.repairNode(b);
+    _ = try graph.repairNode(predecessor);
     try graph.validate();
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(predecessor));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    const a_adj = graph.nodeRefAny(a).publishedAdj();
-    try testing.expectEqual(@as(u16, 0), a_adj.block_count_rev);
+    const removed_adj = graph.nodeRefAny(removed_node).publishedAdj();
+    try testing.expectEqual(@as(u16, 0), removed_adj.block_count_rev);
 }
 
 test "removeNode: self-edge is removed from both forward and reverse state" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    try graph.addEdge(a, a, 0, 0);
+    const removed_node = try graph.addNode();
+    try graph.addEdge(removed_node, removed_node, 0, 0);
 
-    _ = try graph.removeNode(a);
+    _ = try graph.removeNode(removed_node);
     try graph.validate();
-    try expectRemovedNodeInvalid(&graph, a);
+    try expectRemovedNodeInvalid(&graph, removed_node);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    const a_adj = graph.nodeRefAny(a).publishedAdj();
-    try testing.expectEqual(@as(u16, 0), a_adj.block_count_fwd);
-    try testing.expectEqual(@as(u16, 0), a_adj.block_count_rev);
+    const removed_adj = graph.nodeRefAny(removed_node).publishedAdj();
+    try testing.expectEqual(@as(u16, 0), removed_adj.block_count_fwd);
+    try testing.expectEqual(@as(u16, 0), removed_adj.block_count_rev);
 }
 
 test "removeNode: repairBudgeted discovers tombstone debt without explicit repairNode" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(b, a, 0, 0);
+    const removed_node = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, removed_node, 0, 0);
 
-    _ = try graph.removeNode(a);
+    _ = try graph.removeNode(removed_node);
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
     const compacted = try graph.repairBudgeted(1);
     try testing.expectEqual(@as(usize, 1), compacted);
     try graph.validate();
-    try testing.expectEqual(@as(usize, 0), try graph.outDegree(b));
+    try testing.expectEqual(@as(usize, 0), try graph.outDegree(predecessor));
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 
-    const a_adj = graph.nodeRefAny(a).publishedAdj();
-    try testing.expectEqual(@as(u16, 0), a_adj.block_count_rev);
+    const removed_adj = graph.nodeRefAny(removed_node).publishedAdj();
+    try testing.expectEqual(@as(u16, 0), removed_adj.block_count_rev);
 }
 
 test "removeNode: removed endpoints are InvalidNode for edge mutations" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(b, a, 0, 0);
-    _ = try graph.removeNode(a);
+    const removed_node = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, removed_node, 0, 0);
+    _ = try graph.removeNode(removed_node);
 
-    try testing.expectError(error.InvalidNode, graph.addEdge(a, b, 0, 0));
-    try testing.expectError(error.InvalidNode, graph.addEdge(b, a, 0, 0));
-    try testing.expectError(error.InvalidNode, graph.removeEdge(a, b));
-    try testing.expectError(error.InvalidNode, graph.removeEdge(b, a));
+    try testing.expectError(error.InvalidNode, graph.addEdge(removed_node, predecessor, 0, 0));
+    try testing.expectError(error.InvalidNode, graph.addEdge(predecessor, removed_node, 0, 0));
+    try testing.expectError(error.InvalidNode, graph.removeEdge(removed_node, predecessor));
+    try testing.expectError(error.InvalidNode, graph.removeEdge(predecessor, removed_node));
 }
 
 test "removeNode: repeated removal returns InvalidNode" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    _ = try graph.removeNode(a);
-    try testing.expectError(error.InvalidNode, graph.removeNode(a));
+    const removed_node = try graph.addNode();
+    _ = try graph.removeNode(removed_node);
+    try testing.expectError(error.InvalidNode, graph.removeNode(removed_node));
 }
 
 test "removeNode: returns InvalidNode for out-of-bounds index" {
@@ -164,12 +164,12 @@ test "removeNode: repairNode on removed node returns InvalidNode" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(b, a, 0, 0);
+    const removed_node = try graph.addNode();
+    const predecessor = try graph.addNode();
+    try graph.addEdge(predecessor, removed_node, 0, 0);
 
-    _ = try graph.removeNode(a);
-    try testing.expectError(error.InvalidNode, graph.repairNode(a));
+    _ = try graph.removeNode(removed_node);
+    try testing.expectError(error.InvalidNode, graph.repairNode(removed_node));
     try graph.validate();
     try testing.expectEqual(@as(u64, 0), graph.edgeCount());
 }
@@ -179,10 +179,10 @@ test "removeNode: celebrity node (high in-degree) does not corrupt forward/rever
     defer graph.deinit();
 
     const celebrity = try graph.addNode();
-    var predecesors: [200]graph_mod.NodeId = undefined;
-    for (0..200) |i| {
-        predecesors[i] = try graph.addNode();
-        try graph.addEdge(predecesors[i], celebrity, 0, 0);
+    var predecessors: [200]graph_mod.NodeId = undefined;
+    for (0..200) |predecessor_idx| {
+        predecessors[predecessor_idx] = try graph.addNode();
+        try graph.addEdge(predecessors[predecessor_idx], celebrity, 0, 0);
     }
 
     const edge_count_before = graph.edgeCount();
@@ -196,10 +196,10 @@ test "removeNode: celebrity node (high in-degree) does not corrupt forward/rever
     try testing.expectError(error.InvalidNode, graph.inDegree(celebrity));
 
     // Every predecessor's forward degree dropped by 1 and has repair debt.
-    for (0..200) |i| {
-        const deg = try graph.outDegree(predecesors[i]);
+    for (0..200) |predecessor_idx| {
+        const deg = try graph.outDegree(predecessors[predecessor_idx]);
         try testing.expectEqual(@as(usize, 0), deg);
-        const adj = try graph.publishedNodeAdj(predecesors[i]);
+        const adj = try graph.publishedNodeAdj(predecessors[predecessor_idx]);
         try testing.expect(adj.flags.needs_repair_fwd);
     }
 
@@ -212,10 +212,10 @@ test "removeNode: celebrity node (high in-degree) does not corrupt forward/rever
 
     // All debt can be drained.
     while (true) {
-        const n = try graph.repairBudgeted(gl: {
+        const repaired_now = try graph.repairBudgeted(gl: {
             break :gl std.math.maxInt(usize);
         });
-        if (n == 0) break;
+        if (repaired_now == 0) break;
     }
 
     try graph.validate();

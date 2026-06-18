@@ -1,5 +1,5 @@
 const graph_core = @import("../../core/graph_core.zig");
-const node_published_mod = @import("../../storage/node/published.zig");
+const node_adjacency_buffers_mod = @import("../../storage/node/adjacency_buffers.zig");
 const types = @import("../../core/types.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const common = @import("../common.zig");
@@ -21,7 +21,7 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
 
     const remove_state = remove_common.loadRemoveState(graph, &endpoints, source, destination);
     const removed = if (graph.multigraph_enabled) blk: {
-        const probe = try remove_bulk.probeForwardDestinationMatches(graph, &remove_state.source_pub, destination.index);
+        const probe = try remove_bulk.probeForwardDestinationMatches(graph, &remove_state.source_published_side, destination.index);
         if (probe.found == null) break :blk false;
         if (!probe.has_multiple) {
             break :blk try removeSingleDispatch(graph, &endpoints, remove_state, source, destination, probe.found.?, null);
@@ -30,13 +30,13 @@ pub fn removeEdge(graph: *graph_core.GraphCore, source: types.NodeId, destinatio
     } else blk: {
         const forward_found = common.findSlotInAdj(
             graph,
-            remove_state.source_pub.first_block,
-            remove_state.source_pub.block_count,
-            remove_state.source_pub.group_count,
-            remove_state.source_pub.first_group,
+            remove_state.source_published_side.first_block,
+            remove_state.source_published_side.block_count,
+            remove_state.source_published_side.segment_count,
+            remove_state.source_published_side.first_segment,
             destination.index,
             .fwd,
-            endpoints.source_published.publishedFwdSortedFromMeta(endpoints.source_meta),
+            endpoints.source_buffers.publishedFwdSortedFromState(endpoints.source_state),
         ) orelse break :blk false;
         break :blk try removeSingleDispatch(graph, &endpoints, remove_state, source, destination, forward_found, null);
     };
@@ -59,8 +59,8 @@ fn removeSingleDispatch(
     forward_found: common.AdjSlot,
     edge_id: ?u32,
 ) !bool {
-    const source_tiny = node_published_mod.NodePublished.isTiny(&remove_state.source_pub);
-    const destination_tiny = node_published_mod.NodePublished.isTiny(&remove_state.destination_pub);
+    const source_tiny = node_adjacency_buffers_mod.NodeAdjacencyBuffers.isTiny(&remove_state.source_published_side);
+    const destination_tiny = node_adjacency_buffers_mod.NodeAdjacencyBuffers.isTiny(&remove_state.destination_published_side);
 
     if (source_tiny and destination_tiny) {
         if (edge_id) |id| {
@@ -91,10 +91,10 @@ pub fn removeEdgeWithId(graph: *graph_core.GraphCore, source: types.NodeId, dest
 
     const forward_found = common.findSlotInAdjById(
         graph,
-        remove_state.source_pub.first_block,
-        remove_state.source_pub.block_count,
-        remove_state.source_pub.group_count,
-        remove_state.source_pub.first_group,
+        remove_state.source_published_side.first_block,
+        remove_state.source_published_side.block_count,
+        remove_state.source_published_side.segment_count,
+        remove_state.source_published_side.first_segment,
         destination.index,
         edge_id.local,
     ) orelse return false;

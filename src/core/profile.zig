@@ -28,13 +28,13 @@ pub const DirDims = struct {
 };
 
 pub const Profile = struct {
-    /// Directory geometry for the node-indexed pools (meta, published, hot,
+    /// Directory geometry for the node-indexed pools (publication, published, hot,
     /// tiny slots, repair bitmaps). 256 entries per page.
     node_dir: DirDims,
     /// Directory geometry for edge-block pools (64 blocks per page).
     edge_block_dir: DirDims,
-    /// Directory geometry for the grouped-run pool (128 groups per page).
-    edge_group_dir: DirDims,
+    /// Directory geometry for the edge-block segment pool (128 segments per page).
+    edge_segment_dir: DirDims,
     /// Precise reader epoch slots (power of two). Readers beyond this fall
     /// into the conservative overflow path.
     reader_slots: usize,
@@ -53,7 +53,7 @@ pub const Profile = struct {
     pub const default: Profile = .{
         .node_dir = .{ .inline_pages = 4, .l1 = 4096, .l2 = 4096 },
         .edge_block_dir = .{ .inline_pages = 4, .l1 = 4096, .l2 = 8192 },
-        .edge_group_dir = .{ .inline_pages = 4, .l1 = 4096, .l2 = 4096 },
+        .edge_segment_dir = .{ .inline_pages = 4, .l1 = 4096, .l2 = 4096 },
         .reader_slots = 256,
         .tracked_overflow_readers = 256,
         .edges_per_block = 64,
@@ -64,7 +64,7 @@ pub const Profile = struct {
     pub const embedded: Profile = .{
         .node_dir = .{ .inline_pages = 4, .l1 = 16, .l2 = 16 },
         .edge_block_dir = .{ .inline_pages = 4, .l1 = 16, .l2 = 16 },
-        .edge_group_dir = .{ .inline_pages = 4, .l1 = 16, .l2 = 16 },
+        .edge_segment_dir = .{ .inline_pages = 4, .l1 = 16, .l2 = 16 },
         .reader_slots = 8,
         .tracked_overflow_readers = 8,
         .edges_per_block = 16,
@@ -77,7 +77,7 @@ pub const Profile = struct {
             std.debug.assert(self.edges_per_block == 16 or self.edges_per_block == 32 or self.edges_per_block == 64);
             std.debug.assert(self.node_dir.inline_pages >= 1);
             std.debug.assert(self.edge_block_dir.inline_pages >= 1);
-            std.debug.assert(self.edge_group_dir.inline_pages >= 1);
+            std.debug.assert(self.edge_segment_dir.inline_pages >= 1);
         }
     }
 };

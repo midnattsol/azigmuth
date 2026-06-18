@@ -2,7 +2,7 @@ const std = @import("std");
 const graph_core = @import("../../../core/graph_core.zig");
 const node_bitmap = @import("../../../core/node_bitmap.zig");
 const node_access = @import("../../../core/node_access.zig");
-const node_meta_mod = @import("../../../storage/node/meta.zig");
+const node_publication_mod = @import("../../../storage/node/publication.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
 const types = @import("../../../core/types.zig");
 const adjacency = @import("../../../adjacency/mod.zig");
@@ -29,18 +29,18 @@ pub fn setRepairFlag(adj: *types.NodeAdj, comptime side: adjacency.AdjSide, valu
 }
 
 pub fn writePublishedRepairFlag(
-    node_meta: *node_meta_mod.NodeMeta,
+    node_publication: *node_publication_mod.NodePublicationCell,
     comptime side: adjacency.AdjSide,
     value: bool,
 ) void {
-    var expected = node_meta.loadPublishedMeta();
+    var expected = node_publication.loadPublicationState();
     while (true) {
         var desired = expected;
         switch (side) {
             .fwd => desired.needs_repair_fwd = value,
             .rev => desired.needs_repair_rev = value,
         }
-        const actual = node_meta.cmpxchgPublishedMeta(expected, desired) orelse break;
+        const actual = node_publication.cmpxchgPublicationState(expected, desired) orelse break;
         expected = actual;
     }
 }

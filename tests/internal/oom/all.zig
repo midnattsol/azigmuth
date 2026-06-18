@@ -1,5 +1,5 @@
 comptime {
-    _ = @import("group.zig");
+    _ = @import("segment.zig");
     _ = @import("oom.zig");
     _ = @import("repair.zig");
 }

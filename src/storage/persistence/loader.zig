@@ -22,7 +22,7 @@ const types = @import("../../core/types.zig");
 const adjacency = @import("../../adjacency/mod.zig");
 const page_ops = @import("../page_ops.zig");
 const node_tiny = @import("../node/tiny.zig");
-const node_published = @import("../node/published.zig");
+const node_adjacency_buffers = @import("../node/adjacency_buffers.zig");
 const format = @import("format.zig");
 const io_mod = @import("io.zig");
 
@@ -68,9 +68,9 @@ pub fn load(
         try restoreEdgeBlockPropRows(&mut_graph.graph, frozen_graph.sectionBytes(.prop_rows_fwd));
     }
 
-    try restoreEdgeBlockGroups(&mut_graph.graph, frozen_graph.sectionBytes(.groups));
-    try restoreTinyBlocks(&mut_graph.graph, frozen_graph.sectionBytes(.tiny_fwd), .fwd);
-    try restoreTinyBlocks(&mut_graph.graph, frozen_graph.sectionBytes(.tiny_rev), .rev);
+    try restoreEdgeBlockSegments(&mut_graph.graph, frozen_graph.sectionBytes(.segments));
+    try restoreTinySlots(&mut_graph.graph, frozen_graph.sectionBytes(.tiny_fwd), .fwd);
+    try restoreTinySlots(&mut_graph.graph, frozen_graph.sectionBytes(.tiny_rev), .rev);
 
     // Restore node records.
     const node_records = frozen_graph.nodeRecords();
@@ -84,7 +84,7 @@ pub fn load(
     try restoreFreeList(&mut_graph.graph, .free_blocks_rev, frozen_graph.sectionBytes(.free_blocks_rev), header);
     try restoreFreeList(&mut_graph.graph, .free_tiny_fwd, frozen_graph.sectionBytes(.free_tiny_fwd), header);
     try restoreFreeList(&mut_graph.graph, .free_tiny_rev, frozen_graph.sectionBytes(.free_tiny_rev), header);
-    try restoreFreeList(&mut_graph.graph, .free_group_spans, frozen_graph.sectionBytes(.free_group_spans), header);
+    try restoreFreeList(&mut_graph.graph, .free_segment_slots, frozen_graph.sectionBytes(.free_segment_slots), header);
     if (graph_options.edge_properties) {
         try restoreFreeList(&mut_graph.graph, .free_prop_rows, frozen_graph.sectionBytes(.free_prop_rows), header);
     }
@@ -92,13 +92,13 @@ pub fn load(
     // Restore global counters from header.
     mut_graph.graph.block_fwd_count = header.block_fwd_count;
     mut_graph.graph.block_rev_count = header.block_rev_count;
-    mut_graph.graph.group_count = header.group_count;
-    mut_graph.graph.tiny_block_fwd_count = header.tiny_block_fwd_count;
-    mut_graph.graph.tiny_block_rev_count = header.tiny_block_rev_count;
+    mut_graph.graph.segment_count = header.segment_count;
+    mut_graph.graph.tiny_fwd_slot_count = header.tiny_fwd_slot_count;
+    mut_graph.graph.tiny_rev_slot_count = header.tiny_rev_slot_count;
 
     mut_graph.graph.edge_count.store(header.edge_count, .release);
     mut_graph.graph.prop_row_count = header.prop_row_count;
-    // node_count is set atomically by the node-record loop above via ensureNodeMetaPage;
+    // node_count is set atomically by the node-record loop above via ensureNodePublicationPage;
     // publish it here.
     mut_graph.graph.node_count.store(@intCast(header.node_count), .release);
 
@@ -194,30 +194,30 @@ pub fn restoreEdgeBlockPropRows(core: *graph_core.GraphCore, payload: []const u8
     }
 }
 
-pub fn restoreEdgeBlockGroups(core: *graph_core.GraphCore, payload: []const u8) LoadError!void {
-    const group_size = @sizeOf(types.EdgeBlockGroup);
-    const total_groups = payload.len / group_size;
+pub fn restoreEdgeBlockSegments(core: *graph_core.GraphCore, payload: []const u8) LoadError!void {
+    const segment_size = @sizeOf(types.EdgeBlockSegment);
+    const total_segments = payload.len / segment_size;
 
-    try page_ops.ensureGroupCapacity(core, @intCast(total_groups));
-    const total_pages = (total_groups + constants.EDGE_GROUPS_PER_PAGE - 1) / constants.EDGE_GROUPS_PER_PAGE;
+    try page_ops.ensureSegmentCapacity(core, @intCast(total_segments));
+    const total_pages = (total_segments + constants.EDGE_SEGMENTS_PER_PAGE - 1) / constants.EDGE_SEGMENTS_PER_PAGE;
 
     for (0..total_pages) |page_idx| {
-        const start = page_idx * constants.EDGE_GROUPS_PER_PAGE * group_size;
-        const end = start + (constants.EDGE_GROUPS_PER_PAGE * group_size);
+        const start = page_idx * constants.EDGE_SEGMENTS_PER_PAGE * segment_size;
+        const end = start + (constants.EDGE_SEGMENTS_PER_PAGE * segment_size);
         const source_copy = payload[start..@min(end, payload.len)];
-        const page_destination: [*]u8 = @ptrFromInt(core.edge_block_group_pages.load(@intCast(page_idx)));
+        const page_destination: [*]u8 = @ptrFromInt(core.edge_block_segment_pages.load(@intCast(page_idx)));
         @memcpy(page_destination, source_copy);
     }
 }
 
-pub fn restoreTinyBlocks(core: *graph_core.GraphCore, payload: []const u8, comptime side: adjacency.AdjSide) LoadError!void {
+pub fn restoreTinySlots(core: *graph_core.GraphCore, payload: []const u8, comptime side: adjacency.AdjSide) LoadError!void {
     const block_size = switch (side) {
-        .fwd => @sizeOf(node_tiny.TinyFwdBlock),
-        .rev => @sizeOf(node_tiny.TinyRevBlock),
+        .fwd => @sizeOf(node_tiny.TinyFwdSlot),
+        .rev => @sizeOf(node_tiny.TinyRevSlot),
     };
     const per_page = switch (side) {
-        .fwd => node_tiny.TINY_BLOCKS_FWD_PER_PAGE,
-        .rev => node_tiny.TINY_BLOCKS_REV_PER_PAGE,
+        .fwd => node_tiny.TINY_FWD_SLOTS_PER_PAGE,
+        .rev => node_tiny.TINY_REV_SLOTS_PER_PAGE,
     };
     const total_blocks = payload.len / block_size;
 
@@ -229,30 +229,30 @@ pub fn restoreTinyBlocks(core: *graph_core.GraphCore, payload: []const u8, compt
         const end = start + (per_page * block_size);
         const source_copy = payload[start..@min(end, payload.len)];
         const destination_raw = switch (side) {
-            .fwd => core.tiny_block_fwd_pages.load(@intCast(page_idx)),
-            .rev => core.tiny_block_rev_pages.load(@intCast(page_idx)),
+            .fwd => core.tiny_fwd_slot_pages.load(@intCast(page_idx)),
+            .rev => core.tiny_rev_slot_pages.load(@intCast(page_idx)),
         };
         const page_destination: [*]u8 = @ptrFromInt(destination_raw);
         @memcpy(page_destination, source_copy);
     }
 }
 
-/// Replays one NodeRecord into the live node pools: NodeMeta (degrees,
-/// flags, fwd/idx_rev = 0, version 0), NodePublished (slot 0 = the
-/// persisted SideAdj, sorted bits), NodeHot (next_local_edge_id, claims
-/// released). Every block/group/tiny index inside the record is
+/// Replays one NodeRecord into the live node pools: NodePublicationCell (degrees,
+/// flags, fwd/idx_rev = 0, version 0), NodeAdjacencyBuffers (slot 0 = the
+/// persisted SideAdj, sorted bits), NodeMutationControl (next_local_edge_id, claims
+/// released). Every block/segment/tiny index inside the record is
 /// bounds-checked against the header counters (CorruptIndex).
 pub fn restoreNodeRecord(core: *graph_core.GraphCore, node_idx: u32, record: format.NodeRecord, header: format.FileHeader) LoadError!void {
     const node = types.NodeId{ .index = node_idx };
     const page_idx = node_idx / constants.NODES_PER_PAGE;
 
     // Ensure the three node pages exist for this node_idx.
-    _ = try page_ops.ensureNodeMetaPage(core, page_idx);
-    _ = try page_ops.ensureNodePublishedPage(core, page_idx);
-    _ = try page_ops.ensureNodeHotPage(core, page_idx);
+    _ = try page_ops.ensureNodePublicationPage(core, page_idx);
+    _ = try page_ops.ensureNodeAdjacencyBufferPage(core, page_idx);
+    _ = try page_ops.ensureNodeMutationControlPage(core, page_idx);
 
-    // 2. Write NodeMeta: fresh PublishedMeta with indexes at slot 0.
-    var published_meta: types.PublishedMeta = .{
+    // 2. Write NodePublicationCell: fresh NodePublicationState with indexes at slot 0.
+    var publication_state: types.NodePublicationState = .{
         .idx_fwd = 0,
         .idx_rev = 0,
         .needs_repair_fwd = record.flags.needs_repair_fwd,
@@ -260,24 +260,24 @@ pub fn restoreNodeRecord(core: *graph_core.GraphCore, node_idx: u32, record: for
         .removed = record.flags.removed,
         .version = 0,
     };
-    published_meta = published_meta.withFwdDegree(record.degree_fwd).withRevDegree(record.degree_rev);
-    page_ops.nodeMetaAt(core, node).storePublishedMeta(published_meta);
+    publication_state = publication_state.withFwdDegree(record.degree_fwd).withRevDegree(record.degree_rev);
+    page_ops.nodePublicationAt(core, node).storePublicationState(publication_state);
 
-    // Write NodePublished: slot 0 = persisted SideAdj; slot 1 zeroed.
-    const published = page_ops.nodePublishedAt(core, node);
-    published.fwd[0] = record.fwd;
-    published.rev[0] = record.rev;
-    published.fwd[1] = std.mem.zeroes(types.SideAdj);
-    published.rev[1] = std.mem.zeroes(types.SideAdj);
-    published.sorted_fwd[0] = @intFromBool(record.flags.sorted_fwd);
-    published.sorted_rev[0] = @intFromBool(record.flags.sorted_rev);
-    if (published_meta.degree_fwd_overflow) published.degrees_fwd[0] = record.degree_fwd;
-    if (published_meta.degree_rev_overflow) published.degrees_rev[0] = record.degree_rev;
+    // Write NodeAdjacencyBuffers: slot 0 = persisted SideAdj; slot 1 zeroed.
+    const buffers = page_ops.nodeAdjacencyBuffersAt(core, node);
+    buffers.fwd[0] = record.fwd;
+    buffers.rev[0] = record.rev;
+    buffers.fwd[1] = std.mem.zeroes(types.SideAdj);
+    buffers.rev[1] = std.mem.zeroes(types.SideAdj);
+    buffers.sorted_fwd[0] = @intFromBool(record.flags.sorted_fwd);
+    buffers.sorted_rev[0] = @intFromBool(record.flags.sorted_rev);
+    if (publication_state.degree_fwd_overflow) buffers.degrees_fwd[0] = record.degree_fwd;
+    if (publication_state.degree_rev_overflow) buffers.degrees_rev[0] = record.degree_rev;
 
-    // Write NodeHot: next_local_edge_id; claims start released.
-    page_ops.nodeHotAt(core, node).storeNextLocalEdgeId(record.next_local_edge_id);
+    // Write NodeMutationControl: next_local_edge_id; claims start released.
+    page_ops.nodeMutationControlAt(core, node).storeNextLocalEdgeId(record.next_local_edge_id);
 
-    // Bounds-check every block/group/tiny index against header counters.
+    // Bounds-check every block/segment/tiny index against header counters.
     try validateSideAdj(record.fwd, .fwd, header);
     try validateSideAdj(record.rev, .rev, header);
 }
@@ -304,8 +304,8 @@ pub fn restoreFreeList(core: *graph_core.GraphCore, id: format.SectionId, payloa
         .free_tiny_fwd, .free_tiny_rev => {
             const side: adjacency.AdjSide = if (id == .free_tiny_fwd) .fwd else .rev;
             const limit: u32 = switch (side) {
-                .fwd => header.tiny_block_fwd_count,
-                .rev => header.tiny_block_rev_count,
+                .fwd => header.tiny_fwd_slot_count,
+                .rev => header.tiny_rev_slot_count,
             };
             const indices = std.mem.bytesAsSlice(u32, payload);
             for (indices) |idx| {
@@ -316,13 +316,13 @@ pub fn restoreFreeList(core: *graph_core.GraphCore, id: format.SectionId, payloa
                 }
             }
         },
-        .free_group_spans => {
-            const spans = std.mem.bytesAsSlice(format.FreeGroupSpan, payload);
-            for (spans) |span| {
-                if (span.span_count == 0) return error.CorruptIndex;
-                const last_group = std.math.add(u32, span.first_group, span.span_count - 1) catch return error.CorruptIndex;
-                if (last_group >= header.group_count) return error.CorruptIndex;
-                page_ops.freeGroupSpan(core, span.first_group, span.span_count);
+        .free_segment_slots => {
+            const segment_descriptors = std.mem.bytesAsSlice(format.FreeSegmentSlots, payload);
+            for (segment_descriptors) |slot_entry| {
+                if (slot_entry.slot_count == 0) return error.CorruptIndex;
+                const last_segment = std.math.add(u32, slot_entry.first_segment, slot_entry.slot_count - 1) catch return error.CorruptIndex;
+                if (last_segment >= header.segment_count) return error.CorruptIndex;
+                page_ops.freeSegmentSlots(core, slot_entry.first_segment, slot_entry.slot_count);
             }
         },
         .free_prop_rows => {
@@ -338,15 +338,15 @@ pub fn restoreFreeList(core: *graph_core.GraphCore, id: format.SectionId, payloa
 
 // ── Internal helpers ───────────────────────────────────────────────────
 
-/// Bounds-checks every block, group, and tiny index inside `side_adj`
+/// Bounds-checks every block, segment, and tiny index inside `side_adj`
 /// against the header's pool counters. Returns `error.CorruptIndex` if any
 /// index is out of range or if arithmetic overflows (hostile input).
 fn validateSideAdj(side_adj: types.SideAdj, side: adjacency.AdjSide, header: format.FileHeader) error{CorruptIndex}!void {
-    if (node_published.NodePublished.isTiny(&side_adj)) {
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
         const block_idx = side_adj.first_block;
         const limit = switch (side) {
-            .fwd => header.tiny_block_fwd_count,
-            .rev => header.tiny_block_rev_count,
+            .fwd => header.tiny_fwd_slot_count,
+            .rev => header.tiny_rev_slot_count,
         };
         if (block_idx >= limit) return error.CorruptIndex;
         return;
@@ -361,8 +361,8 @@ fn validateSideAdj(side_adj: types.SideAdj, side: adjacency.AdjSide, header: for
         if (last_block >= limit) return error.CorruptIndex;
     }
 
-    if (side_adj.group_count > 0) {
-        const last_group = std.math.add(u32, side_adj.first_group, side_adj.group_count - 1) catch return error.CorruptIndex;
-        if (last_group >= header.group_count) return error.CorruptIndex;
+    if (side_adj.segment_count > 0) {
+        const last_segment = std.math.add(u32, side_adj.first_segment, side_adj.segment_count - 1) catch return error.CorruptIndex;
+        if (last_segment >= header.segment_count) return error.CorruptIndex;
     }
 }

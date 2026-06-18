@@ -3,12 +3,12 @@ const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const adjacency_mod = @import("../../adjacency/mod.zig");
 const side_ops = @import("../../adjacency/side_ops.zig");
 const node_validity = @import("../../core/node_validity.zig");
-const side_runs = @import("../../adjacency/runs.zig");
+const side_segments = @import("../../adjacency/segments.zig");
 
 const TombstoneScan = struct { found: bool = false };
 
@@ -19,14 +19,14 @@ pub fn sideAdjOf(adjacency: types.NodeAdj, comptime side: Side) types.SideAdj {
         .fwd => .{
             .first_block = adjacency.first_block_fwd,
             .block_count = adjacency.block_count_fwd,
-            .group_count = adjacency.group_count_fwd,
-            .first_group = adjacency.first_group_fwd,
+            .segment_count = adjacency.segment_count_fwd,
+            .first_segment = adjacency.first_segment_fwd,
         },
         .rev => .{
             .first_block = adjacency.first_block_rev,
             .block_count = adjacency.block_count_rev,
-            .group_count = adjacency.group_count_rev,
-            .first_group = adjacency.first_group_rev,
+            .segment_count = adjacency.segment_count_rev,
+            .first_segment = adjacency.first_segment_rev,
         },
     };
 }
@@ -46,11 +46,11 @@ pub fn forEachRunInAdj(
         .rev => .rev,
     });
 
-    const total_runs = side_runs.runCount(side_adj);
-    var run_idx: u16 = 0;
-    while (run_idx < total_runs) : (run_idx += 1) {
-        const run_desc = side_runs.runAt(graph, side_adj, run_idx) orelse return error.CorruptGraph;
-        try callback(graph, ctx, run_desc.start, run_desc.count, run_idx + 1 == total_runs);
+    const total_segments = side_segments.segmentCount(side_adj);
+    var segment_idx: u16 = 0;
+    while (segment_idx < total_segments) : (segment_idx += 1) {
+        const segment = side_segments.segmentAt(graph, side_adj, segment_idx) orelse return error.CorruptGraph;
+        try callback(graph, ctx, segment.start, segment.count, segment_idx + 1 == total_segments);
     }
 }
 
@@ -62,7 +62,7 @@ pub fn forEachAliveSlotInAdj(
     comptime callback: anytype,
 ) !void {
     try forEachRunInAdj(graph, adjacency, side, ctx, struct {
-        fn run(
+        fn segment(
             inner_graph: *const graph_core.GraphCore,
             inner_ctx: @TypeOf(ctx),
             start: u32,
@@ -77,7 +77,7 @@ pub fn forEachAliveSlotInAdj(
                 }
             }
         }
-    }.run);
+    }.segment);
 }
 
 pub fn forEachNodeIdInAdj(
@@ -90,15 +90,15 @@ pub fn forEachNodeIdInAdj(
     const side_adj = sideAdjOf(adjacency, side);
     if (side_adj.block_count == 0) return;
 
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         switch (side) {
             .fwd => {
-                const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
+                const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
                 for (0..count) |entry_idx| try callback(graph, ctx, slot.entries[entry_idx].destination);
             },
             .rev => {
-                const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
+                const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .rev);
                 for (0..count) |entry_idx| try callback(graph, ctx, slot.sources[entry_idx]);
             },
         }
@@ -120,9 +120,9 @@ pub fn forEachForwardEntryInAdj(
     const side_adj = sideAdjOf(adjacency, .fwd);
     if (side_adj.block_count == 0) return;
 
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const entry = slot.entries[entry_idx];
             try callback(graph, ctx, ForwardEntryView{
@@ -210,8 +210,8 @@ pub const StackKindFast = page_ops.StackKind;
 pub const MAX_TRACKED_BLOCKS: usize = @min(constants.MAX_EDGE_BLOCK_PAGES * constants.EDGE_BLOCKS_PER_PAGE, 1 << 18);
 pub const TRACKED_BLOCK_BITMAP_WORDS: usize = (MAX_TRACKED_BLOCKS + 63) / 64;
 
-pub const MAX_TRACKED_GROUPS: usize = @min(constants.MAX_EDGE_GROUP_PAGES * constants.EDGE_GROUPS_PER_PAGE, 1 << 19);
-pub const TRACKED_GROUP_BITMAP_WORDS: usize = (MAX_TRACKED_GROUPS + 63) / 64;
+pub const MAX_TRACKED_SEGMENTS: usize = @min(constants.MAX_EDGE_SEGMENT_PAGES * constants.EDGE_SEGMENTS_PER_PAGE, 1 << 19);
+pub const TRACKED_SEGMENT_BITMAP_WORDS: usize = (MAX_TRACKED_SEGMENTS + 63) / 64;
 
 pub const TraversedBlock = struct {
     block_idx: u32,
@@ -252,10 +252,10 @@ pub fn blockCount(adjacency: types.NodeAdj, comptime side: Side) u32 {
     };
 }
 
-pub fn groupCount(adjacency: types.NodeAdj, comptime side: Side) u16 {
+pub fn segmentCount(adjacency: types.NodeAdj, comptime side: Side) u16 {
     return switch (side) {
-        .fwd => adjacency.group_count_fwd,
-        .rev => adjacency.group_count_rev,
+        .fwd => adjacency.segment_count_fwd,
+        .rev => adjacency.segment_count_rev,
     };
 }
 
@@ -266,10 +266,10 @@ pub fn firstBlock(adjacency: types.NodeAdj, comptime side: Side) u32 {
     };
 }
 
-pub fn firstGroup(adjacency: types.NodeAdj, comptime side: Side) u32 {
+pub fn firstSegment(adjacency: types.NodeAdj, comptime side: Side) u32 {
     return switch (side) {
-        .fwd => adjacency.first_group_fwd,
-        .rev => adjacency.first_group_rev,
+        .fwd => adjacency.first_segment_fwd,
+        .rev => adjacency.first_segment_rev,
     };
 }
 

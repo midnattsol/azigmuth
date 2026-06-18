@@ -1,7 +1,7 @@
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const node_published = @import("../storage/node/published.zig");
+const node_adjacency_buffers = @import("../storage/node/adjacency_buffers.zig");
 const node_validity = @import("../core/node_validity.zig");
 const side_ops = @import("../adjacency/side_ops.zig");
 const live_read_common = @import("live_read_common.zig");
@@ -55,15 +55,15 @@ pub fn edgePropertyRow(core: *graph_core.GraphCore, source: types.NodeId, destin
         core,
         side.first_block,
         side.block_count,
-        side.group_count,
-        side.first_group,
+        side.segment_count,
+        side.first_segment,
         destination.index,
         .fwd,
         capture.sorted_fwd,
     ) orelse return null;
 
-    if (node_published.NodePublished.isTiny(&side)) {
-        return page_ops.tinyBlockAtConst(core, side.first_block, .fwd).entries[found.slot].prop_row;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side)) {
+        return page_ops.tinySlotAtConst(core, side.first_block, .fwd).entries[found.slot].prop_row;
     }
     return page_ops.edgeBlockFwdPropsAtConst(core, found.block_idx).rows[found.slot];
 }

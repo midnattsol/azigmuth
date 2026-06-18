@@ -201,7 +201,7 @@ test "algorithms concurrent: bfs tolerates node removed before expansion" {
     traversal_active.store(true, .release);
     // Wait for the removal to land inside the window before traversing, so
     // the overlap assertion below cannot fail on scheduling delays. The
-    // traversal runs on the sealed snapshot either way.
+    // traversal segments on the sealed snapshot either way.
     const overlapped = waitForRemovalAttempt(&ctx);
     if (!overlapped) {
         stop.store(true, .release);
@@ -234,7 +234,7 @@ test "algorithms concurrent: dfs tolerates node removed before expansion" {
     traversal_active.store(true, .release);
     // Wait for the removal to land inside the window before traversing, so
     // the overlap assertion below cannot fail on scheduling delays. The
-    // traversal runs on the sealed snapshot either way.
+    // traversal segments on the sealed snapshot either way.
     const overlapped = waitForRemovalAttempt(&ctx);
     if (!overlapped) {
         stop.store(true, .release);
@@ -267,7 +267,7 @@ test "algorithms concurrent: cycle tolerates node removed during traversal" {
     traversal_active.store(true, .release);
     // Wait for the removal to land inside the window before traversing, so
     // the overlap assertion below cannot fail on scheduling delays. The
-    // traversal runs on the sealed snapshot either way.
+    // traversal segments on the sealed snapshot either way.
     const overlapped = waitForRemovalAttempt(&ctx);
     if (!overlapped) {
         stop.store(true, .release);

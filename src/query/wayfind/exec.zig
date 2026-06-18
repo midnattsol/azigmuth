@@ -21,7 +21,7 @@ const side_ops = @import("../../adjacency/side_ops.zig");
 const snapshot_view = @import("../snapshot/view.zig");
 const snapshot_capture = @import("../snapshot/capture.zig");
 const snapshot_csr = @import("../snapshot/csr.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const context_mod = @import("../../algorithms/context.zig");
 
@@ -66,8 +66,8 @@ pub const ExecError = ir.PlanError || types.GraphError || error{
 
 /// Executes `plan` against `view`. Every plan is validated first — the
 /// comptime builder cannot produce an invalid one, but validation is cheap
-/// relative to any traversal and `run` accepts runtime plans too.
-pub fn run(
+/// relative to any traversal and `segment` accepts runtime plans too.
+pub fn segment(
     plan: ir.Plan,
     view: *const snapshot_view.CapturedGraphView,
     ctx: context_mod.Context,
@@ -171,7 +171,7 @@ pub fn run(
 // ── NodeSet ──────────────────────────────────────────────────────────────
 
 /// Flat bitmap over node ids plus a tracked cardinality. Sized once per
-/// run (the view's node count is fixed), so all sets of a run share one
+/// segment (the view's node count is fixed), so all sets of a segment share one
 /// word length and set ops are straight word loops.
 pub const NodeSet = struct {
     words: []u64,
@@ -331,9 +331,9 @@ fn forEachFwdEntry(
     const check_removed = view.needsRepairFwd(node_idx);
     const with_rows = view.core.edge_properties_enabled;
 
-    if (node_published.NodePublished.isTiny(&side)) {
-        const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side)) {
+        const slot = page_ops.tinySlotAtConst(view.core, side.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side);
         for (slot.entries[0..count]) |entry| {
             if (entry.destination >= len_bound) continue;
             if (check_removed and !view.isLiveIndex(entry.destination)) continue;
@@ -397,9 +397,9 @@ fn walkInNeighbors(
     const len_bound: u32 = @intCast(view.node_state.len);
     const check_removed = view.needsRepairRev(node_idx);
 
-    if (node_published.NodePublished.isTiny(&side)) {
-        const slot = page_ops.tinyBlockAtConst(view.core, side.first_block, .rev);
-        const count = node_published.NodePublished.tinyCount(&side);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side)) {
+        const slot = page_ops.tinySlotAtConst(view.core, side.first_block, .rev);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side);
         for (slot.sources[0..count]) |source| {
             try visitInCandidate(view, node_idx, rel, sink, source, len_bound, check_removed);
         }
@@ -550,10 +550,10 @@ fn emitEdges(
 
     const out = try rows.toOwnedSlice(allocator);
     std.mem.sort(ir.EdgeRow, out, {}, struct {
-        fn lessThan(_: void, a: ir.EdgeRow, b: ir.EdgeRow) bool {
-            if (a.source != b.source) return a.source < b.source;
-            if (a.destination != b.destination) return a.destination < b.destination;
-            return a.prop_row < b.prop_row;
+        fn lessThan(_: void, left_row: ir.EdgeRow, right_row: ir.EdgeRow) bool {
+            if (left_row.source != right_row.source) return left_row.source < right_row.source;
+            if (left_row.destination != right_row.destination) return left_row.destination < right_row.destination;
+            return left_row.prop_row < right_row.prop_row;
         }
     }.lessThan);
     return out;

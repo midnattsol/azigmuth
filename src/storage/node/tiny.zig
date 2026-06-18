@@ -10,22 +10,22 @@ pub const TinyFwdEntry = extern struct {
     prop_row: u32 = 0,
 };
 
-pub const TinyFwdBlock = extern struct {
+pub const TinyFwdSlot = extern struct {
     entries: [tiny_config.TINY_FWD_CAP_SIMPLE]TinyFwdEntry = [_]TinyFwdEntry{.{}} ** tiny_config.TINY_FWD_CAP_SIMPLE,
 };
 
-pub const TinyRevBlock = extern struct {
+pub const TinyRevSlot = extern struct {
     sources: [tiny_config.TINY_REV_CAP]u32 = [_]u32{0} ** tiny_config.TINY_REV_CAP,
 };
 
-pub const TINY_BLOCKS_FWD_PER_PAGE: u32 = 256;
-pub const TINY_BLOCKS_REV_PER_PAGE: u32 = 256;
+pub const TINY_FWD_SLOTS_PER_PAGE: u32 = 256;
+pub const TINY_REV_SLOTS_PER_PAGE: u32 = 256;
 
 pub fn fwdCap(multigraph_enabled: bool) u16 {
     return if (multigraph_enabled) tiny_config.TINY_FWD_CAP_MULTI else tiny_config.TINY_FWD_CAP_SIMPLE;
 }
 
-pub fn insertFwd(slot: *TinyFwdBlock, count: u16, destination: u32, relation: u16, flags: types.EdgeFlags, edge_id: u32, prop_row: u32, multigraph_enabled: bool) !u16 {
+pub fn insertFwd(slot: *TinyFwdSlot, count: u16, destination: u32, relation: u16, flags: types.EdgeFlags, edge_id: u32, prop_row: u32, multigraph_enabled: bool) !u16 {
     var insertion_idx: u16 = 0;
     while (insertion_idx < count) : (insertion_idx += 1) {
         const current = slot.entries[insertion_idx];
@@ -50,7 +50,7 @@ pub fn insertFwd(slot: *TinyFwdBlock, count: u16, destination: u32, relation: u1
     return count + 1;
 }
 
-pub fn insertRev(slot: *TinyRevBlock, count: u16, source: u32) u16 {
+pub fn insertRev(slot: *TinyRevSlot, count: u16, source: u32) u16 {
     var insertion_idx: u16 = 0;
     while (insertion_idx < count and slot.sources[insertion_idx] < source) : (insertion_idx += 1) {}
     var shift = count;
@@ -61,7 +61,7 @@ pub fn insertRev(slot: *TinyRevBlock, count: u16, source: u32) u16 {
     return count + 1;
 }
 
-pub fn removeFwd(slot: *TinyFwdBlock, count: u16, destination: u32, edge_id: ?u32, multigraph_enabled: bool) ?u16 {
+pub fn removeFwd(slot: *TinyFwdSlot, count: u16, destination: u32, edge_id: ?u32, multigraph_enabled: bool) ?u16 {
     var match_idx: ?u16 = null;
     for (0..count) |entry_idx| {
         const entry = slot.entries[entry_idx];
@@ -79,7 +79,7 @@ pub fn removeFwd(slot: *TinyFwdBlock, count: u16, destination: u32, edge_id: ?u3
     return count - 1;
 }
 
-pub fn removeRev(slot: *TinyRevBlock, count: u16, source: u32) ?u16 {
+pub fn removeRev(slot: *TinyRevSlot, count: u16, source: u32) ?u16 {
     var match_idx: ?u16 = null;
     for (0..count) |entry_idx| {
         if (slot.sources[entry_idx] != source) continue;

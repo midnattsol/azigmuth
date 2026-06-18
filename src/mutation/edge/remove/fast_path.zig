@@ -2,7 +2,7 @@ const constants = @import("../../../core/constants.zig");
 const graph_core = @import("../../../core/graph_core.zig");
 const types = @import("../../../core/types.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
-const node_published = @import("../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../storage/node/adjacency_buffers.zig");
 const adjacency = @import("../../../adjacency/mod.zig");
 const common = @import("../../common.zig");
 const local_repair = @import("../../local_repair.zig");
@@ -24,39 +24,39 @@ pub fn ensureForwardFastPathAllowedIfBlock(
     published_side: *const types.SideAdj,
     forward_found: ?common.AdjSlot,
 ) !void {
-    if (node_published.NodePublished.isTiny(published_side)) return;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(published_side)) return;
     const found = forward_found orelse return error.CorruptGraph;
     try ensureRemovalFastPathAllowed(graph, published_side, found, false);
 }
 
 pub fn planSingleRemoval(
     graph: *graph_core.GraphCore,
-    source_pub: *const types.SideAdj,
-    destination_pub: *const types.SideAdj,
+    source_published_side: *const types.SideAdj,
+    destination_published_side: *const types.SideAdj,
     forward_found: common.AdjSlot,
     reverse_found: common.AdjSlot,
 ) !SingleRemovalPlans {
     return .{
-        .forward_plan = try planRemovalSide(graph, source_pub, forward_found, .fwd),
-        .reverse_plan = try planRemovalSide(graph, destination_pub, reverse_found, .rev),
+        .forward_plan = try planRemovalSide(graph, source_published_side, forward_found, .fwd),
+        .reverse_plan = try planRemovalSide(graph, destination_published_side, reverse_found, .rev),
     };
 }
 
 pub fn ensureSingleRemovalLocality(
     graph: *graph_core.GraphCore,
-    source_pub: *const types.SideAdj,
-    destination_pub: *const types.SideAdj,
+    source_published_side: *const types.SideAdj,
+    destination_published_side: *const types.SideAdj,
     forward_found: common.AdjSlot,
     reverse_found: common.AdjSlot,
     allow_structural_rebuild: bool,
 ) !void {
     if (allow_structural_rebuild) return;
-    if (source_pub.block_count > 1) {
-        const source_tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, source_pub)) orelse return error.CorruptGraph;
+    if (source_published_side.block_count > 1) {
+        const source_tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, source_published_side)) orelse return error.CorruptGraph;
         if (forward_found.block_idx != source_tail_idx) return error.RepairRequired;
     }
-    if (destination_pub.block_count > 1) {
-        const destination_tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, destination_pub)) orelse return error.CorruptGraph;
+    if (destination_published_side.block_count > 1) {
+        const destination_tail_idx = (try adjacency.tailBlockIndexSideChecked(graph, destination_published_side)) orelse return error.CorruptGraph;
         if (reverse_found.block_idx != destination_tail_idx) return error.RepairRequired;
     }
 }
@@ -91,15 +91,15 @@ pub fn applyRemovalPlanSide(
         if (new_alive_count == 0) {
             staging_side.first_block = 0;
             staging_side.block_count = 0;
-            staging_side.group_count = 0;
-            staging_side.first_group = 0;
+            staging_side.segment_count = 0;
+            staging_side.first_segment = 0;
             return .{ .old_block = old_block, .new_block = new_block, .new_alive_count = new_alive_count };
         }
 
         staging_side.first_block = new_block;
         staging_side.block_count = 1;
-        staging_side.group_count = 0;
-        staging_side.first_group = 0;
+        staging_side.segment_count = 0;
+        staging_side.first_segment = 0;
         return .{ .old_block = old_block, .new_block = new_block, .new_alive_count = new_alive_count };
     }
 

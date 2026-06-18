@@ -144,7 +144,7 @@ const DirectRowSink = struct {
 /// the cheap path for full-graph analytics export. Same logical contract as
 /// snapshot-then-materialize: per-node coherent (seqlock per node), logical
 /// forward adjacency with tombstones filtered, frontier fixed at entry.
-/// Never-published nodes (all-zero meta) contribute an empty row at the cost
+/// Never-published nodes (all-zero publication state) contribute an empty row at the cost
 /// of a single atomic load, so sparse graphs export in O(touched storage).
 pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: std.mem.Allocator) types.GraphError!CsrView {
     const node_count: usize = core.publishedNodeCount();
@@ -169,11 +169,11 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
         out_offsets[node_idx_usize] = out_targets.items.len;
 
         const node = types.NodeId{ .index = node_idx };
-        const meta_ref = page_ops.nodeMetaAtConst(core, node);
-        var meta = meta_ref.loadPublishedMeta();
-        // Logical fast path: an all-zero meta word means no publish ever
+        const publication_cell = page_ops.nodePublicationAtConst(core, node);
+        var state = publication_cell.loadPublicationState();
+        // Logical fast path: an all-zero publication state word means no publish ever
         // committed — live node, empty logical adjacency.
-        if (@as(u64, @bitCast(meta)) == 0) {
+        if (@as(u64, @bitCast(state)) == 0) {
             alive_node_bitmap[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
             continue;
         }
@@ -183,12 +183,12 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
         var removed: bool = undefined;
         var check_removed: bool = undefined;
         while (true) {
-            side = node_access.publishedFwdFromMeta(core, node, meta);
-            removed = meta.removed;
-            check_removed = meta.needs_repair_fwd;
-            const after = meta_ref.loadPublishedMeta();
-            if (@as(u64, @bitCast(meta)) == @as(u64, @bitCast(after))) break;
-            meta = after;
+            side = node_access.publishedFwdFromState(core, node, state);
+            removed = state.removed;
+            check_removed = state.needs_repair_fwd;
+            const after = publication_cell.loadPublicationState();
+            if (@as(u64, @bitCast(state)) == @as(u64, @bitCast(after))) break;
+            state = after;
         }
         if (removed) continue;
         alive_node_bitmap[node_idx_usize / 64] |= @as(u64, 1) << @as(u6, @intCast(node_idx_usize % 64));
@@ -204,18 +204,18 @@ pub fn materializeForwardCsrLive(core: *const graph_core.GraphCore, allocator: s
         };
         if (with_rows) {
             try side_ops.forEachForwardEntryInSide(core, side, &sink, struct {
-                fn run(_: *const graph_core.GraphCore, inner_sink: *DirectRowSink, entry: side_ops.ForwardEntryView) !void {
+                fn segment(_: *const graph_core.GraphCore, inner_sink: *DirectRowSink, entry: side_ops.ForwardEntryView) !void {
                     try inner_sink.onEntry(entry);
                 }
-            }.run);
+            }.segment);
         } else {
             try side_ops.forEachNodeIdInSide(core, side, .fwd, &sink, struct {
-                fn run(inner_core: *const graph_core.GraphCore, inner_sink: *DirectRowSink, candidate: u32) !void {
+                fn segment(inner_core: *const graph_core.GraphCore, inner_sink: *DirectRowSink, candidate: u32) !void {
                     if (candidate >= inner_sink.len_bound) return;
                     if (inner_sink.check_removed and node_validity.isNodeRemovedIndex(inner_core, candidate)) return;
                     try inner_sink.out_targets.append(inner_sink.allocator, candidate);
                 }
-            }.run);
+            }.segment);
         }
     }
     out_offsets[node_count] = out_targets.items.len;

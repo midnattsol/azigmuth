@@ -4,32 +4,32 @@ const constants = @import("../core/constants.zig");
 const graph_core = @import("../core/graph_core.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const node_published = @import("../storage/node/published.zig");
+const node_adjacency_buffers = @import("../storage/node/adjacency_buffers.zig");
 
 pub const TraversalState = struct {
     contiguous_mode: bool,
     current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_idx: u32,
+    current_segment_idx: u32,
 };
 
 pub const TinyState = struct {
     tiny_mode: bool,
-    tiny_block: u32,
+    tiny_slot: u32,
     tiny_count: u16,
 };
 
 pub const CursorInit = struct {
     traversal: TraversalState,
     tiny: TinyState,
-    group_count_bound: u16,
+    segment_count_bound: u16,
 };
 
 pub fn tinyState(side_adj: types.SideAdj) TinyState {
     return .{
-        .tiny_mode = node_published.NodePublished.isTiny(&side_adj),
-        .tiny_block = side_adj.first_block,
-        .tiny_count = if (node_published.NodePublished.isTiny(&side_adj)) node_published.NodePublished.tinyCount(&side_adj) else 0,
+        .tiny_mode = node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj),
+        .tiny_slot = side_adj.first_block,
+        .tiny_count = if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj) else 0,
     };
 }
 
@@ -37,7 +37,7 @@ pub fn buildCursorInit(side_adj: types.SideAdj) CursorInit {
     return .{
         .traversal = buildTraversalState(side_adj),
         .tiny = tinyState(side_adj),
-        .group_count_bound = side_adj.group_count,
+        .segment_count_bound = side_adj.segment_count,
     };
 }
 
@@ -50,7 +50,7 @@ fn blockLimitForSide(graph: *const graph_core.GraphCore, comptime side: adjacenc
 
 pub fn advanceTraversalBlock(iterator: anytype, graph: *const graph_core.GraphCore) ?u32 {
     while (iterator.blocks_remaining == 0) {
-        if (!advanceToNextGroup(iterator, graph)) return null;
+        if (!advanceToNextSegment(iterator, graph)) return null;
     }
 
     const block_idx = iterator.current_block_idx;
@@ -59,32 +59,32 @@ pub fn advanceTraversalBlock(iterator: anytype, graph: *const graph_core.GraphCo
     return block_idx;
 }
 
-/// Builds the initial traversal state for contiguous or grouped side storage.
+/// Builds the initial traversal state for contiguous or segmented side storage.
 pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
     if (side_adj.block_count == 0) {
         return .{
             .contiguous_mode = true,
             .current_block_idx = 0,
             .blocks_remaining = 0,
-            .current_group_idx = constants.END_OF_CHAIN,
+            .current_segment_idx = constants.END_OF_CHAIN,
         };
     }
 
-    if (node_published.NodePublished.isTiny(&side_adj)) {
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
         return .{
             .contiguous_mode = true,
             .current_block_idx = 0,
             .blocks_remaining = 0,
-            .current_group_idx = constants.END_OF_CHAIN,
+            .current_segment_idx = constants.END_OF_CHAIN,
         };
     }
 
-    if (side_adj.group_count == 0) {
+    if (side_adj.segment_count == 0) {
         return .{
             .contiguous_mode = true,
             .current_block_idx = side_adj.first_block,
             .blocks_remaining = side_adj.block_count,
-            .current_group_idx = constants.END_OF_CHAIN,
+            .current_segment_idx = constants.END_OF_CHAIN,
         };
     }
 
@@ -92,7 +92,7 @@ pub fn buildTraversalState(side_adj: types.SideAdj) TraversalState {
         .contiguous_mode = false,
         .current_block_idx = 0,
         .blocks_remaining = 0,
-        .current_group_idx = side_adj.first_group,
+        .current_segment_idx = side_adj.first_segment,
     };
 }
 
@@ -102,67 +102,67 @@ pub fn validateReadSideQuick(
     side_adj: types.SideAdj,
     comptime side: adjacency.AdjSide,
 ) !void {
-    if (node_published.NodePublished.isTiny(&side_adj)) {
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
         return adjacency.validateSideAdjLayoutForSide(graph, side_adj, side);
     }
 
     const block_limit = blockLimitForSide(graph, side);
 
     if (side_adj.block_count == 0) {
-        if (side_adj.group_count != 0) return error.CorruptGraph;
+        if (side_adj.segment_count != 0) return error.CorruptGraph;
         return;
     }
 
-    if (side_adj.group_count == 0) {
+    if (side_adj.segment_count == 0) {
         if (side_adj.first_block >= block_limit) return error.CorruptGraph;
         const end = std.math.add(u32, side_adj.first_block, side_adj.block_count) catch return error.CorruptGraph;
         if (end > block_limit) return error.CorruptGraph;
         return;
     }
 
-    if (side_adj.first_group >= graph.loadGroupCount()) return error.CorruptGraph;
+    if (side_adj.first_segment >= graph.loadSegmentCount()) return error.CorruptGraph;
 }
 
-/// Initializes a grouped traversal so the first block range is ready to consume.
-pub fn primeGroupedTraversal(iterator: anytype, graph: *const graph_core.GraphCore) void {
+/// Initializes a segmented traversal so the first block range is ready to consume.
+pub fn primeSegmentedTraversal(iterator: anytype, graph: *const graph_core.GraphCore) void {
     if (iterator.contiguous_mode) return;
-    if (iterator.current_group_idx == constants.END_OF_CHAIN) return;
-    if (iterator.current_group_idx >= graph.loadGroupCount()) {
-        iterator.current_group_idx = constants.END_OF_CHAIN;
+    if (iterator.current_segment_idx == constants.END_OF_CHAIN) return;
+    if (iterator.current_segment_idx >= graph.loadSegmentCount()) {
+        iterator.current_segment_idx = constants.END_OF_CHAIN;
         return;
     }
 
-    const first_group = page_ops.edgeBlockGroupAtConst(graph, iterator.current_group_idx);
-    iterator.current_block_idx = first_group.start;
-    iterator.blocks_remaining = first_group.count;
+    const first_segment = page_ops.edgeBlockSegmentAtConst(graph, iterator.current_segment_idx);
+    iterator.current_block_idx = first_segment.start;
+    iterator.blocks_remaining = first_segment.count;
 }
 
-/// Advances a grouped traversal to the next run of blocks.
-/// Returns false when no further run is available.
-pub fn advanceToNextGroup(iterator: anytype, graph: *const graph_core.GraphCore) bool {
+/// Advances a segmented traversal to the next segment of blocks.
+/// Returns false when no further segment is available.
+pub fn advanceToNextSegment(iterator: anytype, graph: *const graph_core.GraphCore) bool {
     if (iterator.contiguous_mode) return false;
-    if (iterator.current_group_idx == constants.END_OF_CHAIN) return false;
-    if (iterator.current_group_idx >= graph.loadGroupCount()) {
-        iterator.current_group_idx = constants.END_OF_CHAIN;
+    if (iterator.current_segment_idx == constants.END_OF_CHAIN) return false;
+    if (iterator.current_segment_idx >= graph.loadSegmentCount()) {
+        iterator.current_segment_idx = constants.END_OF_CHAIN;
         return false;
     }
 
-    if (iterator.groups_visited + 1 >= iterator.group_count_bound) {
-        iterator.current_group_idx = constants.END_OF_CHAIN;
+    if (iterator.segments_visited + 1 >= iterator.segment_count_bound) {
+        iterator.current_segment_idx = constants.END_OF_CHAIN;
         return false;
     }
 
-    iterator.current_group_idx += 1;
-    iterator.groups_visited += 1;
+    iterator.current_segment_idx += 1;
+    iterator.segments_visited += 1;
 
-    const next_group = page_ops.edgeBlockGroupAtConst(graph, iterator.current_group_idx);
-    iterator.current_block_idx = next_group.start;
-    iterator.blocks_remaining = next_group.count;
+    const next_segment = page_ops.edgeBlockSegmentAtConst(graph, iterator.current_segment_idx);
+    iterator.current_block_idx = next_segment.start;
+    iterator.blocks_remaining = next_segment.count;
     return true;
 }
 
 /// Refreshes one iterator's cached block/live page pointers when the walk
-/// crosses a 64-block page boundary. Blocks within a run are consecutive, so
+/// crosses a 64-block page boundary. Blocks within a segment are consecutive, so
 /// sequential traversal resolves the directory once per page instead of
 /// twice per block.
 fn refreshSpanPages(iterator: anytype, graph: *const graph_core.GraphCore, page_idx: u32, comptime side: adjacency.AdjSide) void {

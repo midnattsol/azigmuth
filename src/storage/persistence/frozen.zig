@@ -2,7 +2,7 @@
 //!
 //! Opens a snapshot file with `posix.mmap(PROT_READ, MAP_PRIVATE)` and
 //! serves queries directly from the mapped sections: NodeRecords for
-//! degrees/flags/adjacency headers, raw block/tiny/group sections for the
+//! degrees/flags/adjacency headers, raw block/tiny/segment sections for the
 //! edges themselves. Nothing is copied; the kernel pages the file in lazily
 //! as queries touch it, and N processes mapping the same snapshot share one
 //! physical copy through the page cache.
@@ -24,7 +24,7 @@ const types = @import("../../core/types.zig");
 const node_tiny = @import("../node/tiny.zig");
 const format = @import("format.zig");
 const io_mod = @import("io.zig");
-const node_published = @import("../node/published.zig");
+const node_adjacency_buffers = @import("../node/adjacency_buffers.zig");
 const snapshot_csr = @import("../../query/snapshot/csr.zig");
 
 pub const OpenError = anyerror; // TODO: Real errors once is done.
@@ -165,23 +165,23 @@ pub const FrozenGraph = struct {
         })[block_idx];
     }
 
-    pub fn edgeBlockGroupAt(self: *const FrozenGraph, group_idx: u32) *const types.EdgeBlockGroup {
-        const bytes = self.sectionBytes(.groups);
-        const ptr: [*]const types.EdgeBlockGroup = @ptrCast(@alignCast(bytes.ptr));
-        return &ptr[group_idx];
+    pub fn edgeBlockSegmentAt(self: *const FrozenGraph, segment_idx: u32) *const types.EdgeBlockSegment {
+        const bytes = self.sectionBytes(.segments);
+        const ptr: [*]const types.EdgeBlockSegment = @ptrCast(@alignCast(bytes.ptr));
+        return &ptr[segment_idx];
     }
 
-    pub fn tinyBlockAt(self: *const FrozenGraph, block_idx: u32, comptime side: adjacency.AdjSide) *const switch (side) {
-        .fwd => node_tiny.TinyFwdBlock,
-        .rev => node_tiny.TinyRevBlock,
+    pub fn tinySlotAt(self: *const FrozenGraph, block_idx: u32, comptime side: adjacency.AdjSide) *const switch (side) {
+        .fwd => node_tiny.TinyFwdSlot,
+        .rev => node_tiny.TinyRevSlot,
     } {
         const bytes = self.sectionBytes(switch (side) {
             .fwd => .tiny_fwd,
             .rev => .tiny_rev,
         });
         const ptr: [*]const switch (side) {
-            .fwd => node_tiny.TinyFwdBlock,
-            .rev => node_tiny.TinyRevBlock,
+            .fwd => node_tiny.TinyFwdSlot,
+            .rev => node_tiny.TinyRevSlot,
         } = @ptrCast(@alignCast(bytes.ptr));
         return &ptr[block_idx];
     }
@@ -192,76 +192,76 @@ pub const FrozenGraph = struct {
     /// as the live engine, minus all concurrency:
     ///   - tiny side: first_block carries side_ops.TINY_SLOT_TAG; entries
     ///     come from the tiny slot, count from the published tiny count
-    ///     convention (see NodePublished.tinyCount / the record's degree),
-    ///   - contiguous run: group_count == 0 → block_count blocks starting
+    ///     convention (see NodeAdjacencyBuffers.tinyCount / the record's degree),
+    ///   - contiguous segment: segment_count == 0 → block_count blocks starting
     ///     at first_block, each read up to its live count,
-    ///   - grouped runs: group_count EdgeBlockGroup descriptors starting at
-    ///     first_group, each one a (first_block, span) run.
+    ///   - segmented segments: segment_count EdgeBlockSegment descriptors starting at
+    ///     first_segment, each one a (first_block, slot_entry) segment.
     pub fn outNeighbors(self: *const FrozenGraph, node: types.NodeId) types.GraphError!NeighborIterator {
         const node_record = self.nodeRecord(node) orelse return error.InvalidNode;
 
         const side_adj: types.SideAdj = node_record.fwd;
-        if (side_adj.block_count == 0 and side_adj.group_count == 0 and !node_published.NodePublished.isTiny(&side_adj)) {
+        if (side_adj.block_count == 0 and side_adj.segment_count == 0 and !node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
             return NeighborIterator{
                 .frozen = self,
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_block_idx = 0,
+                .tiny_slot_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = 0,
                 .slot_idx = 0,
                 .blocks_remaining = 0,
-                .group_idx = 0,
-                .groups_remaining = 0,
+                .segment_idx = 0,
+                .segments_remaining = 0,
                 .alive_in_block = 0,
             };
         }
-        if (node_published.NodePublished.isTiny(&side_adj)) {
+        if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
             return NeighborIterator{
                 .frozen = self,
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = true,
-                .tiny_block_idx = side_adj.first_block,
-                .tiny_count = node_published.NodePublished.tinyCount(&side_adj),
+                .tiny_slot_idx = side_adj.first_block,
+                .tiny_count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj),
                 .current_block_idx = 0,
                 .slot_idx = 0,
                 .blocks_remaining = 0,
-                .group_idx = 0,
-                .groups_remaining = 0,
+                .segment_idx = 0,
+                .segments_remaining = 0,
                 .alive_in_block = 0,
             };
-        } else if (side_adj.group_count == 0) {
+        } else if (side_adj.segment_count == 0) {
             return NeighborIterator{
                 .frozen = self,
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_block_idx = 0,
+                .tiny_slot_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = side_adj.first_block,
                 .slot_idx = 0,
                 .blocks_remaining = side_adj.block_count,
-                .group_idx = 0,
-                .groups_remaining = 0,
+                .segment_idx = 0,
+                .segments_remaining = 0,
                 .alive_in_block = self.aliveCountInBlock(side_adj.first_block, .fwd),
             };
         } else {
-            const group = self.edgeBlockGroupAt(side_adj.first_group);
+            const segment = self.edgeBlockSegmentAt(side_adj.first_segment);
             return NeighborIterator{
                 .frozen = self,
                 .direction = .fwd,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_block_idx = 0,
+                .tiny_slot_idx = 0,
                 .tiny_count = 0,
-                .current_block_idx = group.start,
+                .current_block_idx = segment.start,
                 .slot_idx = 0,
-                .blocks_remaining = group.count,
-                .group_idx = side_adj.first_group,
-                .groups_remaining = side_adj.group_count,
-                .alive_in_block = self.aliveCountInBlock(group.start, .fwd),
+                .blocks_remaining = segment.count,
+                .segment_idx = side_adj.first_segment,
+                .segments_remaining = side_adj.segment_count,
+                .alive_in_block = self.aliveCountInBlock(segment.start, .fwd),
             };
         }
     }
@@ -270,67 +270,67 @@ pub const FrozenGraph = struct {
         const node_record = self.nodeRecord(node) orelse return error.InvalidNode;
 
         const side_adj: types.SideAdj = node_record.rev;
-        if (side_adj.block_count == 0 and side_adj.group_count == 0 and !node_published.NodePublished.isTiny(&side_adj)) {
+        if (side_adj.block_count == 0 and side_adj.segment_count == 0 and !node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
             return NeighborIterator{
                 .frozen = self,
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_block_idx = 0,
+                .tiny_slot_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = 0,
                 .slot_idx = 0,
                 .blocks_remaining = 0,
-                .group_idx = 0,
-                .groups_remaining = 0,
+                .segment_idx = 0,
+                .segments_remaining = 0,
                 .alive_in_block = 0,
             };
         }
-        if (node_published.NodePublished.isTiny(&side_adj)) {
+        if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
             return NeighborIterator{
                 .frozen = self,
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = true,
-                .tiny_block_idx = side_adj.first_block,
-                .tiny_count = node_published.NodePublished.tinyCount(&side_adj),
+                .tiny_slot_idx = side_adj.first_block,
+                .tiny_count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj),
                 .current_block_idx = 0,
                 .slot_idx = 0,
                 .blocks_remaining = 0,
-                .group_idx = 0,
-                .groups_remaining = 0,
+                .segment_idx = 0,
+                .segments_remaining = 0,
                 .alive_in_block = 0,
             };
-        } else if (side_adj.group_count == 0) {
+        } else if (side_adj.segment_count == 0) {
             return NeighborIterator{
                 .frozen = self,
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_block_idx = 0,
+                .tiny_slot_idx = 0,
                 .tiny_count = 0,
                 .current_block_idx = side_adj.first_block,
                 .slot_idx = 0,
                 .blocks_remaining = side_adj.block_count,
-                .group_idx = 0,
-                .groups_remaining = 0,
+                .segment_idx = 0,
+                .segments_remaining = 0,
                 .alive_in_block = self.aliveCountInBlock(side_adj.first_block, .rev),
             };
         } else {
-            const group = self.edgeBlockGroupAt(side_adj.first_group);
+            const segment = self.edgeBlockSegmentAt(side_adj.first_segment);
             return NeighborIterator{
                 .frozen = self,
                 .direction = .rev,
                 .tiny_idx = 0,
                 .tiny_mode = false,
-                .tiny_block_idx = 0,
+                .tiny_slot_idx = 0,
                 .tiny_count = 0,
-                .current_block_idx = group.start,
+                .current_block_idx = segment.start,
                 .slot_idx = 0,
-                .blocks_remaining = group.count,
-                .group_idx = side_adj.first_group,
-                .groups_remaining = side_adj.group_count,
-                .alive_in_block = self.aliveCountInBlock(group.start, .rev),
+                .blocks_remaining = segment.count,
+                .segment_idx = side_adj.first_segment,
+                .segments_remaining = side_adj.segment_count,
+                .alive_in_block = self.aliveCountInBlock(segment.start, .rev),
             };
         }
     }
@@ -341,21 +341,21 @@ pub const FrozenGraph = struct {
 
         // Tiny mode
         tiny_mode: bool,
-        tiny_block_idx: u32,
+        tiny_slot_idx: u32,
         tiny_count: u16,
         tiny_idx: u16,
 
         // Current block. `blocks_remaining` counts the current block too,
-        // so a run with one last block left has `blocks_remaining == 1`.
+        // so a segment with one last block left has `blocks_remaining == 1`.
         current_block_idx: u32,
         blocks_remaining: u32,
         slot_idx: u8,
         alive_in_block: u8,
 
-        // Current group. `groups_remaining` counts the current group too,
-        // so a side already in its last group has `groups_remaining == 1`.
-        group_idx: u32,
-        groups_remaining: u16,
+        // Current segment. `segments_remaining` counts the current segment too,
+        // so a side already in its last segment has `segments_remaining == 1`.
+        segment_idx: u32,
+        segments_remaining: u16,
 
         pub fn next(self: *NeighborIterator) ?types.NodeId {
             var neighbor: types.NodeId = undefined;
@@ -363,12 +363,12 @@ pub const FrozenGraph = struct {
                 if (self.tiny_count <= self.tiny_idx) return null;
                 neighbor = switch (self.direction) {
                     .fwd => blk: {
-                        const block = self.frozen.tinyBlockAt(self.tiny_block_idx, .fwd);
+                        const block = self.frozen.tinySlotAt(self.tiny_slot_idx, .fwd);
                         const destination = block.entries[self.tiny_idx].destination;
                         break :blk types.NodeId{ .index = destination };
                     },
                     .rev => blk: {
-                        const block = self.frozen.tinyBlockAt(self.tiny_block_idx, .rev);
+                        const block = self.frozen.tinySlotAt(self.tiny_slot_idx, .rev);
                         const source = block.sources[self.tiny_idx];
                         break :blk types.NodeId{ .index = source };
                     },
@@ -398,12 +398,12 @@ pub const FrozenGraph = struct {
                     self.slot_idx = 0;
                     self.alive_in_block = self.frozen.aliveCountInBlock(self.current_block_idx, self.direction);
                     continue;
-                } else if (self.groups_remaining > 1) {
-                    self.group_idx += 1;
-                    self.groups_remaining -= 1;
-                    const group = self.frozen.edgeBlockGroupAt(self.group_idx);
-                    self.blocks_remaining = group.count;
-                    self.current_block_idx = group.start;
+                } else if (self.segments_remaining > 1) {
+                    self.segment_idx += 1;
+                    self.segments_remaining -= 1;
+                    const segment = self.frozen.edgeBlockSegmentAt(self.segment_idx);
+                    self.blocks_remaining = segment.count;
+                    self.current_block_idx = segment.start;
                     self.alive_in_block = self.frozen.aliveCountInBlock(self.current_block_idx, self.direction);
                     self.slot_idx = 0;
                     continue;

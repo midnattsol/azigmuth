@@ -414,10 +414,10 @@ test "api contract: addEdges inserts a batch atomically" {
 
     const source = try graph.addNode();
     var destinations: [100]azigmuth.NodeId = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
 
     var inputs: [100]azigmuth.EdgeInput = undefined;
-    for (0..inputs.len) |i| inputs[i] = .{ .destination = destinations[i], .relation = @intCast(i % 7) };
+    for (0..inputs.len) |input_idx| inputs[input_idx] = .{ .destination = destinations[input_idx], .relation = @intCast(input_idx % 7) };
 
     const added = try graph.addEdges(source, &inputs);
     try testing.expectEqual(@as(usize, 100), added);
@@ -435,22 +435,22 @@ test "api contract: addEdges rejects duplicates without mutating" {
     defer graph.deinit();
 
     const source = try graph.addNode();
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(source, a, 0, .{});
+    const first_destination = try graph.addNode();
+    const second_destination = try graph.addNode();
+    try graph.addEdge(source, first_destination, 0, .{});
 
     // Existing duplicate in the batch: all-or-nothing rejection.
     const inputs = [_]azigmuth.EdgeInput{
-        .{ .destination = b },
-        .{ .destination = a },
+        .{ .destination = second_destination },
+        .{ .destination = first_destination },
     };
     try testing.expectError(error.EdgeAlreadyExists, graph.addEdges(source, &inputs));
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
 
     // Intra-batch duplicate: same rejection.
     const dup_inputs = [_]azigmuth.EdgeInput{
-        .{ .destination = b },
-        .{ .destination = b },
+        .{ .destination = second_destination },
+        .{ .destination = second_destination },
     };
     try testing.expectError(error.EdgeAlreadyExists, graph.addEdges(source, &dup_inputs));
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
@@ -463,16 +463,16 @@ test "api contract: addEdges merges into an existing block side" {
 
     const source = try graph.addNode();
     var first: [80]azigmuth.NodeId = undefined;
-    for (0..first.len) |i| {
-        first[i] = try graph.addNode();
-        try graph.addEdge(source, first[i], 0, .{});
+    for (0..first.len) |destination_idx| {
+        first[destination_idx] = try graph.addNode();
+        try graph.addEdge(source, first[destination_idx], 0, .{});
     }
 
     var extra: [50]azigmuth.NodeId = undefined;
     var inputs: [50]azigmuth.EdgeInput = undefined;
-    for (0..extra.len) |i| {
-        extra[i] = try graph.addNode();
-        inputs[i] = .{ .destination = extra[i] };
+    for (0..extra.len) |destination_idx| {
+        extra[destination_idx] = try graph.addNode();
+        inputs[destination_idx] = .{ .destination = extra[destination_idx] };
     }
     _ = try graph.addEdges(source, &inputs);
 

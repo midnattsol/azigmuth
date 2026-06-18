@@ -132,8 +132,8 @@ const Tokenizer = struct {
 
     fn next(self: *Tokenizer) ParseError!Token {
         while (self.pos < self.source.len) {
-            const c = self.source[self.pos];
-            switch (c) {
+            const current_char = self.source[self.pos];
+            switch (current_char) {
                 ' ', '\t', '\r', '\n' => self.pos += 1,
                 '#' => while (self.pos < self.source.len and self.source[self.pos] != '\n') {
                     self.pos += 1;
@@ -143,9 +143,9 @@ const Tokenizer = struct {
         }
         if (self.pos >= self.source.len) return .end;
 
-        const c = self.source[self.pos];
+        const current_char = self.source[self.pos];
         self.pos += 1;
-        switch (c) {
+        switch (current_char) {
             '|' => return .pipe,
             '&' => return .amp,
             '+' => return .plus,
@@ -186,7 +186,7 @@ const Tokenizer = struct {
                 return error.UnexpectedToken;
             },
             '0'...'9' => {
-                var value: u64 = c - '0';
+                var value: u64 = current_char - '0';
                 while (self.pos < self.source.len) {
                     const digit = self.source[self.pos];
                     if (digit < '0' or digit > '9') break;

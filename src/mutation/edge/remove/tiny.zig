@@ -1,5 +1,5 @@
 const graph_core = @import("../../../core/graph_core.zig");
-const node_published_mod = @import("../../../storage/node/published.zig");
+const node_adjacency_buffers_mod = @import("../../../storage/node/adjacency_buffers.zig");
 const types = @import("../../../core/types.zig");
 const common = @import("../../common.zig");
 const remove_common = @import("common.zig");
@@ -20,7 +20,7 @@ fn finalizeTinyCompatibleSingleRemoval(
 ) !bool {
     const staging = remove_common.prepareRemovalStaging(graph, endpoints, source, destination);
     staging.source_staging.* = new_source;
-    staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_pub, source.index, 1, scratch);
+    staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_published_side, source.index, 1, scratch);
 
     const publish_adj = remove_common.updateSingleRemovalDebt(graph, endpoints, staging, source, destination);
 
@@ -29,10 +29,10 @@ fn finalizeTinyCompatibleSingleRemoval(
     try remove_finalize.retireBulkRemovedSides(
         graph,
         scratch,
-        remove_state.source_pub,
-        remove_state.destination_pub,
-        remove_state.old_source_groups,
-        remove_state.old_destination_groups,
+        remove_state.source_published_side,
+        remove_state.destination_published_side,
+        remove_state.old_source_segments,
+        remove_state.old_destination_segments,
     );
     _ = graph.edge_count.fetchSub(1, .release);
     return true;
@@ -46,13 +46,13 @@ pub fn removeSingleTinyCompatible(
     destination: types.NodeId,
     forward_found: ?common.AdjSlot,
 ) !bool {
-    if (!node_published_mod.NodePublished.isTiny(&remove_state.source_pub) and forward_found == null) return error.CorruptGraph;
+    if (!node_adjacency_buffers_mod.NodeAdjacencyBuffers.isTiny(&remove_state.source_published_side) and forward_found == null) return error.CorruptGraph;
 
     var scratch = remove_common.beginRemovalScratch();
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
 
-    const forward_result = try remove_rebuild.rebuildForwardRemoveAll(graph, &remove_state.source_pub, destination.index, &scratch);
+    const forward_result = try remove_rebuild.rebuildForwardRemoveAll(graph, &remove_state.source_published_side, destination.index, &scratch);
     if (forward_result.removed == 0) return false;
     if (forward_result.removed != 1) return error.CorruptGraph;
 
@@ -73,7 +73,7 @@ pub fn removeByIdTinyCompatible(
     var scratch = remove_common.beginRemovalScratch();
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
-    const new_source = try remove_rebuild.rebuildForwardRemoveOneById(graph, &remove_state.source_pub, destination.index, edge_id.local, &scratch) orelse return false;
+    const new_source = try remove_rebuild.rebuildForwardRemoveOneById(graph, &remove_state.source_published_side, destination.index, edge_id.local, &scratch) orelse return false;
     return finalizeTinyCompatibleSingleRemoval(graph, endpoints, remove_state, source, destination, new_source, &scratch);
 }
 
@@ -95,14 +95,14 @@ pub fn removeSingleBlockForwardTinyReverse(
     defer scratch.deinit(graph.allocator);
     defer scratch.cleanup(graph);
 
-    const forward_plan = try remove_fast_path.planRemovalSide(graph, &remove_state.source_pub, forward_found, .fwd);
+    const forward_plan = try remove_fast_path.planRemovalSide(graph, &remove_state.source_published_side, forward_found, .fwd);
     const staging = remove_common.prepareRemovalStaging(graph, endpoints, source, destination);
-    const source_build = try remove_fast_path.applyRemovalPlanSide(graph, staging.source_staging, &remove_state.source_pub, forward_plan, .fwd, &scratch, true);
+    const source_build = try remove_fast_path.applyRemovalPlanSide(graph, staging.source_staging, &remove_state.source_published_side, forward_plan, .fwd, &scratch, true);
     // Route the forward retirements through the bulk-style finalize.
     try scratch.markRetireBlock(graph.allocator, .fwd, source_build.old_block);
     if (source_build.new_alive_count == 0) try scratch.markRetireBlock(graph.allocator, .fwd, source_build.new_block);
 
-    staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_pub, source.index, 1, &scratch);
+    staging.destination_staging.* = try remove_rebuild.rebuildReverseRemoveCount(graph, &remove_state.destination_published_side, source.index, 1, &scratch);
 
     const publish_adj = remove_common.updateSingleRemovalDebt(graph, endpoints, staging, source, destination);
     scratch.disarm();
@@ -110,10 +110,10 @@ pub fn removeSingleBlockForwardTinyReverse(
     try remove_finalize.retireBulkRemovedSides(
         graph,
         &scratch,
-        remove_state.source_pub,
-        remove_state.destination_pub,
-        remove_state.old_source_groups,
-        remove_state.old_destination_groups,
+        remove_state.source_published_side,
+        remove_state.destination_published_side,
+        remove_state.old_source_segments,
+        remove_state.old_destination_segments,
     );
     _ = graph.edge_count.fetchSub(1, .release);
     return true;
@@ -137,19 +137,19 @@ pub fn removeSingleTinyForwardBlockReverse(
     defer scratch.cleanup(graph);
 
     const new_source = if (edge_id) |id| blk: {
-        break :blk (try remove_rebuild.rebuildForwardRemoveOneById(graph, &remove_state.source_pub, destination.index, id, &scratch)) orelse return false;
+        break :blk (try remove_rebuild.rebuildForwardRemoveOneById(graph, &remove_state.source_published_side, destination.index, id, &scratch)) orelse return false;
     } else blk: {
-        const forward_result = try remove_rebuild.rebuildForwardRemoveAll(graph, &remove_state.source_pub, destination.index, &scratch);
+        const forward_result = try remove_rebuild.rebuildForwardRemoveAll(graph, &remove_state.source_published_side, destination.index, &scratch);
         if (forward_result.removed == 0) return false;
         if (forward_result.removed != 1) return error.CorruptGraph;
         break :blk forward_result.new_side;
     };
 
-    const reverse_found = try remove_single.findReverseMatchForSingleRemoval(graph, &remove_state, source, endpoints.destination_published.publishedRevSortedFromMeta(endpoints.destination_meta));
-    const reverse_plan = try remove_fast_path.planRemovalSide(graph, &remove_state.destination_pub, reverse_found, .rev);
+    const reverse_found = try remove_single.findReverseMatchForSingleRemoval(graph, &remove_state, source, endpoints.destination_buffers.publishedRevSortedFromState(endpoints.destination_state));
+    const reverse_plan = try remove_fast_path.planRemovalSide(graph, &remove_state.destination_published_side, reverse_found, .rev);
     const staging = remove_common.prepareRemovalStaging(graph, endpoints, source, destination);
     staging.source_staging.* = new_source;
-    const destination_build = try remove_fast_path.applyRemovalPlanSide(graph, staging.destination_staging, &remove_state.destination_pub, reverse_plan, .rev, &scratch, true);
+    const destination_build = try remove_fast_path.applyRemovalPlanSide(graph, staging.destination_staging, &remove_state.destination_published_side, reverse_plan, .rev, &scratch, true);
     try scratch.markRetireBlock(graph.allocator, .rev, destination_build.old_block);
     if (destination_build.new_alive_count == 0) try scratch.markRetireBlock(graph.allocator, .rev, destination_build.new_block);
 
@@ -159,10 +159,10 @@ pub fn removeSingleTinyForwardBlockReverse(
     try remove_finalize.retireBulkRemovedSides(
         graph,
         &scratch,
-        remove_state.source_pub,
-        remove_state.destination_pub,
-        remove_state.old_source_groups,
-        remove_state.old_destination_groups,
+        remove_state.source_published_side,
+        remove_state.destination_published_side,
+        remove_state.old_source_segments,
+        remove_state.old_destination_segments,
     );
     _ = graph.edge_count.fetchSub(1, .release);
     return true;

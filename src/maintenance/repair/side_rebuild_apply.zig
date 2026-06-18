@@ -14,8 +14,8 @@ pub fn adoptSortedRebuildSide(
     try scratch.adoptBlocks(graph.allocator, side, sorted.new_blocks.items);
 
     // The per-block allocations may come from a scattered free stack; the
-    // bounded build coalesces the cheapest adjacent runs so a repair rebuild
-    // can never itself exceed the run bound (and never surfaces
+    // bounded build coalesces the cheapest adjacent segments so a repair rebuild
+    // can never itself exceed the segment bound (and never surfaces
     // RepairRequired back to the caller it is supposed to unblock).
     return rebuild_common.buildSideFromBlockListBounded(graph, scratch, &sorted.new_blocks, side);
 }

@@ -9,13 +9,13 @@ const types = @import("../../core/types.zig");
 
 pub const appendBlockShapeViolations = block_shape.appendBlockShapeViolations;
 pub const appendContiguousBlocks = adjacency_collect.appendContiguousBlocks;
-pub const DebugGroupSpan = adjacency_collect.DebugGroupSpan;
+pub const DebugSegment = adjacency_collect.DebugSegment;
 pub const spansOverlap = adjacency_collect.spansOverlap;
 pub const collectAdjacencyBlocks = adjacency_collect.collectAdjacencyBlocks;
 
 pub const buildFreeBlockSet = ownership_sets.buildFreeBlockSet;
 pub const buildRetiredBlockSet = ownership_sets.buildRetiredBlockSet;
-pub const buildFreeGroupSet = ownership_sets.buildFreeGroupSet;
-pub const buildRetiredGroupSet = ownership_sets.buildRetiredGroupSet;
+pub const buildFreeSegmentSet = ownership_sets.buildFreeSegmentSet;
+pub const buildRetiredSegmentSet = ownership_sets.buildRetiredSegmentSet;
 pub const markOwnedBlock = ownership_sets.markOwnedBlock;
 pub const appendOwnershipAndShapeViolations = ownership_report.appendOwnershipAndShapeViolations;

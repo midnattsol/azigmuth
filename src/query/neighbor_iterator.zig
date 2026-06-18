@@ -12,8 +12,8 @@ const side_traversal = @import("side_traversal.zig");
 const live_read_common = @import("live_read_common.zig");
 const types = @import("../core/types.zig");
 const page_ops = @import("../storage/page_ops.zig");
-const node_published = @import("../storage/node/published.zig");
-const node_meta_mod = @import("../storage/node/meta.zig");
+const node_adjacency_buffers = @import("../storage/node/adjacency_buffers.zig");
+const node_publication_mod = @import("../storage/node/publication.zig");
 const node_tiny = @import("../storage/node/tiny.zig");
 const rcu = @import("../concurrency/rcu.zig");
 const node_validity = @import("../core/node_validity.zig");
@@ -28,24 +28,24 @@ pub const NeighborIterator = struct {
     contiguous_mode: bool,
     current_block_idx: u32,
     blocks_remaining: u32,
-    current_group_idx: u32,
+    current_segment_idx: u32,
 
     current_slot: u7 = 0,
     current_live: u7 = 0,
     tiny_mode: bool = false,
-    tiny_block: u32 = 0,
+    tiny_slot: u32 = 0,
     tiny_count: u16 = 0,
     tiny_idx: u16 = 0,
     /// Cached from loadNextNonEmptyMask so next() avoids a second block fetch.
     cached_fwd_block: ?*const types.EdgeBlockFwd = null,
     cached_rev_block: ?*const types.EdgeBlockRev = null,
-    cached_tiny_fwd: ?*const node_tiny.TinyFwdBlock = null,
-    cached_tiny_rev: ?*const node_tiny.TinyRevBlock = null,
+    cached_tiny_fwd: ?*const node_tiny.TinyFwdSlot = null,
+    cached_tiny_rev: ?*const node_tiny.TinyRevSlot = null,
     cached_span_page_idx: u32 = constants.END_OF_CHAIN,
     cached_span_blocks_raw: usize = 0,
     cached_span_alive_raw: usize = 0,
     cached_node_page_idx: u32 = constants.END_OF_CHAIN,
-    cached_node_page: ?[]const node_meta_mod.NodeMeta = null,
+    cached_node_page: ?[]const node_publication_mod.NodePublicationCell = null,
 
     degree_snapshot: usize,
     check_removed_candidates: bool,
@@ -54,13 +54,13 @@ pub const NeighborIterator = struct {
     reader_token: rcu.ReaderToken,
     reader_token_retained: bool = false,
 
-    /// Safeguard against corrupt cyclic group chains: stop advancing
-    /// after visiting more groups than the adjacency snapshot declares.
-    groups_visited: u16 = 0,
-    group_count_bound: u16 = 0,
+    /// Safeguard against corrupt cyclic segment chains: stop advancing
+    /// after visiting more segments than the adjacency snapshot declares.
+    segments_visited: u16 = 0,
+    segment_count_bound: u16 = 0,
 
-    fn advanceToNextGroup(self: *NeighborIterator) bool {
-        return side_traversal.advanceToNextGroup(self, self.core);
+    fn advanceToNextSegment(self: *NeighborIterator) bool {
+        return side_traversal.advanceToNextSegment(self, self.core);
     }
 
     fn candidateRemoved(self: *NeighborIterator, candidate_idx: u32) bool {
@@ -186,9 +186,9 @@ fn initNeighborIteratorWithCapture(graph: *const graph_core.GraphCore, capture: 
         .contiguous_mode = cursor_init.traversal.contiguous_mode,
         .current_block_idx = cursor_init.traversal.current_block_idx,
         .blocks_remaining = cursor_init.traversal.blocks_remaining,
-        .current_group_idx = cursor_init.traversal.current_group_idx,
+        .current_segment_idx = cursor_init.traversal.current_segment_idx,
         .tiny_mode = cursor_init.tiny.tiny_mode,
-        .tiny_block = cursor_init.tiny.tiny_block,
+        .tiny_slot = cursor_init.tiny.tiny_slot,
         .tiny_count = cursor_init.tiny.tiny_count,
         .degree_snapshot = switch (direction) {
             .fwd => capture.degree_fwd,
@@ -201,17 +201,17 @@ fn initNeighborIteratorWithCapture(graph: *const graph_core.GraphCore, capture: 
         .reader_active = true,
         .reader_token = capture.reader_token,
         .reader_token_retained = capture.token_retained,
-        .groups_visited = 0,
-        .group_count_bound = cursor_init.group_count_bound,
+        .segments_visited = 0,
+        .segment_count_bound = cursor_init.segment_count_bound,
     };
 
     if (iterator.tiny_mode) {
         switch (direction) {
-            .fwd => iterator.cached_tiny_fwd = page_ops.tinyBlockAtConst(graph, iterator.tiny_block, .fwd),
-            .rev => iterator.cached_tiny_rev = page_ops.tinyBlockAtConst(graph, iterator.tiny_block, .rev),
+            .fwd => iterator.cached_tiny_fwd = page_ops.tinySlotAtConst(graph, iterator.tiny_slot, .fwd),
+            .rev => iterator.cached_tiny_rev = page_ops.tinySlotAtConst(graph, iterator.tiny_slot, .rev),
         }
     }
-    side_traversal.primeGroupedTraversal(&iterator, graph);
+    side_traversal.primeSegmentedTraversal(&iterator, graph);
 
     return iterator;
 }
@@ -236,14 +236,14 @@ pub fn inNeighborsRetained(graph: *const graph_core.GraphCore, node: types.NodeI
 
 pub fn outDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-    const meta = node_access.loadPublishedMetaAtConst(graph, node);
-    if (meta.removed) return error.InvalidNode;
+    const state = node_access.loadPublicationStateAtConst(graph, node);
+    if (state.removed) return error.InvalidNode;
     return node_access.publishedFwdDegreeAtConst(graph, node);
 }
 
 pub fn inDegree(graph: *const graph_core.GraphCore, node: types.NodeId) types.GraphError!usize {
     if (!node_validity.nodeExistsRaw(graph, node)) return error.InvalidNode;
-    const meta = node_access.loadPublishedMetaAtConst(graph, node);
-    if (meta.removed) return error.InvalidNode;
+    const state = node_access.loadPublicationStateAtConst(graph, node);
+    if (state.removed) return error.InvalidNode;
     return node_access.publishedRevDegreeAtConst(graph, node);
 }

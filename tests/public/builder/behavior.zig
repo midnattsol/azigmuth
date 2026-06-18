@@ -115,18 +115,18 @@ test "graph_builder: duplicate edge returns EdgeAlreadyExists" {
     var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
-    const a = try builder.addNode();
-    const b = try builder.addNode();
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
 
-    try builder.addEdge(a, b, 0, .{});
-    try testing.expectError(error.EdgeAlreadyExists, builder.addEdge(a, b, 1, .{}));
+    try builder.addEdge(source, destination, 0, .{});
+    try testing.expectError(error.EdgeAlreadyExists, builder.addEdge(source, destination, 1, .{}));
 
     var graph = try builder.freeze();
     defer graph.deinit();
     try graph.validate();
     try testing.expectEqual(@as(u64, 1), graph.edgeCount());
-    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, a, testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, destination, testing.allocator));
 }
 
 test "graph_builder: freeze produces valid graph (validate passthrough)" {
@@ -134,7 +134,7 @@ test "graph_builder: freeze produces valid graph (validate passthrough)" {
     defer builder.deinit();
 
     var nodes: [6]azigmuth.NodeId = undefined;
-    for (0..6) |i| nodes[i] = try builder.addNode();
+    for (0..6) |node_idx| nodes[node_idx] = try builder.addNode();
 
     try builder.addEdge(nodes[0], nodes[1], 0, .{});
     try builder.addEdge(nodes[0], nodes[2], 0, .{});
@@ -196,39 +196,39 @@ test "graph_builder: single edge bidirectional check" {
     var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
-    const a = try builder.addNode();
-    const b = try builder.addNode();
-    try builder.addEdge(a, b, 0, .{});
+    const source = try builder.addNode();
+    const destination = try builder.addNode();
+    try builder.addEdge(source, destination, 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
     try graph.validate();
 
-    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, a, testing.allocator));
-    try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, a, testing.allocator));
-    try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, b, testing.allocator));
-    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, b, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.outDegree(graph, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.inDegree(graph, source, testing.allocator));
+    try testing.expectEqual(@as(usize, 0), try snapshot_support.outDegree(graph, destination, testing.allocator));
+    try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, destination, testing.allocator));
 }
 
 test "graph_builder: degree cache matches edge count for large graph" {
     var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
-    const n = try builder.addNode();
+    const source = try builder.addNode();
     for (0..200) |_| {
-        const t = try builder.addNode();
-        try builder.addEdge(n, t, 0, .{});
+        const destination = try builder.addNode();
+        try builder.addEdge(source, destination, 0, .{});
     }
 
     var graph = try builder.freeze();
     defer graph.deinit();
     try graph.validate();
 
-    try testing.expectEqual(@as(usize, 200), try snapshot_support.outDegree(graph, n, testing.allocator));
+    try testing.expectEqual(@as(usize, 200), try snapshot_support.outDegree(graph, source, testing.allocator));
     try testing.expectEqual(@as(u64, 200), graph.edgeCount());
 
-    for (1..201) |dst_idx| {
-        try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, .{ .index = @intCast(dst_idx) }, testing.allocator));
+    for (1..201) |destination_idx| {
+        try testing.expectEqual(@as(usize, 1), try snapshot_support.inDegree(graph, .{ .index = @intCast(destination_idx) }, testing.allocator));
     }
 }
 
@@ -236,14 +236,14 @@ test "graph_builder: freeze transfers ownership and builder becomes inert" {
     var builder = try azigmuth.GraphBuilder.init(testing.allocator);
     defer builder.deinit();
 
-    const a = try builder.addNode();
-    try builder.addEdge(a, a, 0, .{});
+    const node = try builder.addNode();
+    try builder.addEdge(node, node, 0, .{});
 
     var graph = try builder.freeze();
     defer graph.deinit();
 
     try testing.expectError(error.UnsupportedOperation, builder.addNode());
-    try testing.expectError(error.UnsupportedOperation, builder.addEdge(a, a, 0, .{}));
+    try testing.expectError(error.UnsupportedOperation, builder.addEdge(node, node, 0, .{}));
     try testing.expectError(error.UnsupportedOperation, builder.freeze());
 
     try graph.validate();
@@ -291,14 +291,14 @@ test "graph_builder: 500+ edges freeze produces a valid graph with zero debug vi
 
     const node_count: u32 = 100;
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try builder.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try builder.addNode();
 
     var edge_count: usize = 0;
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i == j) continue;
+    for (0..node_count) |source_idx| {
+        for (0..node_count) |destination_idx| {
+            if (source_idx == destination_idx) continue;
             if (edge_count >= 520) break;
-            try builder.addEdge(nodes[i], nodes[j], 0, .{});
+            try builder.addEdge(nodes[source_idx], nodes[destination_idx], 0, .{});
             edge_count += 1;
         }
         if (edge_count >= 520) break;

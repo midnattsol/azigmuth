@@ -12,21 +12,21 @@ test "graph debug validate: detects forward entry without reverse entry" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
 
     const block = try graph.allocBlockFwd();
     var fwd = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    fwd.destinations[0] = b.index;
+    fwd.destinations[0] = destination.index;
     fwd.relations[0] = 0;
     fwd.flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
 
-    const a_node = try graph.nodeAt(a);
-    publish.clearPublishedSides(a_node);
-    publish.publishedFwdSide(a_node).first_block = block;
-    publish.publishedFwdSide(a_node).block_count = 1;
-    try publish.syncToPublished(&graph, a.index);
+    const source_node = try graph.nodeAt(source);
+    publish.clearPublishedSides(source_node);
+    publish.publishedFwdSide(source_node).first_block = block;
+    publish.publishedFwdSide(source_node).block_count = 1;
+    try publish.syncToPublished(&graph, source.index);
     graph.graph.edge_count.store(1, .release);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
@@ -34,7 +34,7 @@ test "graph debug validate: detects forward entry without reverse entry" {
 
     var found = false;
     for (violations) |violation| switch (violation) {
-        .forward_reverse_mismatch => |payload| found = found or (payload.node == a.index and payload.destination == b.index),
+        .forward_reverse_mismatch => |payload| found = found or (payload.node == source.index and payload.destination == destination.index),
         else => {},
     };
     try testing.expect(found);
@@ -94,26 +94,26 @@ test "graph debug validate: detects reverse entry without forward entry" {
     var graph = try Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
 
     const block = try graph.allocBlockRev();
     var rev = page_ops.edgeBlockAt(&graph.graph, block, .rev);
-    rev.sources[0] = a.index;
+    rev.sources[0] = source.index;
     page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(1));
 
-    const b_node = try graph.nodeAt(b);
-    publish.clearPublishedSides(b_node);
-    publish.publishedRevSide(b_node).first_block = block;
-    publish.publishedRevSide(b_node).block_count = 1;
-    try publish.syncToPublished(&graph, b.index);
+    const destination_node = try graph.nodeAt(destination);
+    publish.clearPublishedSides(destination_node);
+    publish.publishedRevSide(destination_node).first_block = block;
+    publish.publishedRevSide(destination_node).block_count = 1;
+    try publish.syncToPublished(&graph, destination.index);
 
     const violations = try graph.debugValidate(.{ .allocator = testing.allocator });
     defer testing.allocator.free(violations);
 
     var found = false;
     for (violations) |violation| switch (violation) {
-        .forward_reverse_mismatch => |payload| found = found or (payload.node == a.index and payload.destination == b.index),
+        .forward_reverse_mismatch => |payload| found = found or (payload.node == source.index and payload.destination == destination.index),
         else => {},
     };
     try testing.expect(found);

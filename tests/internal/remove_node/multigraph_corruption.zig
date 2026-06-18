@@ -13,7 +13,7 @@ test "removeNode multigraph corruption: reverse multiplicity exceeding forward i
     try graph.addEdge(source, target, 1, 0);
 
     const target_adj = try graph.publishedNodeAdj(target);
-    if (target_adj.block_count_rev > 0 and target_adj.group_count_rev == 0) {
+    if (target_adj.block_count_rev > 0 and target_adj.segment_count_rev == 0) {
         try publish.appendReverseSource(&graph, target, target_adj, source.index);
     }
 
@@ -31,7 +31,7 @@ test "removeNode multigraph corruption: reverse multiplicity below forward is re
     try graph.addEdge(source, target, 1, 0);
 
     const target_adj = try graph.publishedNodeAdj(target);
-    if (target_adj.block_count_rev > 0 and target_adj.group_count_rev == 0) {
+    if (target_adj.block_count_rev > 0 and target_adj.segment_count_rev == 0) {
         try publish.writeReverseSource(&graph, target_adj, 0, graph.graph.publishedNodeCount() + 10);
         try publish.truncateReverseByOne(&graph, target, target_adj);
     }
@@ -49,7 +49,7 @@ test "removeNode multigraph corruption: corrupt self-edge multiplicity is reject
     try graph.addEdge(node, node, 1, 0);
 
     const adj = try graph.publishedNodeAdj(node);
-    if (adj.block_count_rev > 0 and adj.group_count_rev == 0) {
+    if (adj.block_count_rev > 0 and adj.segment_count_rev == 0) {
         try publish.appendReverseSource(&graph, node, adj, node.index);
     }
 

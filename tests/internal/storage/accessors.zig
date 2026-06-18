@@ -11,7 +11,7 @@ const types = graph_mod.types_mod;
 const tiny = graph_mod.tiny_mod;
 const node_bitmap = graph_mod.node_bitmap_mod;
 const node_access = graph_mod.node_access_mod;
-const node_published = graph_mod.node_published_mod;
+const node_adjacency_buffers = graph_mod.node_adjacency_buffers_mod;
 const side_ops = graph_mod.side_ops_mod;
 
 const testing = std.testing;
@@ -24,7 +24,7 @@ test "tiny: fwdCap depends on multigraph mode" {
 }
 
 test "tiny: removeFwd shifts the tail down and clears the freed entry" {
-    var slot = tiny.TinyFwdBlock{};
+    var slot = tiny.TinyFwdSlot{};
     var count: u16 = 0;
     count = try tiny.insertFwd(&slot, count, 10, 1, no_flags, 1, 0, false);
     count = try tiny.insertFwd(&slot, count, 20, 2, no_flags, 2, 0, false);
@@ -42,7 +42,7 @@ test "tiny: removeFwd shifts the tail down and clears the freed entry" {
 }
 
 test "tiny: removeFwd in multigraph mode matches on edge id" {
-    var slot = tiny.TinyFwdBlock{};
+    var slot = tiny.TinyFwdSlot{};
     var count: u16 = 0;
     count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 7, 0, true);
     count = try tiny.insertFwd(&slot, count, 10, 0, no_flags, 9, 0, true);
@@ -55,7 +55,7 @@ test "tiny: removeFwd in multigraph mode matches on edge id" {
 }
 
 test "tiny: removeRev shifts sources down" {
-    var slot = tiny.TinyRevBlock{};
+    var slot = tiny.TinyRevSlot{};
     var count: u16 = 0;
     count = tiny.insertRev(&slot, count, 5);
     count = tiny.insertRev(&slot, count, 15);
@@ -102,41 +102,41 @@ test "published degrees: pointer accessors read the live published slot" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    const pub_a = node_access.nodePublishedAt(&graph.graph, a);
-    const meta_a = node_access.loadPublishedMetaAtConst(&graph.graph, a);
-    try testing.expectEqual(@as(u32, 1), pub_a.publishedFwdDegree(meta_a).*);
-    try testing.expectEqual(@as(u32, 0), pub_a.publishedRevDegree(meta_a).*);
+    const source_buffers = node_access.nodeAdjacencyBuffersAt(&graph.graph, source);
+    const source_state = node_access.loadPublicationStateAtConst(&graph.graph, source);
+    try testing.expectEqual(@as(u32, 1), source_buffers.publishedFwdDegree(source_state).*);
+    try testing.expectEqual(@as(u32, 0), source_buffers.publishedRevDegree(source_state).*);
 
-    const pub_b = node_access.nodePublishedAt(&graph.graph, b);
-    const meta_b = node_access.loadPublishedMetaAtConst(&graph.graph, b);
-    try testing.expectEqual(@as(u32, 0), pub_b.publishedFwdDegree(meta_b).*);
-    try testing.expectEqual(@as(u32, 1), pub_b.publishedRevDegree(meta_b).*);
+    const destination_buffers = node_access.nodeAdjacencyBuffersAt(&graph.graph, destination);
+    const destination_state = node_access.loadPublicationStateAtConst(&graph.graph, destination);
+    try testing.expectEqual(@as(u32, 0), destination_buffers.publishedFwdDegree(destination_state).*);
+    try testing.expectEqual(@as(u32, 1), destination_buffers.publishedRevDegree(destination_state).*);
 }
 
 test "NodeRef: publishedFwd/publishedRev expose the per-side descriptors" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    const ref_a = try graph.nodeAt(a);
-    const fwd_a = ref_a.publishedFwd();
-    try testing.expect(node_published.NodePublished.isTiny(&fwd_a));
-    try testing.expectEqual(@as(u16, 1), node_published.NodePublished.tinyCount(&fwd_a));
+    const source_ref = try graph.nodeAt(source);
+    const source_fwd = source_ref.publishedFwd();
+    try testing.expect(node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&source_fwd));
+    try testing.expectEqual(@as(u16, 1), node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&source_fwd));
 
-    const ref_b = try graph.nodeAt(b);
-    const rev_b = ref_b.publishedRev();
-    try testing.expect(node_published.NodePublished.isTiny(&rev_b));
-    try testing.expectEqual(@as(u16, 1), node_published.NodePublished.tinyCount(&rev_b));
+    const destination_ref = try graph.nodeAt(destination);
+    const destination_rev = destination_ref.publishedRev();
+    try testing.expect(node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&destination_rev));
+    try testing.expectEqual(@as(u16, 1), node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&destination_rev));
 
-    const rev_a = ref_a.publishedRev();
-    try testing.expectEqual(@as(u32, 0), rev_a.block_count);
+    const source_rev = source_ref.publishedRev();
+    try testing.expectEqual(@as(u32, 0), source_rev.block_count);
 }
 
 test "side_ops: readNodeIdAtSlotDynamic reads both sides with a runtime side" {
@@ -144,7 +144,7 @@ test "side_ops: readNodeIdAtSlotDynamic reads both sides with a runtime side" {
     defer graph.deinit();
 
     var nodes: [4]graph_mod.NodeId = undefined;
-    for (0..nodes.len) |i| nodes[i] = try graph.addNode();
+    for (0..nodes.len) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const blk_f = try graph.allocBlockFwd();
     const bf = page_ops.edgeBlockAt(&graph.graph, blk_f, .fwd);
@@ -166,8 +166,8 @@ test "side_ops: readNodeIdAtSlotDynamic reads both sides with a runtime side" {
         .{ .side = .rev, .block = blk_r, .slot = 0, .expected = nodes[2].index },
         .{ .side = .rev, .block = blk_r, .slot = 2, .expected = nodes[0].index },
     };
-    for (sides) |case| {
-        try testing.expectEqual(case.expected, side_ops.readNodeIdAtSlotDynamic(&graph.graph, case.block, case.slot, case.side));
+    for (sides) |side_case| {
+        try testing.expectEqual(side_case.expected, side_ops.readNodeIdAtSlotDynamic(&graph.graph, side_case.block, side_case.slot, side_case.side));
     }
 }
 
@@ -224,7 +224,7 @@ test "frontier rollback: removal churn does not grow the block pool unboundedly"
 
     const source = try graph.addNode();
     var destinations: [512]graph_mod.NodeId = undefined;
-    for (0..destinations.len) |i| destinations[i] = try graph.addNode();
+    for (0..destinations.len) |destination_idx| destinations[destination_idx] = try graph.addNode();
 
     var frontier_after_first_cycle: u32 = 0;
     for (0..6) |cycle| {
@@ -244,7 +244,7 @@ test "frontier rollback: removal churn does not grow the block pool unboundedly"
         const stats = try graph.storageStats();
         if (cycle == 0) frontier_after_first_cycle = stats.blocks_fwd_allocated;
         // After reclaim + rollback the frontier must stay bounded instead of
-        // accumulating one fresh span set per cycle.
+        // accumulating one fresh slot_entry set per cycle.
         try testing.expect(stats.blocks_fwd_allocated <= frontier_after_first_cycle * 2);
     }
     try graph.validate();
@@ -255,9 +255,9 @@ test "persistence format: header round-trips through its own validators" {
 
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
     var raw_header: [persistence.HEADER_BYTES]u8 = @splat(0);
     var header = persistence.FileHeader.init(&graph.graph);
@@ -286,9 +286,9 @@ test "persistence format: a well-formed section table validates; misaligned or o
 
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
-    const a = try graph.addNode();
-    const b = try graph.addNode();
-    try graph.addEdge(a, b, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
     const header = persistence.FileHeader.init(&graph.graph);
 
     var table: [persistence.MAX_SECTIONS]persistence.SectionDescriptor = undefined;

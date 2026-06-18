@@ -16,7 +16,7 @@ pub fn buildFreeBlockSet(
     while (current != constants.END_OF_CHAIN) : (visited += 1) {
         if (visited >= limit) break;
         if (current < limit) set.set(current);
-        current = stacks.blockMetaNextFast(graph, current, side) catch break;
+        current = stacks.blockReclamationNextFast(graph, current, side) catch break;
     }
     return set;
 }
@@ -33,48 +33,48 @@ pub fn buildRetiredBlockSet(
     while (current != constants.END_OF_CHAIN) : (visited += 1) {
         if (visited >= limit) break;
         if (current < limit) set.set(current);
-        current = stacks.blockMetaNextFast(graph, current, side) catch break;
+        current = stacks.blockReclamationNextFast(graph, current, side) catch break;
     }
     return set;
 }
 
-pub fn buildFreeGroupSet(
+pub fn buildFreeSegmentSet(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
 ) !std.DynamicBitSetUnmanaged {
-    const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    const limit = @atomicLoad(u32, @constCast(&graph.segment_count), .acquire);
     var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
     var span_count: u16 = 1;
-    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
-        var current = stacks.groupSpanStackHeadIndexFast(graph, .free, span_count);
+    while (span_count <= constants.MAX_SEGMENTS_PER_NODE) : (span_count += 1) {
+        var current = stacks.segmentSlotStackHeadIndexFast(graph, .free, span_count);
         var visited: u32 = 0;
         while (current != constants.END_OF_CHAIN) : (visited += 1) {
             if (visited >= limit) break;
-            for (current..@min(current + span_count, limit)) |group_idx_usize| {
-                set.set(@intCast(group_idx_usize));
+            for (current..@min(current + span_count, limit)) |segment_idx_usize| {
+                set.set(@intCast(segment_idx_usize));
             }
-            current = stacks.groupMetaNextFast(graph, current) catch break;
+            current = stacks.segmentReclamationNextFast(graph, current) catch break;
         }
     }
     return set;
 }
 
-pub fn buildRetiredGroupSet(
+pub fn buildRetiredSegmentSet(
     graph: *const graph_core.GraphCore,
     allocator: std.mem.Allocator,
 ) !std.DynamicBitSetUnmanaged {
-    const limit = @atomicLoad(u32, @constCast(&graph.group_count), .acquire);
+    const limit = @atomicLoad(u32, @constCast(&graph.segment_count), .acquire);
     var set = try std.DynamicBitSetUnmanaged.initEmpty(allocator, limit);
     var span_count: u16 = 1;
-    while (span_count <= constants.MAX_GROUPS_PER_NODE) : (span_count += 1) {
-        var current = stacks.groupSpanStackHeadIndexFast(graph, .retired, span_count);
+    while (span_count <= constants.MAX_SEGMENTS_PER_NODE) : (span_count += 1) {
+        var current = stacks.segmentSlotStackHeadIndexFast(graph, .retired, span_count);
         var visited: u32 = 0;
         while (current != constants.END_OF_CHAIN) : (visited += 1) {
             if (visited >= limit) break;
-            for (current..@min(current + span_count, limit)) |group_idx_usize| {
-                set.set(@intCast(group_idx_usize));
+            for (current..@min(current + span_count, limit)) |segment_idx_usize| {
+                set.set(@intCast(segment_idx_usize));
             }
-            current = stacks.groupMetaNextFast(graph, current) catch break;
+            current = stacks.segmentReclamationNextFast(graph, current) catch break;
         }
     }
     return set;

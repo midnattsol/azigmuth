@@ -12,14 +12,14 @@ test "sorted rebuild forward: removes tombstones and packs sorted edges" {
     defer graph.deinit();
 
     var nodes: [8]graph_mod.NodeId = undefined;
-    for (0..8) |i| nodes[i] = try graph.addNode();
+    for (0..8) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const block = try graph.allocBlockFwd();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    for (0..8) |i| {
-        blk.destinations[i] = nodes[i].index;
-        blk.relations[i] = 0;
-        blk.flags[i] = 0;
+    for (0..8) |slot_idx| {
+        blk.destinations[slot_idx] = nodes[slot_idx].index;
+        blk.relations[slot_idx] = 0;
+        blk.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(8));
 
@@ -41,8 +41,8 @@ test "sorted rebuild forward: removes tombstones and packs sorted edges" {
 
     const out_blk = page_ops.edgeBlockAt(&graph.graph, result.new_blocks.items[0], .fwd);
     const expected_indices = [_]u32{ 0, 1, 3, 4, 6, 7 };
-    for (expected_indices, 0..) |expected_idx, i| {
-        try testing.expectEqual(expected_idx, out_blk.destinations[i]);
+    for (expected_indices, 0..) |expected_idx, slot_idx| {
+        try testing.expectEqual(expected_idx, out_blk.destinations[slot_idx]);
     }
     try testing.expectEqual(@as(u7, 6), page_ops.blockAliveCount(&graph.graph, result.new_blocks.items[0], .fwd));
 }
@@ -52,18 +52,18 @@ test "sorted rebuild forward: all tombstones returns empty" {
     defer graph.deinit();
 
     var nodes: [3]graph_mod.NodeId = undefined;
-    for (0..3) |i| nodes[i] = try graph.addNode();
+    for (0..3) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const block = try graph.allocBlockFwd();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .fwd);
-    for (0..3) |i| {
-        blk.destinations[i] = nodes[i].index;
-        blk.relations[i] = 0;
-        blk.flags[i] = 0;
+    for (0..3) |slot_idx| {
+        blk.destinations[slot_idx] = nodes[slot_idx].index;
+        blk.relations[slot_idx] = 0;
+        blk.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(3));
 
-    for (0..3) |i| _ = try graph.removeNode(nodes[i]);
+    for (0..3) |node_idx| _ = try graph.removeNode(nodes[node_idx]);
 
     var result = try repair.sortedRebuildForward(
         &graph.graph,
@@ -84,12 +84,12 @@ test "sorted rebuild reverse: removes tombstones and packs sorted sources" {
     defer graph.deinit();
 
     var nodes: [8]graph_mod.NodeId = undefined;
-    for (0..8) |i| nodes[i] = try graph.addNode();
+    for (0..8) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const block = try graph.allocBlockRev();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .rev);
-    for (0..8) |i| {
-        blk.sources[i] = nodes[i].index;
+    for (0..8) |slot_idx| {
+        blk.sources[slot_idx] = nodes[slot_idx].index;
     }
     page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(8));
 
@@ -112,8 +112,8 @@ test "sorted rebuild reverse: removes tombstones and packs sorted sources" {
 
     const out_blk = page_ops.edgeBlockAt(&graph.graph, result.new_blocks.items[0], .rev);
     const expected_indices = [_]u32{ 0, 1, 3, 4, 6, 7 };
-    for (expected_indices, 0..) |expected_idx, i| {
-        try testing.expectEqual(expected_idx, out_blk.sources[i]);
+    for (expected_indices, 0..) |expected_idx, slot_idx| {
+        try testing.expectEqual(expected_idx, out_blk.sources[slot_idx]);
     }
     try testing.expectEqual(@as(u7, 6), page_ops.blockAliveCount(&graph.graph, result.new_blocks.items[0], .rev));
 }
@@ -123,12 +123,12 @@ test "sorted rebuild reverse: skip_source_idx excludes the requested source" {
     defer graph.deinit();
 
     var nodes: [5]graph_mod.NodeId = undefined;
-    for (0..5) |i| nodes[i] = try graph.addNode();
+    for (0..5) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const block = try graph.allocBlockRev();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .rev);
-    for (0..5) |i| {
-        blk.sources[i] = nodes[i].index;
+    for (0..5) |slot_idx| {
+        blk.sources[slot_idx] = nodes[slot_idx].index;
     }
     page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(5));
 
@@ -148,8 +148,8 @@ test "sorted rebuild reverse: skip_source_idx excludes the requested source" {
 
     const out_blk = page_ops.edgeBlockAt(&graph.graph, result.new_blocks.items[0], .rev);
     const expected_indices = [_]u32{ 0, 1, 3, 4 };
-    for (expected_indices, 0..) |expected_idx, i| {
-        try testing.expectEqual(expected_idx, out_blk.sources[i]);
+    for (expected_indices, 0..) |expected_idx, slot_idx| {
+        try testing.expectEqual(expected_idx, out_blk.sources[slot_idx]);
     }
     try testing.expectEqual(@as(u7, 4), page_ops.blockAliveCount(&graph.graph, result.new_blocks.items[0], .rev));
 }
@@ -159,16 +159,16 @@ test "sorted rebuild reverse: all tombstones returns empty" {
     defer graph.deinit();
 
     var nodes: [3]graph_mod.NodeId = undefined;
-    for (0..3) |i| nodes[i] = try graph.addNode();
+    for (0..3) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const block = try graph.allocBlockRev();
     var blk = page_ops.edgeBlockAt(&graph.graph, block, .rev);
-    for (0..3) |i| {
-        blk.sources[i] = nodes[i].index;
+    for (0..3) |slot_idx| {
+        blk.sources[slot_idx] = nodes[slot_idx].index;
     }
     page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(3));
 
-    for (0..3) |i| _ = try graph.removeNode(nodes[i]);
+    for (0..3) |node_idx| _ = try graph.removeNode(nodes[node_idx]);
 
     var result = try repair.sortedRebuildReverse(
         &graph.graph,
@@ -190,23 +190,23 @@ test "sorted rebuild forward: two blocks with mixed tombstones produce packed ou
     defer graph.deinit();
 
     var nodes: [12]graph_mod.NodeId = undefined;
-    for (0..12) |i| nodes[i] = try graph.addNode();
+    for (0..12) |node_idx| nodes[node_idx] = try graph.addNode();
 
     const block0 = try graph.allocBlockFwd();
     var blk0 = page_ops.edgeBlockAt(&graph.graph, block0, .fwd);
-    for (0..6) |i| {
-        blk0.destinations[i] = nodes[i].index;
-        blk0.relations[i] = 0;
-        blk0.flags[i] = 0;
+    for (0..6) |slot_idx| {
+        blk0.destinations[slot_idx] = nodes[slot_idx].index;
+        blk0.relations[slot_idx] = 0;
+        blk0.flags[slot_idx] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, block0, .fwd, @intCast(6));
 
     const block1 = try graph.allocBlockFwd();
     var blk1 = page_ops.edgeBlockAt(&graph.graph, block1, .fwd);
-    for (6..12) |i| {
-        blk1.destinations[i - 6] = nodes[i].index;
-        blk1.relations[i - 6] = 0;
-        blk1.flags[i - 6] = 0;
+    for (6..12) |node_idx| {
+        blk1.destinations[node_idx - 6] = nodes[node_idx].index;
+        blk1.relations[node_idx - 6] = 0;
+        blk1.flags[node_idx - 6] = 0;
     }
     page_ops.setBlockAliveCount(&graph.graph, block1, .fwd, @intCast(6));
 
@@ -235,8 +235,8 @@ test "sorted rebuild forward: two blocks with mixed tombstones produce packed ou
 
     const out_blk = page_ops.edgeBlockAt(&graph.graph, result.new_blocks.items[0], .fwd);
     const expected_indices = [_]u32{ 0, 1, 2, 4, 5, 6, 7, 9, 10, 11 };
-    for (expected_indices, 0..) |expected_idx, i| {
-        try testing.expectEqual(expected_idx, out_blk.destinations[i]);
+    for (expected_indices, 0..) |expected_idx, slot_idx| {
+        try testing.expectEqual(expected_idx, out_blk.destinations[slot_idx]);
     }
     try testing.expectEqual(@as(u7, 10), page_ops.blockAliveCount(&graph.graph, result.new_blocks.items[0], .fwd));
 }

@@ -93,48 +93,48 @@ pub fn ensurePage(
     return new_page;
 }
 
-fn initMetaPage(page: []types.BlockMeta) void {
-    for (page) |*meta| {
-        meta.* = .{
+fn initReclamationPage(page: []types.ReclamationEntry) void {
+    for (page) |*entry| {
+        entry.* = .{
             .next = std.atomic.Value(u32).init(EMPTY_INDEX),
-            .epoch = std.atomic.Value(u64).init(0),
+            .retired_epoch = std.atomic.Value(u64).init(0),
         };
     }
 }
 
-pub fn ensureMetaPage(graph: *graph_core.GraphCore, directory: anytype, page_idx: u32) ![]types.BlockMeta {
-    return ensureMetaPageSized(graph, directory, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
+pub fn ensureReclamationPage(graph: *graph_core.GraphCore, directory: anytype, page_idx: u32) ![]types.ReclamationEntry {
+    return ensureReclamationPageSized(graph, directory, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
 }
 
-pub fn ensureMetaPageSized(
+pub fn ensureReclamationPageSized(
     graph: *graph_core.GraphCore,
     directory: anytype,
     page_idx: u32,
     comptime entries_per_page: usize,
-) ![]types.BlockMeta {
+) ![]types.ReclamationEntry {
     const slot = try directory.slotPtr(graph.allocator, page_idx);
     const existing = slot.load(.acquire);
-    if (existing != 0) return ptrFromRaw(types.BlockMeta, existing, entries_per_page);
+    if (existing != 0) return ptrFromRaw(types.ReclamationEntry, existing, entries_per_page);
 
-    const new_page = try graph.allocator.alloc(types.BlockMeta, entries_per_page);
+    const new_page = try graph.allocator.alloc(types.ReclamationEntry, entries_per_page);
     errdefer graph.allocator.free(new_page);
-    initMetaPage(new_page);
+    initReclamationPage(new_page);
     const new_raw = @intFromPtr(new_page.ptr);
 
     if (slot.cmpxchgStrong(0, new_raw, .acq_rel, .acquire)) |published_raw| {
         graph.allocator.free(new_page);
-        return ptrFromRaw(types.BlockMeta, published_raw, entries_per_page);
+        return ptrFromRaw(types.ReclamationEntry, published_raw, entries_per_page);
     }
 
     return new_page;
 }
 
-pub fn metaEntryAt(
+pub fn reclamationEntryAt(
     directory: anytype,
     index: u32,
     comptime entries_per_page: u32,
-) *types.BlockMeta {
+) *types.ReclamationEntry {
     const page_idx = pageOf(index, entries_per_page);
-    const page = loadPageMut(types.BlockMeta, directory, page_idx, entries_per_page);
+    const page = loadPageMut(types.ReclamationEntry, directory, page_idx, entries_per_page);
     return &page[slotOf(index, entries_per_page)];
 }

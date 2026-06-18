@@ -1,12 +1,12 @@
 const common = @import("common.zig");
-const run_search = @import("run_search.zig");
+const segment_search = @import("segment_search.zig");
 const shape = @import("shape.zig");
 const constants = @import("../../core/constants.zig");
 const graph_core = @import("../../core/graph_core.zig");
 const snapshot_view = @import("../../query/snapshot/view.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 const logical = @import("logical.zig");
 
 fn countVisibleEntriesInBlockSnapshot(
@@ -40,12 +40,12 @@ fn countVisibleEntriesInTinySnapshot(
     side_adj: types.SideAdj,
     comptime side: common.Side,
 ) u64 {
-    const count = node_published.NodePublished.tinyCount(&side_adj);
+    const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
     var total: u64 = 0;
     for (0..count) |entry_idx| {
         const candidate_idx = switch (side) {
-            .fwd => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd).entries[entry_idx].destination,
-            .rev => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev).sources[entry_idx],
+            .fwd => page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd).entries[entry_idx].destination,
+            .rev => page_ops.tinySlotAtConst(graph, side_adj.first_block, .rev).sources[entry_idx],
         };
         if (candidate_idx < view.nodeCount() and view.isLiveIndex(candidate_idx)) total += 1;
     }
@@ -60,7 +60,7 @@ fn sumVisibleAdjacencySnapshot(
 ) u64 {
     if (adjacency.flags.removed) return 0;
     const side_adj = common.sideAdjOf(adjacency, side);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
         return countVisibleEntriesInTinySnapshot(graph, view, side_adj, side);
     }
 
@@ -94,12 +94,12 @@ fn hasTombstoneSnapshot(
 ) bool {
     if (adjacency.flags.removed) return false;
     const side_adj = common.sideAdjOf(adjacency, side);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const candidate_idx = switch (side) {
-                .fwd => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd).entries[entry_idx].destination,
-                .rev => page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev).sources[entry_idx],
+                .fwd => page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd).entries[entry_idx].destination,
+                .rev => page_ops.tinySlotAtConst(graph, side_adj.first_block, .rev).sources[entry_idx],
             };
             if (candidate_idx < view.nodeCount() and !view.isLiveIndex(candidate_idx)) return true;
         }
@@ -167,7 +167,7 @@ fn adjacencyContainsSnapshot(
     target: u32,
     comptime side: common.Side,
 ) bool {
-    return run_search.adjacencyContains(graph, adjacency, target, side);
+    return segment_search.adjacencyContains(graph, adjacency, target, side);
 }
 
 fn countTargetMatchesSnapshot(
@@ -176,7 +176,7 @@ fn countTargetMatchesSnapshot(
     target: u32,
     comptime side: common.Side,
 ) u32 {
-    return run_search.countTargetMatches(graph, adjacency, target, side);
+    return segment_search.countTargetMatches(graph, adjacency, target, side);
 }
 
 fn validateForwardEdgeIdsSnapshot(
@@ -187,9 +187,9 @@ fn validateForwardEdgeIdsSnapshot(
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
     const side_adj = common.sideAdjOf(adjacency, .fwd);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             if (slot.entries[entry_idx].edge_id == 0) return error.CorruptGraph;
         }
@@ -225,9 +225,9 @@ fn validateForwardConsistencySnapshot(
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .fwd) == 0) return;
     const side_adj = common.sideAdjOf(adjacency, .fwd);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const destination_idx = slot.entries[entry_idx].destination;
             if (destination_idx >= view.nodeCount()) return error.CorruptGraph;
@@ -290,9 +290,9 @@ fn validateReverseConsistencySnapshot(
     if (adjacency.flags.removed) return;
     if (common.blockCount(adjacency, .rev) == 0) return;
     const side_adj = common.sideAdjOf(adjacency, .rev);
-    if (node_published.NodePublished.isTiny(&side_adj)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_adj.first_block, .rev);
-        const count = node_published.NodePublished.tinyCount(&side_adj);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_adj)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_adj.first_block, .rev);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_adj);
         for (0..count) |entry_idx| {
             const source_idx = slot.sources[entry_idx];
             if (source_idx >= view.nodeCount()) return error.CorruptGraph;

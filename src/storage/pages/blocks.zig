@@ -14,9 +14,9 @@ const index_stack = @import("index_stack.zig");
 const EMPTY_INDEX = index_stack.EMPTY_INDEX;
 const StackKind = index_stack.StackKind;
 
-fn blockMetaAt(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) *types.BlockMeta {
-    return common.metaEntryAt(
-        if (side == .fwd) &graph.edge_blocks_fwd_meta_pages else &graph.edge_blocks_rev_meta_pages,
+fn blockReclamationAt(graph: *graph_core.GraphCore, block_idx: u32, comptime side: adjacency.AdjSide) *types.ReclamationEntry {
+    return common.reclamationEntryAt(
+        if (side == .fwd) &graph.edge_blocks_fwd_reclamation_pages else &graph.edge_blocks_rev_reclamation_pages,
         block_idx,
         constants.EDGE_BLOCKS_PER_PAGE,
     );
@@ -40,18 +40,18 @@ fn stack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: 
 }
 
 fn pushStack(graph: *graph_core.GraphCore, block_idx: u32, comptime kind: StackKind, comptime side: adjacency.AdjSide) void {
-    stack(graph, kind, side).push(blockMetaAt(graph, block_idx, side), block_idx);
+    stack(graph, kind, side).push(blockReclamationAt(graph, block_idx, side), block_idx);
 }
 
 fn popStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) ?u32 {
-    const MetaContext = struct {
+    const EntryContext = struct {
         graph: *graph_core.GraphCore,
 
-        pub fn metaAt(self: @This(), block_idx: u32) *types.BlockMeta {
-            return blockMetaAt(self.graph, block_idx, side);
+        pub fn entryAt(self: @This(), block_idx: u32) *types.ReclamationEntry {
+            return blockReclamationAt(self.graph, block_idx, side);
         }
     };
-    return stack(graph, kind, side).pop(MetaContext{ .graph = graph });
+    return stack(graph, kind, side).pop(EntryContext{ .graph = graph });
 }
 
 fn detachStack(graph: *graph_core.GraphCore, comptime kind: StackKind, comptime side: adjacency.AdjSide) u32 {
@@ -152,12 +152,12 @@ fn ensureBlockPage(graph: *graph_core.GraphCore, page_idx: u32, comptime side: a
             _ = try common.ensurePage(graph, types.EdgeBlockFwd, &graph.edge_blocks_fwd_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
             if (graph.multigraph_enabled) _ = try common.ensurePage(graph, types.EdgeBlockFwdIds, &graph.edge_blocks_fwd_id_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
             if (graph.edge_properties_enabled) _ = try common.ensurePage(graph, types.EdgeBlockFwdProps, &graph.edge_blocks_fwd_prop_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
-            _ = try common.ensureMetaPage(graph, &graph.edge_blocks_fwd_meta_pages, page_idx);
+            _ = try common.ensureReclamationPage(graph, &graph.edge_blocks_fwd_reclamation_pages, page_idx);
             _ = try common.ensurePage(graph, u8, &graph.edge_blocks_fwd_alive_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
         },
         .rev => {
             _ = try common.ensurePage(graph, types.EdgeBlockRev, &graph.edge_blocks_rev_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
-            _ = try common.ensureMetaPage(graph, &graph.edge_blocks_rev_meta_pages, page_idx);
+            _ = try common.ensureReclamationPage(graph, &graph.edge_blocks_rev_reclamation_pages, page_idx);
             _ = try common.ensurePage(graph, u8, &graph.edge_blocks_rev_alive_pages, page_idx, constants.EDGE_BLOCKS_PER_PAGE);
         },
     }
@@ -205,11 +205,11 @@ fn reserveFreshBlockSpan(graph: *graph_core.GraphCore, span_count: u32, comptime
     const end_block_idx = std.math.add(u32, first_block_idx, span_count) catch return error.OutOfMemory;
 
     try ensureBlockCapacity(graph, end_block_idx, side);
-    const published = switch (side) {
+    const actual_frontier = switch (side) {
         .fwd => @cmpxchgWeak(u32, &graph.block_fwd_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
         .rev => @cmpxchgWeak(u32, &graph.block_rev_count, first_block_idx, end_block_idx, .acq_rel, .acquire),
     };
-    if (published != null) return null;
+    if (actual_frontier != null) return null;
 
     return .{ .first_block_idx = first_block_idx, .end_block_idx = end_block_idx };
 }
@@ -275,7 +275,7 @@ pub fn ensureBlockCapacity(graph: *graph_core.GraphCore, required_block_count: u
 /// Allocates one zeroed block, reusing the free stack when available.
 ///
 /// Last-resort path: when fresh block space is exhausted (structural index
-/// limit or allocator failure), one reclaim pass runs before giving up so
+/// limit or allocator failure), one reclaim pass segments before giving up so
 /// that epoch-safe retired blocks are preferred over a hard failure. This is
 /// not hidden periodic maintenance — it only triggers when the alternative
 /// is returning error.OutOfMemory.
@@ -304,14 +304,14 @@ pub fn freeBlock(graph: *graph_core.GraphCore, block_idx: u32, comptime side: ad
 
 /// Moves one block to the retired stack with its retirement epoch recorded.
 pub fn retireBlock(graph: *graph_core.GraphCore, block_idx: u32, epoch: u64, comptime side: adjacency.AdjSide) void {
-    const meta = blockMetaAt(graph, block_idx, side);
-    meta.epoch.store(epoch, .release);
+    const entry = blockReclamationAt(graph, block_idx, side);
+    entry.retired_epoch.store(epoch, .release);
     pushStack(graph, block_idx, .retired, side);
 }
 
 fn requeueOrFreeRetiredBlock(graph: *graph_core.GraphCore, block_idx: u32, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
-    const meta = blockMetaAt(graph, block_idx, side);
-    const retired_epoch = meta.epoch.load(.acquire);
+    const entry = blockReclamationAt(graph, block_idx, side);
+    const retired_epoch = entry.retired_epoch.load(.acquire);
     if (retired_epoch < safe_epoch) {
         freeBlock(graph, block_idx, side);
     } else {
@@ -323,8 +323,8 @@ fn requeueOrFreeRetiredBlock(graph: *graph_core.GraphCore, block_idx: u32, safe_
 pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime side: adjacency.AdjSide) void {
     var block_idx = detachStack(graph, .retired, side);
     while (block_idx != EMPTY_INDEX) {
-        const meta = blockMetaAt(graph, block_idx, side);
-        const next = meta.next.load(.acquire);
+        const entry = blockReclamationAt(graph, block_idx, side);
+        const next = entry.next.load(.acquire);
         requeueOrFreeRetiredBlock(graph, block_idx, safe_epoch, side);
         block_idx = next;
     }
@@ -332,7 +332,7 @@ pub fn reclaimRetired(graph: *graph_core.GraphCore, safe_epoch: u64, comptime si
     rollbackFreeFrontier(graph, side);
 }
 
-/// Frontier recycling: fresh contiguous spans (run coalescing, dense repack)
+/// Frontier recycling: fresh contiguous spans (segment coalescing, dense repack)
 /// can only come from the allocation frontier, so remove-heavy churn grows
 /// the block pool while the free stack swells with scattered singles. During
 /// explicit reclaim, drain the free stack and roll the frontier counter back
@@ -353,14 +353,14 @@ fn rollbackFreeFrontier(graph: *graph_core.GraphCore, comptime side: adjacency.A
     defer free_blocks.deinit(graph.allocator);
 
     while (head != EMPTY_INDEX) {
-        const next = blockMetaAt(graph, head, side).next.load(.acquire);
+        const next = blockReclamationAt(graph, head, side).next.load(.acquire);
         free_blocks.append(graph.allocator, head) catch {
             // Out of memory: push everything collected (and the rest of the
             // chain) straight back and bail.
             pushStack(graph, head, .free, side);
             var rest = next;
             while (rest != EMPTY_INDEX) {
-                const rest_next = blockMetaAt(graph, rest, side).next.load(.acquire);
+                const rest_next = blockReclamationAt(graph, rest, side).next.load(.acquire);
                 pushStack(graph, rest, .free, side);
                 rest = rest_next;
             }

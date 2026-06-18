@@ -5,64 +5,64 @@ const constants = graph_mod.constants_mod;
 const publish = @import("publish");
 const testing = std.testing;
 
-test "removeNode corruption: grouped forward chain shorter than declared group count is rejected" {
+test "removeNode corruption: segmented forward chain shorter than declared segment count is rejected" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    const dest_a = try graph.addNode();
-    const dest_b = try graph.addNode();
+    const destination_a = try graph.addNode();
+    const destination_b = try graph.addNode();
 
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = dest_a.index;
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = destination_a.index;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, @intCast(1));
-    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[0] = dest_b.index;
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[0] = destination_b.index;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, @intCast(1));
 
-    const g0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    const g0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).block_count = 2;
-    publish.publishedFwdSide(source_node).group_count = 2;
-    publish.publishedFwdSide(source_node).first_group = g0;
+    publish.publishedFwdSide(source_node).segment_count = 2;
+    publish.publishedFwdSide(source_node).first_segment = g0;
     publish.setPublishedFwdDegree(source_node, 2);
     try publish.syncToPublished(&graph, source.index);
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
         page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(1));
-        const node = try graph.nodeAt(dest_a);
+        const node = try graph.nodeAt(destination_a);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
-        try publish.syncToPublished(&graph, dest_a.index);
+        try publish.syncToPublished(&graph, destination_a.index);
     }
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
         page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(1));
-        const node = try graph.nodeAt(dest_b);
+        const node = try graph.nodeAt(destination_b);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
-        try publish.syncToPublished(&graph, dest_b.index);
+        try publish.syncToPublished(&graph, destination_b.index);
     }
 
     graph.graph.edge_count.store(2, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(source));
-    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(dest_b)).rev);
+    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(destination_b)).rev);
 }
 
-test "removeNode corruption: invalid forward first_group is rejected before traversal" {
+test "removeNode corruption: invalid forward first_segment is rejected before traversal" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -72,8 +72,8 @@ test "removeNode corruption: invalid forward first_group is rejected before trav
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).block_count = 1;
-    publish.publishedFwdSide(source_node).group_count = 1;
-    publish.publishedFwdSide(source_node).first_group = graph.graph.group_count + 10;
+    publish.publishedFwdSide(source_node).segment_count = 1;
+    publish.publishedFwdSide(source_node).first_segment = graph.graph.segment_count + 10;
     publish.setPublishedFwdDegree(source_node, 1);
     try publish.syncToPublished(&graph, source.index);
 
@@ -92,120 +92,120 @@ test "removeNode corruption: invalid forward first_group is rejected before trav
     try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(destination_node).rev);
 }
 
-test "removeNode corruption: truncated grouped forward chain with skipped live destination is rejected" {
+test "removeNode corruption: truncated segmented forward chain with skipped live destination is rejected" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const source = try graph.addNode();
-    const dest_a = try graph.addNode();
-    const dest_b = try graph.addNode();
+    const destination_a = try graph.addNode();
+    const destination_b = try graph.addNode();
 
     const b0 = try graph.allocBlockFwd();
     const b1 = try graph.allocBlockFwd();
-    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = dest_a.index;
+    page_ops.edgeBlockAt(&graph.graph, b0, .fwd).destinations[0] = destination_a.index;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b0, .fwd).flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, b0, .fwd, @intCast(1));
-    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[0] = dest_b.index;
+    page_ops.edgeBlockAt(&graph.graph, b1, .fwd).destinations[0] = destination_b.index;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).relations[0] = 0;
     page_ops.edgeBlockAt(&graph.graph, b1, .fwd).flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, b1, .fwd, @intCast(1));
 
-    const g0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
+    const g0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = b0, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).block_count = 2;
-    publish.publishedFwdSide(source_node).group_count = 2;
-    publish.publishedFwdSide(source_node).first_group = g0;
+    publish.publishedFwdSide(source_node).segment_count = 2;
+    publish.publishedFwdSide(source_node).first_segment = g0;
     publish.setPublishedFwdDegree(source_node, 2);
     try publish.syncToPublished(&graph, source.index);
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
         page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(1));
-        const node = try graph.nodeAt(dest_a);
+        const node = try graph.nodeAt(destination_a);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
-        try publish.syncToPublished(&graph, dest_a.index);
+        try publish.syncToPublished(&graph, destination_a.index);
     }
     {
         const block = try graph.allocBlockRev();
         page_ops.edgeBlockAt(&graph.graph, block, .rev).sources[0] = source.index;
         page_ops.setBlockAliveCount(&graph.graph, block, .rev, @intCast(1));
-        const node = try graph.nodeAt(dest_b);
+        const node = try graph.nodeAt(destination_b);
         publish.clearPublishedSides(node);
         publish.publishedRevSide(node).first_block = block;
         publish.publishedRevSide(node).block_count = 1;
         publish.setPublishedRevDegree(node, 1);
-        try publish.syncToPublished(&graph, dest_b.index);
+        try publish.syncToPublished(&graph, destination_b.index);
     }
 
     graph.graph.edge_count.store(2, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(source));
-    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(dest_b)).rev);
-    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(dest_a)).rev);
+    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(destination_b)).rev);
+    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(destination_a)).rev);
 }
 
-test "removeNode corruption: grouped reverse chain shorter than declared group count is rejected" {
+test "removeNode corruption: segmented reverse chain shorter than declared segment count is rejected" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
     const target = try graph.addNode();
-    const src_a = try graph.addNode();
-    const src_b = try graph.addNode();
+    const source_a = try graph.addNode();
+    const source_b = try graph.addNode();
 
     {
         const block = try graph.allocBlockFwd();
         page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = target.index;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
+        page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+        page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
         page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
-        const node = try graph.nodeAt(src_a);
+        const node = try graph.nodeAt(source_a);
         publish.clearPublishedSides(node);
         publish.publishedFwdSide(node).first_block = block;
         publish.publishedFwdSide(node).block_count = 1;
         publish.setPublishedFwdDegree(node, 1);
-        try publish.syncToPublished(&graph, src_a.index);
+        try publish.syncToPublished(&graph, source_a.index);
     }
     {
         const block = try graph.allocBlockFwd();
         page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = target.index;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
+        page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+        page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
         page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
-        const node = try graph.nodeAt(src_b);
+        const node = try graph.nodeAt(source_b);
         publish.clearPublishedSides(node);
         publish.publishedFwdSide(node).first_block = block;
         publish.publishedFwdSide(node).block_count = 1;
         publish.setPublishedFwdDegree(node, 1);
-        try publish.syncToPublished(&graph, src_b.index);
+        try publish.syncToPublished(&graph, source_b.index);
     }
 
     const r0 = try graph.allocBlockRev();
     const r1 = try graph.allocBlockRev();
-    page_ops.edgeBlockAt(&graph.graph, r0, .rev).sources[0] = src_a.index;
+    page_ops.edgeBlockAt(&graph.graph, r0, .rev).sources[0] = source_a.index;
     page_ops.setBlockAliveCount(&graph.graph, r0, .rev, @intCast(1));
-    page_ops.edgeBlockAt(&graph.graph, r1, .rev).sources[0] = src_b.index;
+    page_ops.edgeBlockAt(&graph.graph, r1, .rev).sources[0] = source_b.index;
     page_ops.setBlockAliveCount(&graph.graph, r1, .rev, @intCast(1));
 
-    const g0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1 };
+    const g0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = r0, .count = 1 };
 
     const target_node = try graph.nodeAt(target);
     publish.clearPublishedSides(target_node);
     publish.publishedRevSide(target_node).block_count = 2;
-    publish.publishedRevSide(target_node).group_count = 2;
-    publish.publishedRevSide(target_node).first_group = g0;
+    publish.publishedRevSide(target_node).segment_count = 2;
+    publish.publishedRevSide(target_node).first_segment = g0;
     publish.setPublishedRevDegree(target_node, 2);
     try publish.syncToPublished(&graph, target.index);
     graph.graph.edge_count.store(2, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
-    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(src_a)).fwd);
-    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(src_b)).fwd);
+    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(source_a)).fwd);
+    try testing.expectEqual(@as(u22, 1), publish.publishedDegrees(try graph.nodeAt(source_b)).fwd);
 }
 
 test "removeNode corruption: visible predecessor still gets repair debt when reverse chain is truncated" {
@@ -218,8 +218,8 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     {
         const block = try graph.allocBlockFwd();
         page_ops.edgeBlockAt(&graph.graph, block, .fwd).destinations[0] = target.index;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
-    page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
+        page_ops.edgeBlockAt(&graph.graph, block, .fwd).relations[0] = 0;
+        page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
         page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
         const node = try graph.nodeAt(predecessor);
         publish.clearPublishedSides(node);
@@ -236,21 +236,21 @@ test "removeNode corruption: visible predecessor still gets repair debt when rev
     page_ops.edgeBlockAt(&graph.graph, r1, .rev).sources[0] = predecessor.index;
     page_ops.setBlockAliveCount(&graph.graph, r1, .rev, @intCast(1));
 
-    const g0 = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, g0).* = .{ .start = r0, .count = 1 };
+    const g0 = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, g0).* = .{ .start = r0, .count = 1 };
 
     const target_node = try graph.nodeAt(target);
     publish.clearPublishedSides(target_node);
     publish.publishedRevSide(target_node).block_count = 2;
-    publish.publishedRevSide(target_node).group_count = 2;
-    publish.publishedRevSide(target_node).first_group = g0;
+    publish.publishedRevSide(target_node).segment_count = 2;
+    publish.publishedRevSide(target_node).first_segment = g0;
     publish.setPublishedRevDegree(target_node, 2);
     try publish.syncToPublished(&graph, target.index);
     graph.graph.edge_count.store(1, .release);
     try testing.expectError(error.CorruptGraph, graph.removeNode(target));
 }
 
-test "removeNode corruption: out-of-range destination via grouped chain is rejected" {
+test "removeNode corruption: out-of-range destination via segmented chain is rejected" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
@@ -263,14 +263,14 @@ test "removeNode corruption: out-of-range destination via grouped chain is rejec
     page_ops.edgeBlockAt(&graph.graph, block, .fwd).flags[0] = 0;
     page_ops.setBlockAliveCount(&graph.graph, block, .fwd, @intCast(1));
 
-    const group = try graph.allocGroup();
-    page_ops.edgeBlockGroupAt(&graph.graph, group).* = .{ .start = block, .count = 1 };
+    const segment = try graph.allocSegment();
+    page_ops.edgeBlockSegmentAt(&graph.graph, segment).* = .{ .start = block, .count = 1 };
 
     const source_node = try graph.nodeAt(source);
     publish.clearPublishedSides(source_node);
     publish.publishedFwdSide(source_node).block_count = 1;
-    publish.publishedFwdSide(source_node).group_count = 1;
-    publish.publishedFwdSide(source_node).first_group = group;
+    publish.publishedFwdSide(source_node).segment_count = 1;
+    publish.publishedFwdSide(source_node).first_segment = segment;
     publish.setPublishedFwdDegree(source_node, 1);
     try publish.syncToPublished(&graph, source.index);
 

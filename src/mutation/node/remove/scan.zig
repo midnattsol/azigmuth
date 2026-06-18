@@ -2,7 +2,7 @@ const graph_core = @import("../../../core/graph_core.zig");
 const node_access = @import("../../../core/node_access.zig");
 const types = @import("../../../core/types.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
-const node_published = @import("../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../storage/node/adjacency_buffers.zig");
 const side_ops = @import("../../../adjacency/side_ops.zig");
 const common = @import("../../common.zig");
 const node_validity = @import("../../../core/node_validity.zig");
@@ -21,7 +21,7 @@ fn appendForwardDestination(
     slot: u7,
 ) !void {
     const destination_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
-        page_ops.tinyBlockAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG, .fwd).entries[slot].destination
+        page_ops.tinySlotAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG, .fwd).entries[slot].destination
     else
         page_ops.edgeBlockAtConst(graph, block_idx, .fwd).destinations[slot];
     if (destination_idx >= collection.node_count) return error.CorruptGraph;
@@ -47,7 +47,7 @@ fn appendReverseSource(
     slot: u7,
 ) !void {
     const source_idx = if ((block_idx & side_ops.TINY_SLOT_TAG) != 0)
-        page_ops.tinyBlockAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG, .rev).sources[slot]
+        page_ops.tinySlotAtConst(graph, block_idx & ~side_ops.TINY_SLOT_TAG, .rev).sources[slot]
     else
         page_ops.edgeBlockAtConst(graph, block_idx, .rev).sources[slot];
     if (source_idx >= collection.node_count) return error.CorruptGraph;
@@ -66,9 +66,9 @@ fn collectForwardDestinations(
     const published_adj = node_access.publishedAdjAtConst(graph, node);
     const side_view = common.sideAdjOfNode(published_adj, .fwd);
 
-    if (node_published.NodePublished.isTiny(&side_view)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_view.first_block, .fwd);
-        const count = node_published.NodePublished.tinyCount(&side_view);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_view)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_view.first_block, .fwd);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_view);
         for (0..count) |entry_idx| {
             const destination_idx = slot.entries[entry_idx].destination;
             if (destination_idx >= node_count) return error.CorruptGraph;
@@ -101,9 +101,9 @@ fn collectReverseSources(
     const published_adj = node_access.publishedAdjAtConst(graph, node);
     const side_view = common.sideAdjOfNode(published_adj, .rev);
 
-    if (node_published.NodePublished.isTiny(&side_view)) {
-        const slot = page_ops.tinyBlockAtConst(graph, side_view.first_block, .rev);
-        const count = node_published.NodePublished.tinyCount(&side_view);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&side_view)) {
+        const slot = page_ops.tinySlotAtConst(graph, side_view.first_block, .rev);
+        const count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&side_view);
         for (0..count) |entry_idx| {
             const source_idx = slot.sources[entry_idx];
             if (source_idx >= graph.publishedNodeCount()) return error.CorruptGraph;

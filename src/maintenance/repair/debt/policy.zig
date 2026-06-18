@@ -1,7 +1,7 @@
 const graph_core = @import("../../../core/graph_core.zig");
 const node_access = @import("../../../core/node_access.zig");
 const page_ops = @import("../../../storage/page_ops.zig");
-const node_published = @import("../../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../../storage/node/adjacency_buffers.zig");
 const types = @import("../../../core/types.zig");
 const adjacency = @import("../../../adjacency/mod.zig");
 const side_adj = @import("../../../adjacency/side_ops.zig");
@@ -59,19 +59,19 @@ pub fn computeNeedsRepair(
         graph,
         published_side.first_block,
         published_side.block_count,
-        published_side.group_count,
-        published_side.first_group,
+        published_side.segment_count,
+        published_side.first_segment,
         side,
     );
 
-    if (node_published.NodePublished.isTiny(&published_side)) return has_tombstone;
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&published_side)) return has_tombstone;
 
     const report = layout_debt.analyzeSideLayout(graph, published_side, side) catch return true;
 
     if (published_side.block_count <= 1) return has_tombstone;
-    if (published_side.group_count == 0) return has_tombstone or report.has_underfull_non_tail_block;
+    if (published_side.segment_count == 0) return has_tombstone or report.has_underfull_non_tail_block;
 
-    return has_tombstone or report.has_underfull_non_tail_block or report.group_count_exceeded;
+    return has_tombstone or report.has_underfull_non_tail_block or report.segment_count_exceeded;
 }
 
 pub fn assessPublishedRepairDebt(
@@ -94,8 +94,8 @@ pub fn refreshPublishedRepairDebt(
 ) RepairDebtAssessment {
     const published_adj = node_access.publishedAdjAtConst(graph, .{ .index = node_idx });
     const assessment = assessPublishedRepairDebt(graph, published_adj, side);
-    const node_meta = page_ops.nodeMetaAt(graph, .{ .index = node_idx });
-    mechanics.writePublishedRepairFlag(node_meta, side, assessment == .repair);
+    const node_publication = page_ops.nodePublicationAt(graph, .{ .index = node_idx });
+    mechanics.writePublishedRepairFlag(node_publication, side, assessment == .repair);
     return assessment;
 }
 

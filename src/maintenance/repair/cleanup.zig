@@ -5,7 +5,7 @@ const graph_core = @import("../../core/graph_core.zig");
 const types = @import("../../core/types.zig");
 const page_ops = @import("../../storage/page_ops.zig");
 const adjacency = @import("../../adjacency/mod.zig");
-const node_published = @import("../../storage/node/published.zig");
+const node_adjacency_buffers = @import("../../storage/node/adjacency_buffers.zig");
 const node_tiny = @import("../../storage/node/tiny.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const node_validity = @import("../../core/node_validity.zig");
@@ -41,10 +41,10 @@ fn countAliveTinyForwardEntries(
 fn fillAliveTinyForwardEntries(
     graph: *const graph_core.GraphCore,
     published_side: types.SideAdj,
-    slot: *node_tiny.TinyFwdBlock,
+    slot: *node_tiny.TinyFwdSlot,
 ) !u16 {
     const FillContext = struct {
-        slot: *node_tiny.TinyFwdBlock,
+        slot: *node_tiny.TinyFwdSlot,
         write_idx: u16 = 0,
     };
 
@@ -68,15 +68,15 @@ fn fillAliveTinyForwardEntries(
 fn clearForwardSide(adj: *types.NodeAdj) void {
     adj.first_block_fwd = 0;
     adj.block_count_fwd = 0;
-    adj.group_count_fwd = 0;
-    adj.first_group_fwd = 0;
+    adj.segment_count_fwd = 0;
+    adj.first_segment_fwd = 0;
 }
 
 fn writeTinyForwardSide(adj: *types.NodeAdj, slot_idx: u32, alive_count: u16) void {
     adj.first_block_fwd = slot_idx;
-    adj.block_count_fwd = node_published.TINY_MODE_BIT | alive_count;
-    adj.group_count_fwd = 0;
-    adj.first_group_fwd = 0;
+    adj.block_count_fwd = node_adjacency_buffers.TINY_MODE_BIT | alive_count;
+    adj.segment_count_fwd = 0;
+    adj.first_segment_fwd = 0;
 }
 
 pub const ForwardTombstoneCompaction = struct {
@@ -120,15 +120,15 @@ fn rebuildTinyForwardAlive(
     try collectDroppedTinyForwardRows(graph, published_side, &dropped_rows);
 
     var staging_adj = published_adj;
-    const original_count = node_published.NodePublished.tinyCount(&published_side);
+    const original_count = node_adjacency_buffers.NodeAdjacencyBuffers.tinyCount(&published_side);
     if (alive_after == 0) {
         clearForwardSide(&staging_adj);
         debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
         return .{ .staging_adj = staging_adj, .alive_after = 0, .removed_count = original_count, .dropped_prop_rows = dropped_rows };
     }
 
-    const new_slot_idx = try allocs.allocTinyBlockRaw(graph, .fwd);
-    const new_block = page_ops.tinyBlockAt(graph, new_slot_idx, .fwd);
+    const new_slot_idx = try allocs.allocTinySlotRaw(graph, .fwd);
+    const new_block = page_ops.tinySlotAt(graph, new_slot_idx, .fwd);
     const copied_alive_count = try fillAliveTinyForwardEntries(graph, published_side, new_block);
 
     writeTinyForwardSide(&staging_adj, new_slot_idx, copied_alive_count);
@@ -143,14 +143,14 @@ pub fn rebuildForwardAlive(
     allocs: *mutation_common.MutationScratch,
 ) !ForwardTombstoneCompaction {
     const published_side = side_adj.sideAdjOfNode(published_adj, .fwd);
-    if (node_published.NodePublished.isTiny(&published_side)) return rebuildTinyForwardAlive(graph, node_idx, published_adj, allocs);
+    if (node_adjacency_buffers.NodeAdjacencyBuffers.isTiny(&published_side)) return rebuildTinyForwardAlive(graph, node_idx, published_adj, allocs);
 
     var result = try sorted_rebuild.sortedRebuildForward(
         graph,
         published_adj.first_block_fwd,
         published_adj.block_count_fwd,
-        published_adj.group_count_fwd,
-        published_adj.first_group_fwd,
+        published_adj.segment_count_fwd,
+        published_adj.first_segment_fwd,
         graph.allocator,
     );
     defer result.new_blocks.deinit(graph.allocator);
@@ -164,8 +164,8 @@ pub fn rebuildForwardAlive(
     var staging_adj = published_adj;
     staging_adj.first_block_fwd = rebuilt_side.first_block;
     staging_adj.block_count_fwd = rebuilt_side.block_count;
-    staging_adj.group_count_fwd = rebuilt_side.group_count;
-    staging_adj.first_group_fwd = rebuilt_side.first_group;
+    staging_adj.segment_count_fwd = rebuilt_side.segment_count;
+    staging_adj.first_segment_fwd = rebuilt_side.first_segment;
     debt_mod.updateRepairDebt(graph, &staging_adj, node_idx, .fwd);
 
     const dropped_rows = result.dropped_prop_rows;
@@ -177,15 +177,15 @@ pub fn countReverseMatches(
     graph: *const graph_core.GraphCore,
     first_block: u32,
     block_count: u32,
-    group_count: u16,
-    first_group: u32,
+    segment_count: u16,
+    first_segment: u32,
     source_idx: u32,
 ) !usize {
     const side_view: types.SideAdj = .{
         .first_block = first_block,
         .block_count = block_count,
-        .group_count = group_count,
-        .first_group = first_group,
+        .segment_count = segment_count,
+        .first_segment = first_segment,
     };
     var count = ReverseSourceMatchCount{ .source_idx = source_idx };
     try side_adj.forEachNodeIdInSide(graph, side_view, .rev, &count, countReverseSourceMatch);
@@ -196,15 +196,15 @@ pub fn prepareReverseDrop(
     graph: *graph_core.GraphCore,
     first_block: u32,
     block_count: u32,
-    group_count: u16,
-    first_group: u32,
+    segment_count: u16,
+    first_segment: u32,
     source_idx: u32,
     allocator: std.mem.Allocator,
 ) !sorted_rebuild.SortedRebuildResult {
-    const matches = try countReverseMatches(graph, first_block, block_count, group_count, first_group, source_idx);
+    const matches = try countReverseMatches(graph, first_block, block_count, segment_count, first_segment, source_idx);
     if (!graph.multigraph_enabled and matches != 1) return error.CorruptGraph;
     if (matches == 0) return error.CorruptGraph;
-    return sorted_rebuild.sortedRebuildReverse(graph, first_block, block_count, group_count, first_group, source_idx, allocator);
+    return sorted_rebuild.sortedRebuildReverse(graph, first_block, block_count, segment_count, first_segment, source_idx, allocator);
 }
 
 pub fn rebuildReverseDrop(
@@ -218,8 +218,8 @@ pub fn rebuildReverseDrop(
         graph,
         published_adj.first_block_rev,
         published_adj.block_count_rev,
-        published_adj.group_count_rev,
-        published_adj.first_group_rev,
+        published_adj.segment_count_rev,
+        published_adj.first_segment_rev,
         source_idx,
         graph.allocator,
     );
@@ -234,8 +234,8 @@ pub fn rebuildReverseDrop(
     var staging_adj = published_adj;
     staging_adj.first_block_rev = rebuilt_side.first_block;
     staging_adj.block_count_rev = rebuilt_side.block_count;
-    staging_adj.group_count_rev = rebuilt_side.group_count;
-    staging_adj.first_group_rev = rebuilt_side.first_group;
+    staging_adj.segment_count_rev = rebuilt_side.segment_count;
+    staging_adj.first_segment_rev = rebuilt_side.first_segment;
     debt_mod.updateRepairDebt(graph, &staging_adj, destination_idx, .rev);
 
     return .{ .staging_adj = staging_adj, .alive_after = result.alive_after };

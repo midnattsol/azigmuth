@@ -14,12 +14,12 @@ const index_stack = @import("index_stack.zig");
 const EMPTY_INDEX = index_stack.EMPTY_INDEX;
 const StackKind = index_stack.StackKind;
 
-fn propRowMetaAt(graph: *graph_core.GraphCore, row: u32) *types.BlockMeta {
-    return common.metaEntryAt(&graph.prop_row_meta_pages, row, constants.PROP_ROWS_PER_PAGE);
+fn propRowReclamationAt(graph: *graph_core.GraphCore, row: u32) *types.ReclamationEntry {
+    return common.reclamationEntryAt(&graph.prop_row_reclamation_pages, row, constants.PROP_ROWS_PER_PAGE);
 }
 
-fn ensurePropRowMetaPage(graph: *graph_core.GraphCore, page_idx: u32) ![]types.BlockMeta {
-    return common.ensureMetaPageSized(graph, &graph.prop_row_meta_pages, page_idx, constants.PROP_ROWS_PER_PAGE);
+fn ensurePropRowReclamationPage(graph: *graph_core.GraphCore, page_idx: u32) ![]types.ReclamationEntry {
+    return common.ensureReclamationPageSized(graph, &graph.prop_row_reclamation_pages, page_idx, constants.PROP_ROWS_PER_PAGE);
 }
 
 fn propRowStackHead(graph: *graph_core.GraphCore, comptime kind: StackKind) *std.atomic.Value(u64) {
@@ -34,39 +34,39 @@ fn propRowStack(graph: *graph_core.GraphCore, comptime kind: StackKind) index_st
 }
 
 fn popPropRowStack(graph: *graph_core.GraphCore, comptime kind: StackKind) ?u32 {
-    const MetaContext = struct {
+    const EntryContext = struct {
         graph: *graph_core.GraphCore,
 
-        pub fn metaAt(self: @This(), row: u32) *types.BlockMeta {
-            return propRowMetaAt(self.graph, row);
+        pub fn entryAt(self: @This(), row: u32) *types.ReclamationEntry {
+            return propRowReclamationAt(self.graph, row);
         }
     };
-    return propRowStack(graph, kind).pop(MetaContext{ .graph = graph });
+    return propRowStack(graph, kind).pop(EntryContext{ .graph = graph });
 }
 
 /// Returns one property row to the free stack (never-published rows only).
 pub fn freePropRow(graph: *graph_core.GraphCore, row: u32) void {
-    propRowStack(graph, .free).push(propRowMetaAt(graph, row), row);
+    propRowStack(graph, .free).push(propRowReclamationAt(graph, row), row);
 }
 
 /// Moves one property row to the retired stack with its retirement epoch.
 pub fn retirePropRow(graph: *graph_core.GraphCore, row: u32, epoch: u64) void {
-    const meta = propRowMetaAt(graph, row);
-    meta.epoch.store(epoch, .release);
-    propRowStack(graph, .retired).push(meta, row);
+    const entry = propRowReclamationAt(graph, row);
+    entry.retired_epoch.store(epoch, .release);
+    propRowStack(graph, .retired).push(entry, row);
 }
 
 /// Reclaims retired property rows whose epoch is now safe for reuse.
 pub fn reclaimRetiredPropRows(graph: *graph_core.GraphCore, safe_epoch: u64) void {
     var row = propRowStack(graph, .retired).detach();
     while (row != EMPTY_INDEX) {
-        const meta = propRowMetaAt(graph, row);
-        const next = meta.next.load(.acquire);
-        const retired_epoch = meta.epoch.load(.acquire);
+        const entry = propRowReclamationAt(graph, row);
+        const next = entry.next.load(.acquire);
+        const retired_epoch = entry.retired_epoch.load(.acquire);
         if (retired_epoch < safe_epoch) {
             freePropRow(graph, row);
         } else {
-            propRowStack(graph, .retired).push(meta, row);
+            propRowStack(graph, .retired).push(entry, row);
         }
         row = next;
     }
@@ -77,7 +77,7 @@ fn allocFreshPropRow(graph: *graph_core.GraphCore) !u32 {
         const row = @atomicLoad(u32, &graph.prop_row_count, .acquire);
         if (row == std.math.maxInt(u32)) return error.OutOfMemory;
         const page_idx = common.pageOf(row, constants.PROP_ROWS_PER_PAGE);
-        _ = try ensurePropRowMetaPage(graph, page_idx);
+        _ = try ensurePropRowReclamationPage(graph, page_idx);
         if (@cmpxchgWeak(u32, &graph.prop_row_count, row, row + 1, .acq_rel, .acquire) == null) {
             return row;
         }
@@ -91,7 +91,7 @@ pub fn ensurePropRowCapacity(graph: *graph_core.GraphCore, required_row_count: u
     const last_page_idx = common.pageOf(required_row_count - 1, constants.PROP_ROWS_PER_PAGE);
     var page_idx: u32 = common.pageOf(graph.loadPropRowCount(), constants.PROP_ROWS_PER_PAGE);
     while (page_idx <= last_page_idx) : (page_idx += 1) {
-        _ = try ensurePropRowMetaPage(graph, page_idx);
+        _ = try ensurePropRowReclamationPage(graph, page_idx);
     }
 }
 

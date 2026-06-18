@@ -14,11 +14,11 @@ test "iterator lifecycle: next() after deinit() returns null and is safe" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    var it = try graph.neighbors(src);
+    var it = try graph.neighbors(source);
     try testing.expect(it.next() != null); // consume the live neighbor
     it.deinit();
 
@@ -31,11 +31,11 @@ test "iterator lifecycle: snapshotDegree() after deinit() returns 0 and is safe"
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    var it = try graph.neighbors(src);
+    var it = try graph.neighbors(source);
     try testing.expectEqual(@as(usize, 1), graph_mod.snapshotDegree(&it));
     it.deinit();
 
@@ -68,11 +68,11 @@ test "iterator lifecycle: double deinit() is harmless" {
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
-    const dst = try graph.addNode();
-    try graph.addEdge(src, dst, 0, 0);
+    const source = try graph.addNode();
+    const destination = try graph.addNode();
+    try graph.addEdge(source, destination, 0, 0);
 
-    var it = try graph.neighbors(src);
+    var it = try graph.neighbors(source);
     it.deinit();
     it.deinit(); // must not double-release the reader slot
 }
@@ -81,14 +81,14 @@ test "iterator lifecycle: next() and snapshotDegree() stay safe after iterator i
     var graph = try graph_mod.Graph.init(testing.allocator);
     defer graph.deinit();
 
-    const src = try graph.addNode();
+    const source = try graph.addNode();
     var targets: [5]graph_mod.NodeId = undefined;
-    for (0..5) |i| {
-        targets[i] = try graph.addNode();
-        try graph.addEdge(src, targets[i], 0, 0);
+    for (0..5) |target_idx| {
+        targets[target_idx] = try graph.addNode();
+        try graph.addEdge(source, targets[target_idx], 0, 0);
     }
 
-    var it = try graph.neighbors(src);
+    var it = try graph.neighbors(source);
     // Consume all neighbors.
     var count: usize = 0;
     while (it.next()) |_| {

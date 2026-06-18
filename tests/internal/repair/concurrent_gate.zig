@@ -13,7 +13,7 @@ fn addRepairDebt(graph: *graph_mod.Graph) !void {
     // removeNode leaves flagged forward-tombstone debt on every predecessor,
     // so the repair entry points have real work queued.
     var predecessors: [4]graph_mod.NodeId = undefined;
-    for (0..predecessors.len) |i| predecessors[i] = try graph.addNode();
+    for (0..predecessors.len) |predecessor_idx| predecessors[predecessor_idx] = try graph.addNode();
     const hub = try graph.addNode();
     for (predecessors) |predecessor| try graph.addEdge(predecessor, hub, 0, 0);
     _ = try graph.removeNode(hub);

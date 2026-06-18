@@ -24,7 +24,7 @@ pub fn rebuildAfterSingleRemoval(
         null,
         &block_list,
     );
-    // Bounded build: occupancy-floor or run-bound violations trigger the
+    // Bounded build: occupancy-floor or segment-bound violations trigger the
     // synchronous dense repack instead of surfacing RepairRequired.
     staging_side.* = try rebuild_common.buildSideFromBlockListBounded(graph, scratch, &block_list, side);
 }

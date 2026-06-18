@@ -44,8 +44,8 @@ fn validateForwardView(
             graph,
             destination_adj.first_block_rev,
             destination_adj.block_count_rev,
-            destination_adj.group_count_rev,
-            destination_adj.first_group_rev,
+            destination_adj.segment_count_rev,
+            destination_adj.first_segment_rev,
             node.index,
         );
         if (reverse_count != kv.value_ptr.*) return error.CorruptGraph;
@@ -57,8 +57,8 @@ fn validateReverseView(
     node: types.NodeId,
     scan: *const remove_types.RemovalScan,
 ) !void {
-    const source_meta = node_access.loadPublishedMetaAtConst(graph, node);
-    const source_degree_rev = node_access.publishedRevDegreeFromMetaAtConst(graph, node, source_meta);
+    const source_state = node_access.loadPublicationStateAtConst(graph, node);
+    const source_degree_rev = node_access.publishedRevDegreeFromStateAtConst(graph, node, source_state);
     const predecessor_reader = try rcu.readerEnter(graph);
     defer rcu.readerExit(graph, predecessor_reader);
 
@@ -94,8 +94,8 @@ fn validateReverseView(
                 graph,
                 source_fwd.first_block_fwd,
                 source_fwd.block_count_fwd,
-                source_fwd.group_count_fwd,
-                source_fwd.first_group_fwd,
+                source_fwd.segment_count_fwd,
+                source_fwd.first_segment_fwd,
                 node.index,
             );
             const reverse_count = kv.value_ptr.*;

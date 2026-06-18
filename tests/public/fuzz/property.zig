@@ -13,45 +13,45 @@ fn shrinkAndReplay(
     var candidate = ops;
     while (candidate.len > 1) {
         var removed_any = false;
-        var i: usize = 1;
-        while (i < candidate.len) {
-            const reduced = candidate[0..i];
+        var prefix_len: usize = 1;
+        while (prefix_len < candidate.len) {
+            const reduced = candidate[0..prefix_len];
             var graph = try azigmuth.Graph.init(allocator);
             errdefer graph.deinit();
 
             var nodes: [16]azigmuth.NodeId = undefined;
-            var j: usize = 0;
-            while (j < initial_nodes and j < 16) : (j += 1) {
-                nodes[j] = try graph.addNode();
+            var node_idx: usize = 0;
+            while (node_idx < initial_nodes and node_idx < 16) : (node_idx += 1) {
+                nodes[node_idx] = try graph.addNode();
             }
 
             var passed = true;
             for (reduced) |op| {
-                const src_idx = op.source % @min(initial_nodes, 16);
+                const source_idx = op.source % @min(initial_nodes, 16);
                 const destination_idx = op.destination % @min(initial_nodes, 16);
-                if (src_idx == destination_idx) continue;
-                if (graph.hasNode(nodes[src_idx]) and graph.hasNode(nodes[destination_idx])) {
+                if (source_idx == destination_idx) continue;
+                if (graph.hasNode(nodes[source_idx]) and graph.hasNode(nodes[destination_idx])) {
                     switch (op.kind) {
                         .add => {
-                            if (graph.addEdge(nodes[src_idx], nodes[destination_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| {
+                            if (graph.addEdge(nodes[source_idx], nodes[destination_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
                         },
                         .remove => {
-                            if (graph.removeEdge(nodes[src_idx], nodes[destination_idx])) |_| {} else |_| {
+                            if (graph.removeEdge(nodes[source_idx], nodes[destination_idx])) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
                         },
                         .repair_node => {
-                            if (graph.repairNode(nodes[src_idx])) |_| {} else |_| {
+                            if (graph.repairNode(nodes[source_idx])) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
                         },
                         .remove_node => {
-                            if (graph.removeNode(nodes[src_idx])) |_| {} else |_| {
+                            if (graph.removeNode(nodes[source_idx])) |_| {} else |_| {
                                 passed = false;
                                 break;
                             }
@@ -64,7 +64,7 @@ fn shrinkAndReplay(
                 candidate = reduced;
                 removed_any = true;
             } else {
-                i += 1;
+                prefix_len += 1;
             }
         }
 
@@ -75,28 +75,28 @@ fn shrinkAndReplay(
     defer graph2.deinit();
 
     var nodes2: [16]azigmuth.NodeId = undefined;
-    var k: usize = 0;
-    while (k < initial_nodes and k < 16) : (k += 1) {
-        nodes2[k] = try graph2.addNode();
+    var node_idx: usize = 0;
+    while (node_idx < initial_nodes and node_idx < 16) : (node_idx += 1) {
+        nodes2[node_idx] = try graph2.addNode();
     }
 
     for (ops) |op| {
-        const src_idx = op.source % @min(initial_nodes, 16);
+        const source_idx = op.source % @min(initial_nodes, 16);
         const destination_idx = op.destination % @min(initial_nodes, 16);
-        if (src_idx == destination_idx) continue;
-        if (graph2.hasNode(nodes2[src_idx]) and graph2.hasNode(nodes2[destination_idx])) {
+        if (source_idx == destination_idx) continue;
+        if (graph2.hasNode(nodes2[source_idx]) and graph2.hasNode(nodes2[destination_idx])) {
             switch (op.kind) {
                 .add => {
-                    if (graph2.addEdge(nodes2[src_idx], nodes2[destination_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| break;
+                    if (graph2.addEdge(nodes2[source_idx], nodes2[destination_idx], op.rel, @bitCast(op.flags))) |_| {} else |_| break;
                 },
                 .remove => {
-                    if (graph2.removeEdge(nodes2[src_idx], nodes2[destination_idx])) |_| {} else |_| break;
+                    if (graph2.removeEdge(nodes2[source_idx], nodes2[destination_idx])) |_| {} else |_| break;
                 },
                 .repair_node => {
-                    if (graph2.repairNode(nodes2[src_idx])) |_| {} else |_| break;
+                    if (graph2.repairNode(nodes2[source_idx])) |_| {} else |_| break;
                 },
                 .remove_node => {
-                    if (graph2.removeNode(nodes2[src_idx])) |_| {} else |_| break;
+                    if (graph2.removeNode(nodes2[source_idx])) |_| {} else |_| break;
                 },
             }
         }
@@ -123,9 +123,9 @@ test "property_fuzz: random mutation sequence maintains graph invariants" {
     const op_count: usize = 500;
     var ops: [op_count]Op = undefined;
 
-    var i: usize = 0;
-    while (i < op_count) : (i += 1) {
-        ops[i] = .{
+    var op_idx: usize = 0;
+    while (op_idx < op_count) : (op_idx += 1) {
+        ops[op_idx] = .{
             .kind = switch (random.int(u8) % 4) {
                 0 => .add,
                 1 => .remove,
@@ -181,23 +181,23 @@ test "property_fuzz: dense random graph with removals maintains consistency" {
     defer graph.deinit();
 
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try graph.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try graph.addNode();
 
-    var i: usize = 0;
-    while (i < initial_edges) : (i += 1) {
-        const src = random.int(u8) % node_count;
-        const dst = random.int(u8) % node_count;
-        if (src != dst) {
-            _ = graph.addEdge(nodes[src], nodes[dst], 0, .{}) catch {};
+    var edge_idx: usize = 0;
+    while (edge_idx < initial_edges) : (edge_idx += 1) {
+        const source = random.int(u8) % node_count;
+        const destination = random.int(u8) % node_count;
+        if (source != destination) {
+            _ = graph.addEdge(nodes[source], nodes[destination], 0, .{}) catch {};
         }
     }
 
-    i = 0;
-    while (i < remove_ops) : (i += 1) {
-        const src = random.int(u8) % node_count;
-        const dst = random.int(u8) % node_count;
-        if (src != dst) {
-            _ = graph.removeEdge(nodes[src], nodes[dst]) catch {};
+    edge_idx = 0;
+    while (edge_idx < remove_ops) : (edge_idx += 1) {
+        const source = random.int(u8) % node_count;
+        const destination = random.int(u8) % node_count;
+        if (source != destination) {
+            _ = graph.removeEdge(nodes[source], nodes[destination]) catch {};
         }
     }
 
@@ -225,22 +225,22 @@ test "property_fuzz: removing all edges leaves clean graph" {
     defer graph.deinit();
 
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try graph.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try graph.addNode();
 
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i != j) {
-                _ = graph.addEdge(nodes[i], nodes[j], 0, .{}) catch {};
+    for (0..node_count) |source_idx| {
+        for (0..node_count) |destination_idx| {
+            if (source_idx != destination_idx) {
+                _ = graph.addEdge(nodes[source_idx], nodes[destination_idx], 0, .{}) catch {};
             }
         }
     }
 
     try graph.validate();
 
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i != j) {
-                _ = graph.removeEdge(nodes[i], nodes[j]) catch {};
+    for (0..node_count) |source_idx| {
+        for (0..node_count) |destination_idx| {
+            if (source_idx != destination_idx) {
+                _ = graph.removeEdge(nodes[source_idx], nodes[destination_idx]) catch {};
             }
         }
     }
@@ -267,8 +267,8 @@ test "property_fuzz: alternate add and remove on same pair converges" {
     const iterations: usize = 100;
     var model_expected: bool = false; // tracks what the model says should be present
 
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
+    var iteration_idx: usize = 0;
+    while (iteration_idx < iterations) : (iteration_idx += 1) {
         if (random.boolean()) {
             _ = graph.addEdge(source, destination, 0, .{}) catch {};
             model_expected = true;
@@ -296,12 +296,12 @@ test "property_fuzz: property that outDegree equals neighbors count" {
     defer graph.deinit();
 
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try graph.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try graph.addNode();
 
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i != j and random.boolean()) {
-                _ = graph.addEdge(nodes[i], nodes[j], 0, .{}) catch {};
+    for (0..node_count) |source_idx| {
+        for (0..node_count) |destination_idx| {
+            if (source_idx != destination_idx and random.boolean()) {
+                _ = graph.addEdge(nodes[source_idx], nodes[destination_idx], 0, .{}) catch {};
             }
         }
     }
@@ -329,12 +329,12 @@ test "property_fuzz: property that inDegree equals inNeighbors count" {
     defer graph.deinit();
 
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try graph.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try graph.addNode();
 
-    for (0..node_count) |i| {
-        for (0..node_count) |j| {
-            if (i != j and random.boolean()) {
-                _ = graph.addEdge(nodes[i], nodes[j], 0, .{}) catch {};
+    for (0..node_count) |source_idx| {
+        for (0..node_count) |destination_idx| {
+            if (source_idx != destination_idx and random.boolean()) {
+                _ = graph.addEdge(nodes[source_idx], nodes[destination_idx], 0, .{}) catch {};
             }
         }
     }
@@ -358,8 +358,8 @@ test "property_fuzz: addEdge removes self-edge correctness" {
     defer graph.deinit();
 
     const node = try graph.addNode();
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
+    var attempt_idx: usize = 0;
+    while (attempt_idx < 100) : (attempt_idx += 1) {
         _ = graph.addEdge(node, node, 0, .{}) catch {};
     }
     try graph.validate();
@@ -380,19 +380,19 @@ test "property_fuzz: random sequence with repair maintains validity" {
     defer graph.deinit();
 
     var nodes: [node_count]azigmuth.NodeId = undefined;
-    for (0..node_count) |i| nodes[i] = try graph.addNode();
+    for (0..node_count) |node_idx| nodes[node_idx] = try graph.addNode();
 
-    var i: usize = 0;
-    while (i < 300) : (i += 1) {
-        const src = random.int(u8) % node_count;
-        const dst = random.int(u8) % node_count;
-        if (src != dst) {
-            _ = graph.addEdge(nodes[src], nodes[dst], 0, .{}) catch {};
+    var operation_idx: usize = 0;
+    while (operation_idx < 300) : (operation_idx += 1) {
+        const source = random.int(u8) % node_count;
+        const destination = random.int(u8) % node_count;
+        if (source != destination) {
+            _ = graph.addEdge(nodes[source], nodes[destination], 0, .{}) catch {};
         }
     }
 
-    i = 0;
-    while (i < 50) : (i += 1) {
+    operation_idx = 0;
+    while (operation_idx < 50) : (operation_idx += 1) {
         const repair_node = random.int(u8) % node_count;
         _ = graph.repairNode(nodes[repair_node]) catch azigmuth.RepairNodeSummary{};
     }
@@ -428,16 +428,16 @@ test "property_fuzz: large sequential add then random remove maintains consisten
     const source_node = try source.addNode();
     const target_count: usize = 100;
     var targets: [target_count]azigmuth.NodeId = undefined;
-    for (0..target_count) |i| targets[i] = try source.addNode();
+    for (0..target_count) |target_idx| targets[target_idx] = try source.addNode();
 
-    for (0..target_count) |i| {
-        try source.addEdge(source_node, targets[i], 0, .{});
+    for (0..target_count) |target_idx| {
+        try source.addEdge(source_node, targets[target_idx], 0, .{});
     }
 
     try source.validate();
 
-    var i: usize = 0;
-    while (i < 50) : (i += 1) {
+    var remove_attempt_idx: usize = 0;
+    while (remove_attempt_idx < 50) : (remove_attempt_idx += 1) {
         const remove_idx = random.int(u8) % target_count;
         _ = source.removeEdge(source_node, targets[remove_idx]) catch {};
     }

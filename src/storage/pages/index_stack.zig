@@ -1,6 +1,6 @@
 //! Intrusive lock-free stacks of storage indices.
 //!
-//! The stack node link lives in `types.BlockMeta.next`; the atomic head stores
+//! The stack node link lives in `types.ReclamationEntry.next`; the atomic head stores
 //! the index in the low 32 bits and an ABA tag in the high 32 bits.
 
 const std = @import("std");
@@ -22,8 +22,8 @@ pub fn headTag(head: u64) u32 {
     return @truncate(head >> 32);
 }
 
-pub fn metaNext(meta: *const types.BlockMeta) u32 {
-    return meta.next.load(.acquire);
+pub fn reclamationNext(entry: *const types.ReclamationEntry) u32 {
+    return entry.next.load(.acquire);
 }
 
 /// Walks an index chain that the caller already owns.
@@ -54,24 +54,24 @@ pub const LockFreeIndexStack = struct {
         return index_stack.headIndex(self.head.load(.acquire));
     }
 
-    pub fn push(self: LockFreeIndexStack, meta: *types.BlockMeta, index: u32) void {
+    pub fn push(self: LockFreeIndexStack, entry: *types.ReclamationEntry, index: u32) void {
         std.debug.assert(index != EMPTY_INDEX);
         while (true) {
             const old_head = self.head.load(.acquire);
-            meta.next.store(index_stack.headIndex(old_head), .release);
+            entry.next.store(index_stack.headIndex(old_head), .release);
             const new_head = packHead(index, headTag(old_head) +% 1);
             if (self.head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return;
         }
     }
 
-    pub fn pop(self: LockFreeIndexStack, meta_context: anytype) ?u32 {
+    pub fn pop(self: LockFreeIndexStack, entry_context: anytype) ?u32 {
         while (true) {
             const old_head = self.head.load(.acquire);
             const index = index_stack.headIndex(old_head);
             if (index == EMPTY_INDEX) return null;
 
-            const meta = meta_context.metaAt(index);
-            const next = meta.next.load(.acquire);
+            const entry = entry_context.entryAt(index);
+            const next = entry.next.load(.acquire);
             const new_head = packHead(next, headTag(old_head) +% 1);
             if (self.head.cmpxchgWeak(old_head, new_head, .acq_rel, .acquire) == null) return index;
         }

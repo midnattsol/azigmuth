@@ -14,12 +14,12 @@ pub const CapturedGraphView = struct {
     node_state: []u8,
     fwd_first_block: []u32,
     fwd_block_count: []u32,
-    fwd_group_count: []u16,
-    fwd_first_group: []u32,
+    fwd_segment_count: []u16,
+    fwd_first_segment: []u32,
     rev_first_block: []u32,
     rev_block_count: []u32,
-    rev_group_count: []u16,
-    rev_first_group: []u32,
+    rev_segment_count: []u16,
+    rev_first_segment: []u32,
     degree_fwd: []u32,
     degree_rev: []u32,
     live_node_count: usize,
@@ -28,12 +28,12 @@ pub const CapturedGraphView = struct {
         allocator.free(self.node_state);
         allocator.free(self.fwd_first_block);
         allocator.free(self.fwd_block_count);
-        allocator.free(self.fwd_group_count);
-        allocator.free(self.fwd_first_group);
+        allocator.free(self.fwd_segment_count);
+        allocator.free(self.fwd_first_segment);
         allocator.free(self.rev_first_block);
         allocator.free(self.rev_block_count);
-        allocator.free(self.rev_group_count);
-        allocator.free(self.rev_first_group);
+        allocator.free(self.rev_segment_count);
+        allocator.free(self.rev_first_segment);
         allocator.free(self.degree_fwd);
         allocator.free(self.degree_rev);
     }
@@ -54,8 +54,8 @@ pub const CapturedGraphView = struct {
         return .{
             .first_block = self.fwd_first_block[node_idx],
             .block_count = self.fwd_block_count[node_idx],
-            .group_count = self.fwd_group_count[node_idx],
-            .first_group = self.fwd_first_group[node_idx],
+            .segment_count = self.fwd_segment_count[node_idx],
+            .first_segment = self.fwd_first_segment[node_idx],
         };
     }
 
@@ -63,8 +63,8 @@ pub const CapturedGraphView = struct {
         return .{
             .first_block = self.rev_first_block[node_idx],
             .block_count = self.rev_block_count[node_idx],
-            .group_count = self.rev_group_count[node_idx],
-            .first_group = self.rev_first_group[node_idx],
+            .segment_count = self.rev_segment_count[node_idx],
+            .first_segment = self.rev_first_segment[node_idx],
         };
     }
 
@@ -75,12 +75,12 @@ pub const CapturedGraphView = struct {
         return .{
             .first_block_fwd = fwd_side.first_block,
             .block_count_fwd = fwd_side.block_count,
-            .group_count_fwd = fwd_side.group_count,
-            .first_group_fwd = fwd_side.first_group,
+            .segment_count_fwd = fwd_side.segment_count,
+            .first_segment_fwd = fwd_side.first_segment,
             .first_block_rev = rev_side.first_block,
             .block_count_rev = rev_side.block_count,
-            .group_count_rev = rev_side.group_count,
-            .first_group_rev = rev_side.first_group,
+            .segment_count_rev = rev_side.segment_count,
+            .first_segment_rev = rev_side.first_segment,
             .flags = .{
                 .needs_repair_fwd = (node_state & state_needs_repair_fwd_bit) != 0,
                 .needs_repair_rev = (node_state & state_needs_repair_rev_bit) != 0,
@@ -121,12 +121,12 @@ pub fn captureGraphView(core: *const graph_core.GraphCore, allocator: std.mem.Al
         .node_state = captured.node_state,
         .fwd_first_block = captured.fwd_first_block,
         .fwd_block_count = captured.fwd_block_count,
-        .fwd_group_count = captured.fwd_group_count,
-        .fwd_first_group = captured.fwd_first_group,
+        .fwd_segment_count = captured.fwd_segment_count,
+        .fwd_first_segment = captured.fwd_first_segment,
         .rev_first_block = captured.rev_first_block,
         .rev_block_count = captured.rev_block_count,
-        .rev_group_count = captured.rev_group_count,
-        .rev_first_group = captured.rev_first_group,
+        .rev_segment_count = captured.rev_segment_count,
+        .rev_first_segment = captured.rev_first_segment,
         .degree_fwd = captured.degree_fwd,
         .degree_rev = captured.degree_rev,
         .live_node_count = captured.live_node_count,

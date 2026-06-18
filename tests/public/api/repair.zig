@@ -111,7 +111,7 @@ test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
     // removeNode leaves flagged forward-tombstone debt on every predecessor,
     // giving repairBudgeted a wide, reliable backlog for the race window.
     var predecessors: [256]azigmuth.NodeId = undefined;
-    for (0..predecessors.len) |i| predecessors[i] = try graph.addNode();
+    for (0..predecessors.len) |predecessor_idx| predecessors[predecessor_idx] = try graph.addNode();
     const hub = try graph.addNode();
     for (predecessors) |predecessor| try graph.addEdge(predecessor, hub, 0, .{});
     _ = try graph.removeNode(hub);
@@ -124,7 +124,7 @@ test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
         stop: *std.atomic.Value(bool),
         successes: *std.atomic.Value(u32),
 
-        fn run(ctx: @This()) void {
+        fn segment(ctx: @This()) void {
             while (!ctx.stop.load(.acquire)) {
                 const outcome = ctx.graph.repairBudgeted(10);
                 if (outcome) |count| {
@@ -138,7 +138,7 @@ test "api repair: repairBudgeted retry after ConcurrentMutation succeeds" {
     };
 
     const worker = Worker{ .graph = graph, .stop = &stop, .successes = &success_count };
-    const worker_thread = try std.Thread.spawn(.{}, Worker.run, .{worker});
+    const worker_thread = try std.Thread.spawn(.{}, Worker.segment, .{worker});
     errdefer {
         stop.store(true, .release);
         worker_thread.join();
@@ -172,7 +172,7 @@ test "api repair: RepairRequired is resolved by explicit repairNode" {
     const source = try graph.addNode();
     const hub = try graph.addNode(); // lowest destination: lands in slot 0 of block 0
     var fillers: [64]azigmuth.NodeId = undefined;
-    for (0..fillers.len) |i| fillers[i] = try graph.addNode();
+    for (0..fillers.len) |filler_idx| fillers[filler_idx] = try graph.addNode();
 
     try graph.addEdge(source, hub, 0, .{});
     for (fillers) |filler| try graph.addEdge(source, filler, 0, .{});
@@ -180,9 +180,9 @@ test "api repair: RepairRequired is resolved by explicit repairNode" {
     // Push the hub's reverse side out of tiny mode so the removal takes the
     // strict single-removal path that enforces the hard occupancy bound.
     var extra_sources: [17]azigmuth.NodeId = undefined;
-    for (0..extra_sources.len) |i| {
-        extra_sources[i] = try graph.addNode();
-        try graph.addEdge(extra_sources[i], hub, 0, .{});
+    for (0..extra_sources.len) |source_idx| {
+        extra_sources[source_idx] = try graph.addNode();
+        try graph.addEdge(extra_sources[source_idx], hub, 0, .{});
     }
 
     // Drain the hub's block down to the occupancy floor (48 alive).

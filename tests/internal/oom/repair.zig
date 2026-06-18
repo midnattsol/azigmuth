@@ -72,7 +72,7 @@ test "oom repair: repairNode induced allocation failures do not publish partial 
         try addNodeCount(&graph, 50);
         const node = graph_mod.NodeId{ .index = 0 };
         const original = try publishRepairCandidate(&graph, node);
-                failing_allocator.fail_index = failing_allocator.alloc_index + failure_offset;
+        failing_allocator.fail_index = failing_allocator.alloc_index + failure_offset;
         const result = repair.repairNodeSide(&graph.graph, node, .fwd);
 
         if (result) |compacted| {
