@@ -5,6 +5,6 @@ comptime {
     _ = @import("segment_shapes.zig");
     _ = @import("node_pages.zig");
     _ = @import("page_ops.zig");
-    _ = @import("persistence_io.zig");
+    _ = @import("persistence.zig");
     _ = @import("recycle.zig");
 }

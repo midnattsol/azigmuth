@@ -15,7 +15,7 @@ const frozen = persistence.frozen;
 // them (Zig analyzes lazily; this keeps the stubs honest from day one).
 test "persistence: skeletons compile" {
     std.testing.refAllDecls(persistence);
-    std.testing.refAllDecls(persistence.io);
+    std.testing.refAllDecls(persistence.validation);
     std.testing.refAllDecls(writer);
     std.testing.refAllDecls(loader);
     std.testing.refAllDecls(frozen);

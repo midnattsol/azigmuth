@@ -4,8 +4,7 @@
 //!   - `format` — the pure on-disk layout: sections, sizes, checksums,
 //!     validators. No I/O. The normative save/load contracts live in its
 //!     module doc.
-//!   - `io`     — shared byte plumbing: payload sinks (writer) and the
-//!     hostile-input validation ladder (loader + frozen).
+//!   - `validation` — shared hostile-input validation ladder (loader + frozen).
 //!   - `writer` — serialize a quiesced graph, tmp + fsync + rename.
 //!   - `loader` — validate + reconstruct a fully mutable graph.
 //!   - `frozen` — zero-copy read-only graph over an mmap.
@@ -14,7 +13,7 @@
 //! and friends keep working as before the split.
 
 pub const format = @import("persistence/format.zig");
-pub const io = @import("persistence/io.zig");
+pub const validation = @import("persistence/validation.zig");
 pub const writer = @import("persistence/writer.zig");
 pub const loader = @import("persistence/loader.zig");
 pub const frozen = @import("persistence/frozen.zig");
@@ -47,5 +46,7 @@ pub const tinyRevPages = format.tinyRevPages;
 pub const expectedSectionBytes = format.expectedSectionBytes;
 pub const SectionTableError = format.SectionTableError;
 pub const validateSectionTable = format.validateSectionTable;
+pub const Hasher = format.Hasher;
+pub const initHasher = format.initHasher;
 pub const sectionChecksum = format.sectionChecksum;
 pub const headerChecksum = format.headerChecksum;

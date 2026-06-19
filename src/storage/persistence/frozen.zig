@@ -23,7 +23,7 @@ const constants = @import("../../core/constants.zig");
 const types = @import("../../core/types.zig");
 const node_tiny = @import("../node/tiny.zig");
 const format = @import("format.zig");
-const io_mod = @import("io.zig");
+const validation = @import("validation.zig");
 const node_adjacency_buffers = @import("../node/adjacency_buffers.zig");
 const snapshot_csr = @import("../../query/snapshot/csr.zig");
 
@@ -65,16 +65,16 @@ pub const FrozenGraph = struct {
         );
         errdefer std.posix.munmap(bytes);
         if (file_size < format.HEADER_BYTES + format.SECTION_TABLE_BYTES) return error.TruncatedFile;
-        const header = try io_mod.parseHeader(@ptrCast(bytes[0..format.HEADER_BYTES].ptr));
-        const tables = try io_mod.parseSectionTable(
+        const header = try validation.parseHeader(@ptrCast(bytes[0..format.HEADER_BYTES].ptr));
+        const tables = try validation.parseSectionTable(
             header,
             @ptrCast(bytes[format.SECTION_TABLE_OFFSET .. format.SECTION_TABLE_OFFSET + format.SECTION_TABLE_BYTES].ptr),
         );
-        try io_mod.checkSectionsAgainstFileLen(&tables, file_size);
+        try validation.checkSectionsAgainstFileLen(&tables, file_size);
         if (options.verify_checksums) {
             for (tables) |table| {
                 if (table.byte_len == 0) continue;
-                try io_mod.verifySectionChecksum(table, bytes[table.file_offset .. table.file_offset + table.byte_len]);
+                try validation.verifySectionChecksum(table, bytes[table.file_offset .. table.file_offset + table.byte_len]);
             }
         }
         file.close(io);
@@ -453,5 +453,5 @@ pub const FrozenGraph = struct {
 
 comptime {
     _ = constants;
-    _ = io_mod;
+    _ = validation;
 }

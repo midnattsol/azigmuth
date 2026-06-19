@@ -24,9 +24,9 @@ const page_ops = @import("../page_ops.zig");
 const node_tiny = @import("../node/tiny.zig");
 const node_adjacency_buffers = @import("../node/adjacency_buffers.zig");
 const format = @import("format.zig");
-const io_mod = @import("io.zig");
+const validation = @import("validation.zig");
 
-// TODO: narrow (io_mod.ValidateError || error{CorruptIndex, OutOfMemory}).
+// TODO: narrow (validation.ValidateError || error{CorruptIndex, OutOfMemory}).
 pub const LoadError = anyerror;
 
 /// Loads `<sub_path>` into a fresh, fully mutable graph. GraphOptions are

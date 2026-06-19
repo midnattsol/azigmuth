@@ -374,9 +374,17 @@ pub fn validateSectionTable(header: FileHeader, table: []const SectionDescriptor
 
 const CHECKSUM_SEED: u64 = MAGIC;
 
+pub const Hasher = std.hash.XxHash64;
+
+pub fn initHasher() Hasher {
+    return Hasher.init(CHECKSUM_SEED);
+}
+
 /// Section payload checksum (XxHash64).
 pub fn sectionChecksum(payload: []const u8) u64 {
-    return std.hash.XxHash64.hash(CHECKSUM_SEED, payload);
+    var hasher = initHasher();
+    hasher.update(payload);
+    return hasher.final();
 }
 
 /// Header checksum: the full HEADER_BYTES block with the `header_checksum`

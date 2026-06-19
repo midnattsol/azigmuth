@@ -6,16 +6,16 @@
 //!
 //!   1. quiesce + `rcu.reclaimRetired` (retired state is not representable),
 //!   2. plan the section table (entry counts, byte lengths, aligned offsets),
-//!   3. hash pass: stream every section payload through an `io.HashingSink`
+//!   3. hash pass: stream every section payload through `std.Io.Writer.Hashing`
 //!      to fill the per-section checksums (payloads are composed twice — RAM
 //!      streaming is cheap, and it keeps the file write purely sequential),
 //!   4. write pass: header block + section table + payloads (with alignment
-//!      padding) into `<sub_path>.tmp` through a buffered `io.FileSink`,
+//!      padding) into `<sub_path>.tmp` through a `std.Io.Writer`,
 //!   5. flush + `File.sync` (fsync: wait for the dirty pages to drain),
 //!   6. `Dir.rename` tmp → final (atomic publish; same-directory is required),
 //!   7. on any failure: best-effort delete of the tmp.
 //!
-//! The two streaming passes share `emitSection`, so the bytes that were
+//! The two streaming passes share `writeSectionBytes`, so the bytes that were
 //! hashed are — by construction — the bytes that get written.
 
 const std = @import("std");
@@ -28,11 +28,12 @@ const node_access = @import("../../core/node_access.zig");
 const node_tiny = @import("../node/tiny.zig");
 const rcu = @import("../../concurrency/rcu.zig");
 const format = @import("format.zig");
-const io_mod = @import("io.zig");
 
 // TODO: narrow this to a real error set once the helpers exist
-// (file open/write/sync/rename errors + OutOfMemory for the plan buffers).
+// (file open/write/sync/rename errors + OutOfMemory for the layout buffers).
 pub const SaveError = anyerror;
+
+const WRITER_BUFFER_BYTES: usize = constants.EDGE_BLOCKS_PER_PAGE * @sizeOf(types.EdgeBlockFwd);
 
 /// Serializes the graph to `<sub_path>` via write-tmp + fsync + rename.
 ///
@@ -42,32 +43,67 @@ pub const SaveError = anyerror;
 /// `rcu.reclaimRetired` itself as step 0 so every retired
 /// block/segment/tiny-slot/prop-row has drained into the free structures.
 pub fn save(core: *graph_core.GraphCore, io: std.Io, dir: std.Io.Dir, sub_path: []const u8) SaveError!void {
-    _ = core;
-    _ = io;
-    _ = dir;
-    _ = sub_path;
-    // TODO orchestration:
-    //   0. rcu.reclaimRetired(core);
-    //   1. var header = format.FileHeader.init(core);
-    //   2. var plan = try planSections(core, header);
-    //   3. hash pass: for each section, segment emitSection into an
-    //      io_mod.HashingSink and store the digest in plan.table[i].checksum.
-    //   4. serialize header block (serializeHeaderBlock) + section table
-    //      (serializeSectionTable).
-    //   5. tmp name: sub_path ++ ".tmp" (same directory as the target —
-    //      rename is only atomic within one filesystem).
-    //   6. createFile(tmp) → io_mod.FileSink → write header block, table,
-    //      then for each section: zero-padding up to file_offset, then
-    //      emitSection.
-    //   7. sink.flush() → file.sync(io) → file.close(io).
-    //   8. dir.rename(io, tmp, sub_path).
-    //   9. errdefer along the way: dir.deleteFile(io, tmp) best effort.
-    @panic("TODO: save");
+    rcu.reclaimRetired(core);
+    const header = format.FileHeader.init(core);
+    var layout = try computeFileLayout(core, header);
+    for (0..format.MAX_SECTIONS) |section_idx| {
+        if (layout.table[section_idx].byte_len == 0) continue;
+        const section_id: format.SectionId = @enumFromInt(section_idx);
+        layout.table[section_idx].checksum = try computeSectionChecksum(core, section_id);
+    }
+    const tmp_path = try std.fmt.allocPrint(core.allocator, "{s}.tmp", .{sub_path});
+    defer core.allocator.free(tmp_path);
+    const tmp_file = try dir.createFile(io, tmp_path, .{
+        .read = false,
+        .truncate = true,
+        .lock = .none,
+    });
+
+    errdefer dir.deleteFile(io, tmp_path) catch {};
+
+    {
+        defer tmp_file.close(io);
+
+        var buffer: [WRITER_BUFFER_BYTES]u8 = undefined;
+        var file_writer = tmp_file.writer(io, buffer[0..]);
+
+        var header_block: [format.HEADER_BYTES]u8 = undefined;
+        serializeHeaderBlock(header, &header_block);
+        try file_writer.interface.writeAll(&header_block);
+
+        var table_block: [format.SECTION_TABLE_BYTES]u8 = undefined;
+        serializeSectionTable(&layout.table, &table_block);
+        try file_writer.interface.writeAll(&table_block);
+
+        for (layout.table) |descriptor| {
+            if (descriptor.byte_len == 0) continue;
+
+            try writeZeroPaddingTo(&file_writer, descriptor.file_offset);
+            const section_id: format.SectionId = @enumFromInt(descriptor.id);
+            try writeSectionBytes(core, section_id, &file_writer.interface);
+
+            const expected_end = try std.math.add(u64, descriptor.file_offset, descriptor.byte_len);
+            if (file_writer.logicalPos() != expected_end) return error.InvalidPayload;
+        }
+
+        try file_writer.flush();
+        try tmp_file.sync(io);
+    }
+    try dir.rename(tmp_path, dir, sub_path, io);
+}
+
+fn writeZeroPaddingTo(file_writer: *std.Io.File.Writer, target_offset: u64) SaveError!void {
+    const current_offset = file_writer.logicalPos();
+    if (current_offset > target_offset) return error.InvalidPayload;
+
+    const padding = target_offset - current_offset;
+    const padding_len = std.math.cast(usize, padding) orelse return error.Overflow;
+    try file_writer.interface.splatByteAll(0, padding_len);
 }
 
 // ── Section planning ─────────────────────────────────────────────────────
 
-pub const SectionPlan = struct {
+pub const FileLayout = struct {
     table: [format.MAX_SECTIONS]format.SectionDescriptor,
     /// Total file length implied by the last section (useful for tests and
     /// for preallocating, not required by the format).
@@ -78,7 +114,7 @@ pub const SectionPlan = struct {
 /// sections, in `SectionId` order. Checksums are left at 0 (the hash pass
 /// fills them). Needs to walk the free stacks to count their entries —
 /// see `countFreeStack`.
-pub fn planSections(core: *const graph_core.GraphCore, header: format.FileHeader) SaveError!SectionPlan {
+pub fn computeFileLayout(core: *const graph_core.GraphCore, header: format.FileHeader) SaveError!FileLayout {
     var table: [format.MAX_SECTIONS]format.SectionDescriptor = undefined;
 
     // Compute entry counts and byte lengths for all 16 sections in SectionId order.
@@ -102,7 +138,7 @@ pub fn planSections(core: *const graph_core.GraphCore, header: format.FileHeader
             .free_segment_slots => countFreeSegmentSlots(core),
             .free_tiny_fwd => countFreeStack(core, .tiny_fwd),
             .free_tiny_rev => countFreeStack(core, .tiny_rev),
-            .free_prop_rows => countFreeStack(core, .prop_rows),
+            .free_prop_rows => if (header.flags.edge_properties) countFreeStack(core, .prop_rows) else 0,
         };
 
         const byte_len: u64 = if (format.expectedSectionBytes(header, id)) |expected| expected else blk: {
@@ -134,37 +170,49 @@ pub fn planSections(core: *const graph_core.GraphCore, header: format.FileHeader
     return .{ .table = table, .file_len = file_len };
 }
 
-// ── Payload streaming (shared by the hash pass and the write pass) ───────
+// ── Section byte writing (shared by the hash pass and the write pass) ────
 
-/// Streams one section's payload bytes, in file order, into `sink`.
-/// Must emit exactly the planned byte_len for that section.
-pub fn emitSection(core: *const graph_core.GraphCore, id: format.SectionId, sink: io_mod.PayloadSink) anyerror!void {
+/// Computes the checksum over the exact bytes that `writeSectionBytes`
+/// would write for this section.
+pub fn computeSectionChecksum(core: *const graph_core.GraphCore, id: format.SectionId) SaveError!u64 {
+    var buffer: [WRITER_BUFFER_BYTES]u8 = undefined;
+    var hashing = std.Io.Writer.Hashing(format.Hasher).initHasher(format.initHasher(), buffer[0..]);
+
+    try writeSectionBytes(core, id, &hashing.writer);
+    try hashing.writer.flush();
+
+    return hashing.hasher.final();
+}
+
+/// Writes one section's bytes, in file order, into `writer`.
+/// Must write exactly the planned byte_len for that section.
+fn writeSectionBytes(core: *const graph_core.GraphCore, id: format.SectionId, writer: *std.Io.Writer) SaveError!void {
     return switch (id) {
-        .node_records => emitNodeRecords(core, sink),
-        .blocks_fwd => emitBlockPages(core, sink, .fwd),
-        .blocks_rev => emitBlockPages(core, sink, .rev),
-        .alive_fwd => emitLivePages(core, sink, .fwd),
-        .alive_rev => emitLivePages(core, sink, .rev),
-        .edge_ids_fwd => emitEdgeIdPages(core, sink),
-        .prop_rows_fwd => emitPropRowPages(core, sink),
-        .segments => emitSegmentPages(core, sink),
-        .tiny_fwd => emitTinyPages(core, sink, .fwd),
-        .tiny_rev => emitTinyPages(core, sink, .rev),
-        .free_blocks_fwd => emitFreeBlockList(core, sink, core.allocator, .fwd),
-        .free_blocks_rev => emitFreeBlockList(core, sink, core.allocator, .rev),
-        .free_segment_slots => emitFreeSegmentSlots(core, sink, core.allocator),
-        .free_tiny_fwd => emitFreeTinyList(core, sink, core.allocator, .fwd),
-        .free_tiny_rev => emitFreeTinyList(core, sink, core.allocator, .rev),
-        .free_prop_rows => emitFreePropRows(core, sink, core.allocator),
+        .node_records => writeNodeRecords(core, writer),
+        .blocks_fwd => writeBlockPages(core, writer, .fwd),
+        .blocks_rev => writeBlockPages(core, writer, .rev),
+        .alive_fwd => writeLivePages(core, writer, .fwd),
+        .alive_rev => writeLivePages(core, writer, .rev),
+        .edge_ids_fwd => writeEdgeIdPages(core, writer),
+        .prop_rows_fwd => writePropRowPages(core, writer),
+        .segments => writeSegmentPages(core, writer),
+        .tiny_fwd => writeTinyPages(core, writer, .fwd),
+        .tiny_rev => writeTinyPages(core, writer, .rev),
+        .free_blocks_fwd => writeFreeBlockList(core, writer, core.allocator, .fwd),
+        .free_blocks_rev => writeFreeBlockList(core, writer, core.allocator, .rev),
+        .free_segment_slots => writeFreeSegmentSlots(core, writer, core.allocator),
+        .free_tiny_fwd => writeFreeTinyList(core, writer, core.allocator, .fwd),
+        .free_tiny_rev => writeFreeTinyList(core, writer, core.allocator, .rev),
+        .free_prop_rows => writeFreePropRows(core, writer, core.allocator),
     };
 }
 
-// ── Per-section emitters ─────────────────────────────────────────────────
+// ── Per-section writers ──────────────────────────────────────────────────
 
-/// Composes one `NodeRecord` per node (0..node_count) and emits them in
+/// Composes one `NodeRecord` per node (0..node_count) and writes them in
 /// batches. The record is the published view normalized out of the RCU
 /// double-buffers — see makeNodeRecord.
-fn emitNodeRecords(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
+fn writeNodeRecords(core: *const graph_core.GraphCore, writer: *std.Io.Writer) anyerror!void {
     const node_count = core.publishedNodeCount();
     var batch: [64]format.NodeRecord = undefined;
     var batch_idx: usize = 0;
@@ -172,11 +220,11 @@ fn emitNodeRecords(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) 
         batch[batch_idx] = makeNodeRecord(core, @intCast(node_idx));
         batch_idx += 1;
         if (batch_idx == 64) {
-            try sink.emit(std.mem.sliceAsBytes(batch[0..batch_idx]));
+            try writer.writeAll(std.mem.sliceAsBytes(batch[0..batch_idx]));
             batch_idx = 0;
         }
     }
-    if (batch_idx > 0) try sink.emit(std.mem.sliceAsBytes(batch[0..batch_idx]));
+    if (batch_idx > 0) try writer.writeAll(std.mem.sliceAsBytes(batch[0..batch_idx]));
 }
 
 /// Normalizes one node's published state into its canonical NodeRecord:
@@ -216,11 +264,11 @@ pub fn makeNodeRecord(core: *const graph_core.GraphCore, node_idx: u32) format.N
     };
 }
 
-/// Emits the raw `EdgeBlockFwd`/`EdgeBlockRev` pages, page-for-page, up to
+/// Writes the raw `EdgeBlockFwd`/`EdgeBlockRev` pages, page-for-page, up to
 /// the page containing block index `loadBlock*Count() - 1`
-/// (format.blockPages). Whole pages are emitted, including slots past the
+/// (format.blockPages). Whole pages are written, including slots past the
 /// allocation frontier inside the last page.
-fn emitBlockPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
+fn writeBlockPages(core: *const graph_core.GraphCore, writer: *std.Io.Writer, comptime side: adjacency.AdjSide) anyerror!void {
     const block_count = switch (side) {
         .fwd => core.loadBlockFwdCount(),
         .rev => core.loadBlockRevCount(),
@@ -234,13 +282,13 @@ fn emitBlockPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, c
     for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
         const page_idx: u32 = @intCast(page_idx_usize);
         const raw_ptr: usize = page_ops.edgeBlockPageRaw(core, page_idx, side);
-        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+        try writer.writeAll(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
     }
 }
 
-/// Emits the u8 alive-count sidecar pages for `side`, same page walk as
-/// emitBlockPages (page_ops.blockAlivePageRaw).
-fn emitLivePages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
+/// Writes the u8 alive-count sidecar pages for `side`, same page walk as
+/// writeBlockPages (page_ops.blockAlivePageRaw).
+fn writeLivePages(core: *const graph_core.GraphCore, writer: *std.Io.Writer, comptime side: adjacency.AdjSide) anyerror!void {
     const block_count = switch (side) {
         .fwd => core.loadBlockFwdCount(),
         .rev => core.loadBlockRevCount(),
@@ -250,13 +298,14 @@ fn emitLivePages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, co
     for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
         const page_idx: u32 = @intCast(page_idx_usize);
         const raw_ptr: usize = page_ops.blockAlivePageRaw(core, page_idx, side);
-        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+        try writer.writeAll(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
     }
 }
 
-/// Emits `EdgeBlockFwdIds` pages (multigraph mode; otherwise emits nothing
+/// Writes `EdgeBlockFwdIds` pages (multigraph mode; otherwise writes nothing
 /// — the planned byte_len is 0).
-fn emitEdgeIdPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
+fn writeEdgeIdPages(core: *const graph_core.GraphCore, writer: *std.Io.Writer) anyerror!void {
+    if (!core.multigraph_enabled) return;
     const block_count = core.loadBlockFwdCount();
     if (block_count == 0) return;
     const page_count = format.blockPages(block_count);
@@ -264,12 +313,13 @@ fn emitEdgeIdPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) 
     for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
         const page_idx: u32 = @intCast(page_idx_usize);
         const raw_ptr: usize = page_ops.edgeBlockFwdIdsPageRaw(core, page_idx);
-        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+        try writer.writeAll(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
     }
 }
 
-/// Emits `EdgeBlockFwdProps` pages (edge_properties mode; otherwise nothing).
-fn emitPropRowPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
+/// Writes `EdgeBlockFwdProps` pages (edge_properties mode; otherwise nothing).
+fn writePropRowPages(core: *const graph_core.GraphCore, writer: *std.Io.Writer) anyerror!void {
+    if (!core.edge_properties_enabled) return;
     const block_count = core.loadBlockFwdCount();
     if (block_count == 0) return;
     const page_count = format.blockPages(block_count);
@@ -277,24 +327,24 @@ fn emitPropRowPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink)
     for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
         const page_idx: u32 = @intCast(page_idx_usize);
         const raw_ptr: usize = page_ops.edgeBlockFwdPropsPageRaw(core, page_idx);
-        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+        try writer.writeAll(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
     }
 }
 
-/// Emits `EdgeBlockSegment` pages up to segmentPages(loadSegmentCount()).
-fn emitSegmentPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink) anyerror!void {
+/// Writes `EdgeBlockSegment` pages up to segmentPages(loadSegmentCount()).
+fn writeSegmentPages(core: *const graph_core.GraphCore, writer: *std.Io.Writer) anyerror!void {
     const segment_count = core.loadSegmentCount();
     const page_count = format.segmentPages(segment_count);
     const page_byte_len = constants.EDGE_SEGMENTS_PER_PAGE * @sizeOf(types.EdgeBlockSegment);
     for (0..@as(usize, @intCast(page_count))) |page_idx_usize| {
         const page_idx: u32 = @intCast(page_idx_usize);
         const raw_ptr: usize = core.edge_block_segment_pages.load(page_idx);
-        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+        try writer.writeAll(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
     }
 }
 
-/// Emits Tiny{Fwd,Rev}Slot pages up to tiny*Pages(loadTiny*Count()).
-fn emitTinyPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, comptime side: adjacency.AdjSide) anyerror!void {
+/// Writes Tiny{Fwd,Rev}Slot pages up to tiny*Pages(loadTiny*Count()).
+fn writeTinyPages(core: *const graph_core.GraphCore, writer: *std.Io.Writer, comptime side: adjacency.AdjSide) anyerror!void {
     const tiny_count = switch (side) {
         .fwd => core.loadTinyFwdCount(),
         .rev => core.loadTinyRevCount(),
@@ -318,11 +368,11 @@ fn emitTinyPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, co
             .fwd => core.tiny_fwd_slot_pages.load(page_idx),
             .rev => core.tiny_rev_slot_pages.load(page_idx),
         };
-        try sink.emit(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
+        try writer.writeAll(@as([*]const u8, @ptrFromInt(raw_ptr))[0..page_byte_len]);
     }
 }
 
-// ── Free-list emitters ───────────────────────────────────────────────────
+// ── Free-list writers ────────────────────────────────────────────────────
 //
 // The free stacks are lock-free tagged stacks: the head lives in GraphCore
 // (low 32 bits = first index, END_OF_CHAIN = empty) and the `next` links
@@ -331,7 +381,7 @@ fn emitTinyPages(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, co
 // private to page_ops — part of this stage is adding the minimal pub
 // helpers there (suggested: `page_ops.freeStackFirst(core, which)` and
 // `page_ops.freeStackNext(core, which, index)`), used by both the counting
-// pass (planSections) and the emit pass.
+// pass (computeFileLayout) and the write pass.
 
 pub const FreeStackId = enum {
     blocks_fwd,
@@ -341,8 +391,8 @@ pub const FreeStackId = enum {
     prop_rows,
 };
 
-/// Counts the entries of one free stack (planSections needs it before any
-/// payload is emitted).
+/// Counts the entries of one free stack (computeFileLayout needs it before any
+/// payload is written).
 pub fn countFreeStack(core: *const graph_core.GraphCore, which: FreeStackId) u32 {
     const head_value: u64 = switch (which) {
         .blocks_fwd => core.free_blocks_fwd_head.load(.acquire),
@@ -430,9 +480,9 @@ fn countFreeSegmentSlots(core: *const graph_core.GraphCore) u32 {
     return total;
 }
 
-/// Emits the free block indices of `side` as raw u32s (drain order is
+/// Writes the free block indices of `side` as raw u32s (drain order is
 /// irrelevant — the loader just pushes them back).
-fn emitFreeBlockList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide) anyerror!void {
+fn writeFreeBlockList(core: *const graph_core.GraphCore, writer: *std.Io.Writer, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide) anyerror!void {
     const head: u64 = switch (side) {
         .fwd => core.free_blocks_fwd_head.load(.acquire),
         .rev => core.free_blocks_rev_head.load(.acquire),
@@ -458,7 +508,7 @@ fn emitFreeBlockList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink
     var free_list: std.ArrayList(u32) = .empty;
     defer free_list.deinit(allocator);
 
-    const EmittingVisitor = struct {
+    const CollectingVisitor = struct {
         allocator: std.mem.Allocator,
         list: *std.ArrayList(u32),
 
@@ -467,15 +517,15 @@ fn emitFreeBlockList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink
         }
     };
 
-    var emitting_visitor = EmittingVisitor{ .allocator = allocator, .list = &free_list };
-    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
-    try sink.emit(std.mem.sliceAsBytes(free_list.items));
+    var collecting_visitor = CollectingVisitor{ .allocator = allocator, .list = &free_list };
+    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &collecting_visitor);
+    try writer.writeAll(std.mem.sliceAsBytes(free_list.items));
 }
 
-/// Emits `FreeSegmentSlots` entries. There is one stack per slot count
+/// Writes `FreeSegmentSlots` entries. There is one stack per slot count
 /// (free_segment_slots_head[slot_count - 1]); the slot count must round-trip,
 /// hence the explicit record.
-fn emitFreeSegmentSlots(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator) anyerror!void {
+fn writeFreeSegmentSlots(core: *const graph_core.GraphCore, writer: *std.Io.Writer, allocator: std.mem.Allocator) anyerror!void {
     const LinkContext = struct {
         core: *const graph_core.GraphCore,
 
@@ -498,7 +548,7 @@ fn emitFreeSegmentSlots(core: *const graph_core.GraphCore, sink: io_mod.PayloadS
         const first_index = page_ops.stackHeadIndex(head);
         if (first_index == page_ops.EMPTY_INDEX) continue;
 
-        const EmittingVisitor = struct {
+        const CollectingVisitor = struct {
             allocator: std.mem.Allocator,
             list: *std.ArrayList(format.FreeSegmentSlots),
             slot_count: u16,
@@ -511,16 +561,16 @@ fn emitFreeSegmentSlots(core: *const graph_core.GraphCore, sink: io_mod.PayloadS
             }
         };
 
-        var emitting_visitor = EmittingVisitor{ .allocator = allocator, .list = &free_segment_slots, .slot_count = slot_count };
-        try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
+        var collecting_visitor = CollectingVisitor{ .allocator = allocator, .list = &free_segment_slots, .slot_count = slot_count };
+        try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &collecting_visitor);
     }
 
     if (free_segment_slots.items.len > 0) {
-        try sink.emit(std.mem.sliceAsBytes(free_segment_slots.items));
+        try writer.writeAll(std.mem.sliceAsBytes(free_segment_slots.items));
     }
 }
 
-fn emitFreeTinyList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide) anyerror!void {
+fn writeFreeTinyList(core: *const graph_core.GraphCore, writer: *std.Io.Writer, allocator: std.mem.Allocator, comptime side: adjacency.AdjSide) anyerror!void {
     const head: u64 = switch (side) {
         .fwd => core.free_tiny_fwd_slot_head.load(.acquire),
         .rev => core.free_tiny_rev_slot_head.load(.acquire),
@@ -551,7 +601,7 @@ fn emitFreeTinyList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink,
     var free_list: std.ArrayList(u32) = .empty;
     defer free_list.deinit(allocator);
 
-    const EmittingVisitor = struct {
+    const CollectingVisitor = struct {
         allocator: std.mem.Allocator,
         list: *std.ArrayList(u32),
 
@@ -560,12 +610,13 @@ fn emitFreeTinyList(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink,
         }
     };
 
-    var emitting_visitor = EmittingVisitor{ .allocator = allocator, .list = &free_list };
-    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
-    try sink.emit(std.mem.sliceAsBytes(free_list.items));
+    var collecting_visitor = CollectingVisitor{ .allocator = allocator, .list = &free_list };
+    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &collecting_visitor);
+    try writer.writeAll(std.mem.sliceAsBytes(free_list.items));
 }
 
-fn emitFreePropRows(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink, allocator: std.mem.Allocator) anyerror!void {
+fn writeFreePropRows(core: *const graph_core.GraphCore, writer: *std.Io.Writer, allocator: std.mem.Allocator) anyerror!void {
+    if (!core.edge_properties_enabled) return;
     const head: u64 = core.free_prop_rows_head.load(.acquire);
     const first_index = page_ops.stackHeadIndex(head);
     if (first_index == page_ops.EMPTY_INDEX) return;
@@ -585,7 +636,7 @@ fn emitFreePropRows(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink,
     var free_list: std.ArrayList(u32) = .empty;
     defer free_list.deinit(allocator);
 
-    const EmittingVisitor = struct {
+    const CollectingVisitor = struct {
         allocator: std.mem.Allocator,
         list: *std.ArrayList(u32),
 
@@ -594,9 +645,9 @@ fn emitFreePropRows(core: *const graph_core.GraphCore, sink: io_mod.PayloadSink,
         }
     };
 
-    var emitting_visitor = EmittingVisitor{ .allocator = allocator, .list = &free_list };
-    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &emitting_visitor);
-    try sink.emit(std.mem.sliceAsBytes(free_list.items));
+    var collecting_visitor = CollectingVisitor{ .allocator = allocator, .list = &free_list };
+    try page_ops.walkDetachedIndexStack(first_index, LinkContext{ .core = core }, &collecting_visitor);
+    try writer.writeAll(std.mem.sliceAsBytes(free_list.items));
 }
 
 // ── Header / table serialization (pure, unit-testable) ───────────────────
